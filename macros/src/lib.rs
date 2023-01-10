@@ -29,7 +29,7 @@ use syn::parse;
 use syn::parse_macro_input;
 
 use std::any::type_name;
-fn type_of<T>(_:T)->&'static str { type_name::<T>() }
+fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
 
 // macro_rules! dump {
 // 	($($x: expr),*) => {
@@ -62,10 +62,10 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 			let name = path.get_ident().unwrap().to_string();
 			let args = Punctuated::<Expr, Token![,]>::parse_terminated
 				.parse(TokenStream::from(tokens)).unwrap();
+			let expr = args_expr(&args);
 			match name.as_str() {
-				"header" => append_header(&mut readf, &mut writef, args),
-				&_ => panic!("unknown attribute"),
-			};
+				"header" => pack_attr_header(&mut readf, &mut writef, expr),
+				&_ => () };
 // 			println!("\x1b[32m{:?}\x1b[m: \x1b[31m{:?}\x1b[m", ident, ty);
 		}
 		quote!{ let #ident = #ty::unpack(f)?; }.to_tokens(&mut readf);
@@ -91,9 +91,8 @@ fn toks_to_string(a: &impl quote::ToTokens) -> String {
 	ts.to_string()
 }
 
-fn append_header(readf: &mut TS2, writef: &mut TS2, args: Punctuated<Expr,Comma>) {
-	if args.len() != 1 { return }
-	let expr = match args.first().unwrap() {
+fn pack_attr_header(readf: &mut TS2, writef: &mut TS2, expr: &Expr) {
+	let expr = match expr {
 		Expr::Paren(ExprParen{ expr, ..}) => expr, _ => return };
 	let lit = match &**expr { Expr::Lit(ExprLit{lit, ..}) => lit, _ => return };
 	quote!{ Self::unpack_header(f, #lit)?; }.to_tokens(readf);
@@ -111,6 +110,11 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 			let args = Punctuated::<Expr, Token![,]>::parse_terminated
 				.parse(TokenStream::from(tokens)).unwrap();
 			println!("\x1b[34m{name}\x1b[m");
+			println!("\x1b[32m{}\x1b[m:", toks_to_string(&args));
+			println!("{args:?}");
+			match name.as_str() {
+				"column" => row_attr_column(args),
+				_ => () }
 		}
 	}
 	let code = quote! {
@@ -121,4 +125,13 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 	};
 	println!("{}", code);
 	TokenStream::from(code)
+}
+
+fn args_expr(args: &Punctuated<Expr, Comma>)->&Expr {
+	if args.len() != 1 { panic!("args expression should have length 1"); }
+	args.first().unwrap()
+}
+fn row_attr_column(args: Punctuated<Expr, Comma>) {
+	let a = args_expr(&args);
+	println!("\x1b[1m***{}***\x1b[m {:?}: {}", 1, a, 1);
 }

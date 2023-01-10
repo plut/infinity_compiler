@@ -128,8 +128,11 @@ impl<const N: usize> Default for StaticString<N> {
 struct KeyHdr {
 	#[header("KEY V1  ")]
 	nbif: i32,
+#[column(false)]
+#[column(itemref, i32)]
 	nres: i32,
 	bifoffset: u32,
+#[column()]
 	resoffset: u32,
 }
 
