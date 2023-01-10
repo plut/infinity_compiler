@@ -1,4 +1,6 @@
-#![allow(unused_imports,
+#![allow(
+	unused_imports,
+	unused_macros,
 	unused_variables, dead_code,
 	unused_mut,
 	)]
@@ -8,6 +10,8 @@ use std::io;
 use std::fmt;
 use std::cmp::min;
 use macros::{Pack, Row};
+extern crate sqlite;
+use sqlite::Statement;
 
 mod resources {
 use std::io;
@@ -55,11 +59,23 @@ macro_rules! unpack_int {
 	})* }
 }
 unpack_int!{i8,i16,i32,i64,u8,u16,u32,u64}
+pub trait ToBindable {
+	type SQLType: sqlite::BindableWithIndex;
+	fn to_bindable(&self)->Self::SQLType;
+}
+macro_rules! bind_int {
+	($($T:ty),*) => { $(impl ToBindable for $T {
+		type SQLType = i64;
+		fn to_bindable(&self)->Self::SQLType { *self as i64 }
+	})* }
+}
+bind_int!{i8,i16,i32,u8,u16,u32}
+
 pub trait Row {
 	type Key;
 	const SCHEMA: Schema<'static>;
 // 	fn schema()->Schema<'static>;
-// 	fn bind(&self, s: &mut Statement<'_>, k: &Self::Key) -> Result<()>;
+	fn bind(&self, s: &mut Statement, k: &Self::Key) -> sqlite::Result<()>;
 // 	fn read(s: &mut Statement<'_>)->Result<(Self, Self::Key)>
 // 		where Self: Sized;
 }
@@ -132,8 +148,22 @@ struct KeyHdr {
 #[column(itemref, i32)]
 	nres: i32,
 	bifoffset: u32,
-#[column()]
+#[column(foobar)]
 	resoffset: u32,
+}
+use resources::{FieldType, Column, ToBindable};
+
+impl resources::Row for KeyHdr {
+	type Key = (i32,);
+	const SCHEMA: Schema<'static> = Schema { fields: &[
+		Column{ fieldname: "nbif", fieldtype: FieldType::Integer, },
+		Column{ fieldname: "nres", fieldtype: FieldType::Integer, },
+	] };
+	fn bind(&self, s: &mut Statement, k: &Self::Key)->sqlite::Result<()> {
+		s.bind((1, self.nbif.to_bindable()))?;
+		s.bind((2, self.nres.to_bindable()))?;
+		Ok(())
+	}
 }
 
 // use std::string::ToString;

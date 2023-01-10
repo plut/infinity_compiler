@@ -16,8 +16,10 @@ use syn::Data::Struct;
 use syn::DataStruct;
 use syn::DeriveInput;
 use syn::Expr;
-use syn::ExprParen;
 use syn::ExprLit;
+use syn::ExprParen;
+use syn::ExprPath;
+use syn::ExprTuple;
 use syn::Field;
 use syn::Fields::Named;
 use syn::Path;
@@ -57,14 +59,9 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 	for Field { attrs, ident, ty, .. } in flist {
 // 		println!("\x1b[32m{}\x1b[m : \x1b[31m{}\x1b[m", toks_to_string(&ident),
 // 			toks_to_string(&ty));
-		for Attribute { path, tokens, .. } in attrs {
-// 			println!("\x1b[35mParsing attribute: {}\x1b[m", toks_to_string(&a));
-			let name = path.get_ident().unwrap().to_string();
-			let args = Punctuated::<Expr, Token![,]>::parse_terminated
-				.parse(TokenStream::from(tokens)).unwrap();
-			let expr = args_expr(&args);
+		for (name, args) in attrs.into_iter().map(parse_attribute) {
 			match name.as_str() {
-				"header" => pack_attr_header(&mut readf, &mut writef, expr),
+				"header" => pack_attr_header(&mut readf, &mut writef, args),
 				&_ => () };
 // 			println!("\x1b[32m{:?}\x1b[m: \x1b[31m{:?}\x1b[m", ident, ty);
 		}
@@ -91,10 +88,9 @@ fn toks_to_string(a: &impl quote::ToTokens) -> String {
 	ts.to_string()
 }
 
-fn pack_attr_header(readf: &mut TS2, writef: &mut TS2, expr: &Expr) {
-	let expr = match expr {
-		Expr::Paren(ExprParen{ expr, ..}) => expr, _ => return };
-	let lit = match &**expr { Expr::Lit(ExprLit{lit, ..}) => lit, _ => return };
+fn pack_attr_header(readf: &mut TS2, writef: &mut TS2, args: Vec<Expr>) {
+	assert_eq!(args.len(), 1);
+	let lit = match &args[0] { Expr::Lit(ExprLit{lit, ..}) => lit, _ => return };
 	quote!{ Self::unpack_header(f, #lit)?; }.to_tokens(readf);
 	quote!{ f.write_all(#lit.as_bytes())?; }.to_tokens(writef);
 }
@@ -105,33 +101,48 @@ fn pack_attr_header(readf: &mut TS2, writef: &mut TS2, expr: &Expr) {
 pub fn derive_row(tokens: TokenStream) -> TokenStream {
 	let (ident, flist) = read_struct_fields(parse_macro_input!(tokens));
 	for Field { attrs, ident, ty, .. } in flist {
-		for Attribute { path, tokens, .. } in attrs {
-			let name = path.get_ident().unwrap().to_string();
-			let args = Punctuated::<Expr, Token![,]>::parse_terminated
-				.parse(TokenStream::from(tokens)).unwrap();
-			println!("\x1b[34m{name}\x1b[m");
-			println!("\x1b[32m{}\x1b[m:", toks_to_string(&args));
-			println!("{args:?}");
+		for (name, args) in attrs.into_iter().map(parse_attribute) {
 			match name.as_str() {
 				"column" => row_attr_column(args),
 				_ => () }
 		}
 	}
 	let code = quote! {
-		impl resources::Row for #ident {
-			type Key = f64;
-			const SCHEMA: Schema<'static> = Schema { fields: &[] };
-		}
+// 		impl resources::Row for #ident {
+// 			type Key = f64;
+// 			const SCHEMA: Schema<'static> = Schema { fields: &[] };
+// 		}
 	};
 	println!("{}", code);
 	TokenStream::from(code)
 }
 
-fn args_expr(args: &Punctuated<Expr, Comma>)->&Expr {
-	if args.len() != 1 { panic!("args expression should have length 1"); }
-	args.first().unwrap()
+fn to_vector(itr: &Punctuated<Expr,Comma>)->Vec<Expr> {
+	let mut v = Vec::<Expr>::new();
+	for e in itr.iter() {
+		v.push(e.clone());
+	}
+	return v
 }
-fn row_attr_column(args: Punctuated<Expr, Comma>) {
-	let a = args_expr(&args);
-	println!("\x1b[1m***{}***\x1b[m {:?}: {}", 1, a, 1);
+
+fn parse_attribute(Attribute{path, tokens, ..}: Attribute) -> (String, Vec<Expr>) {
+	(path.get_ident().unwrap().to_string(), parse_attribute_args(tokens))
+}
+fn parse_attribute_args(tokens: TS2)->Vec<Expr> {
+	let args = Punctuated::<Expr, Token![,]>::parse_terminated
+		.parse(TokenStream::from(tokens)).unwrap();
+	if args.len() != 1 { panic!("args expression should have length 1"); }
+	match args.first().unwrap() {
+		Expr::Paren(ExprParen{ expr, ..}) => vec![*expr.clone()],
+		Expr::Tuple(ExprTuple{ elems, .. }) => to_vector(elems),
+		_ => panic!("unknown expression") }
+}
+fn row_attr_column(args: Vec<Expr>) {
+	if args.is_empty() { return }
+	println!("got column with {} fields", args.len());
+	let name = match &args[0] {
+		Expr::Lit(ExprLit{lit, ..}) => toks_to_string(lit),
+		Expr::Path(ExprPath{path, ..}) => toks_to_string(path),
+		_ => panic!("[column] first argument must be an identifier") };
+	println!("column first arg = \x1b[32m{}\x1b[m", name);
 }
