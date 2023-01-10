@@ -37,52 +37,31 @@ fn type_of<T>(_:T)->&'static str { type_name::<T>() }
 // 	}
 // }
 
-#[proc_macro_derive(Pack, attributes(header))]
-pub fn derive_pack(tokens: TokenStream) -> TokenStream {
-	let DeriveInput{ ident, data, .. } = parse_macro_input!(tokens);
-	let mut flist = match data {
+fn read_struct_fields(d: syn::DeriveInput)
+		-> (syn::Ident, Punctuated<Field, Comma>) {
+	let DeriveInput{ ident, data, .. } = d; // parse_macro_input!(tokens);
+	let flist = match data {
 		Struct(DataStruct{ fields: Named(f), ..}) => f.named,
 		_ => panic!("only struct with named fields!") };
-// 	println!("\x1b[35m{}\x1b[m", toks_to_string(&ident));
-	let (readf, build, writef) = unpack_code(&flist);
-	let code = quote! {
-		impl resources::Pack for #ident {
-			fn unpack(f: &mut impl io::Read)->io::Result<Self> {
-				#readf; Ok(Self{ #build })
-			}
-			fn pack(self, f: &mut impl io::Write)->io::Result<()> {
-				#writef; Ok(())
-			}
-		}
-// 		impl resources::Row for #ident {
-// 			type Key = f64;
-// 			const SCHEMA: Schema<'static> = Schema { fields: &[] };
-// 		}
-	};
-	println!("{}", code.to_string());
-	TokenStream::from(code)
+	(ident, flist)
 }
 
-fn toks_to_string(a: &impl quote::ToTokens) -> String {
-	let mut ts = TS2::new();
-	a.to_tokens(&mut ts);
-	ts.to_string()
-}
-fn unpack_code(flist: &Punctuated<Field,Comma>) -> (TS2, TS2, TS2) {
+#[proc_macro_derive(Pack, attributes(header))]
+pub fn derive_pack(tokens: TokenStream) -> TokenStream {
+	let (ident, flist) = read_struct_fields(parse_macro_input!(tokens));
+
 	let mut readf = TS2::new();
 	let mut build = TS2::new();
 	let mut writef = TS2::new();
-	for f in flist {
-		let Field { attrs, ident, ty, .. } = f;
+
+	for Field { attrs, ident, ty, .. } in flist {
 // 		println!("\x1b[32m{}\x1b[m : \x1b[31m{}\x1b[m", toks_to_string(&ident),
 // 			toks_to_string(&ty));
-		for a in attrs {
+		for Attribute { path, tokens, .. } in attrs {
 // 			println!("\x1b[35mParsing attribute: {}\x1b[m", toks_to_string(&a));
-			let Attribute { path, tokens, .. } = a;
-			let t = TokenStream::from(tokens.clone());
-			let args = Punctuated::<Expr, Token![,]>::parse_terminated
-				.parse(t).unwrap();
 			let name = path.get_ident().unwrap().to_string();
+			let args = Punctuated::<Expr, Token![,]>::parse_terminated
+				.parse(TokenStream::from(tokens)).unwrap();
 			match name.as_str() {
 				"header" => append_header(&mut readf, &mut writef, args),
 				&_ => panic!("unknown attribute"),
@@ -93,14 +72,53 @@ fn unpack_code(flist: &Punctuated<Field,Comma>) -> (TS2, TS2, TS2) {
 		quote!{ #ident, }.to_tokens(&mut build);
 		quote!{ self.#ident.pack(f)?; }.to_tokens(&mut writef);
 	}
-	(readf, build, writef)
+	let code = quote! {
+		impl resources::Pack for #ident {
+			fn unpack(f: &mut impl io::Read)->io::Result<Self> {
+				#readf; Ok(Self{ #build })
+			}
+			fn pack(self, f: &mut impl io::Write)->io::Result<()> {
+				#writef; Ok(())
+			}
+		}
+	};
+	println!("{}", code);
+	TokenStream::from(code)
 }
-fn append_header(readf: &mut TS2, writef: &mut TS2,
-		args: Punctuated<Expr,Comma>) {
+fn toks_to_string(a: &impl quote::ToTokens) -> String {
+	let mut ts = TS2::new();
+	a.to_tokens(&mut ts);
+	ts.to_string()
+}
+
+fn append_header(readf: &mut TS2, writef: &mut TS2, args: Punctuated<Expr,Comma>) {
 	if args.len() != 1 { return }
 	let expr = match args.first().unwrap() {
 		Expr::Paren(ExprParen{ expr, ..}) => expr, _ => return };
 	let lit = match &**expr { Expr::Lit(ExprLit{lit, ..}) => lit, _ => return };
 	quote!{ Self::unpack_header(f, #lit)?; }.to_tokens(readf);
 	quote!{ f.write_all(#lit.as_bytes())?; }.to_tokens(writef);
+}
+
+// [column(itemref, i32, "references items", etc.)] pushes on key
+// [column(false)] suppresses next column
+#[proc_macro_derive(Row, attributes(column))]
+pub fn derive_row(tokens: TokenStream) -> TokenStream {
+	let (ident, flist) = read_struct_fields(parse_macro_input!(tokens));
+	for Field { attrs, ident, ty, .. } in flist {
+		for Attribute { path, tokens, .. } in attrs {
+			let name = path.get_ident().unwrap().to_string();
+			let args = Punctuated::<Expr, Token![,]>::parse_terminated
+				.parse(TokenStream::from(tokens)).unwrap();
+			println!("\x1b[34m{name}\x1b[m");
+		}
+	}
+	let code = quote! {
+		impl resources::Row for #ident {
+			type Key = f64;
+			const SCHEMA: Schema<'static> = Schema { fields: &[] };
+		}
+	};
+	println!("{}", code);
+	TokenStream::from(code)
 }

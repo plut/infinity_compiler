@@ -7,11 +7,10 @@ use std::fs::File;
 use std::io;
 use std::fmt;
 use std::cmp::min;
-use macros::Pack;
+use macros::{Pack, Row};
 
 mod resources {
 use std::io;
-use io::Result;
 use std::io::Read;
 use std::io::Write;
 use std::marker::Sized;
@@ -125,7 +124,7 @@ impl<const N: usize> Default for StaticString<N> {
 	fn default()->Self { Self { bytes: [0u8; N] } }
 }
 
-#[derive(Default,Debug,Pack)]
+#[derive(Default, Debug, Pack, Row)]
 struct KeyHdr {
 	#[header("KEY V1  ")]
 	nbif: i32,
@@ -133,27 +132,6 @@ struct KeyHdr {
 	bifoffset: u32,
 	resoffset: u32,
 }
-
-// impl Row for KeyHdr {
-// 	type Key = i32;
-// 	const SCHEMA: Schema<'static> = Schema { fields: &[
-// 		resources::Column{ fieldname: "nbif", fieldtype: resources::FieldType::Integer} ] };
-// }
-
-// impl pack::Pack for KeyHdr {
-// 	fn unpack(mut f: &mut impl Read)->io::Result<Self> {
-// 		Ok(Self{constant: StaticString::<8>::unpack(&mut f)?,
-// 			nbif: i32::unpack(&mut f)?, nres: i32::unpack(&mut f)?,
-// 		.. Default::default() })
-// 	}
-// }
-// impl resources::Pack for KeyHdr {
-// 	fn unpack(mut f: &mut impl Read)->io::Result<Self> {
-// 		Ok(Self{constant: StaticString::<8>::unpack(&mut f)?,
-// 			nbif: i32::unpack(&mut f)?, nres: i32::unpack(&mut f)?,
-// 		.. Default::default() })
-// 	}
-// }
 
 // use std::string::ToString;
 // use std::iter::Iterator;
@@ -164,12 +142,6 @@ struct KeyHdr {
 // 	.collect::<Vec<String>>()
 // 	.join(":")
 // }
-
-#[derive(Debug,Pack)]
-struct Blah {
-	#[header("KEY V1  ")]
-	x: i32,
-}
 
 fn main() -> io::Result<()> {
 // 	println!("s = {}", s);
