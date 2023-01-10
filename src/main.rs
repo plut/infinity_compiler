@@ -5,16 +5,11 @@
 use std::path::Path;
 use std::fs::File;
 use std::io;
-use std::io::Read;
 use std::fmt;
 use std::cmp::min;
-// use std::fmt::Write;
-use resources::Unpack;
+use macros::Pack;
 
-mod pack;
-// use pack::Pack;
-
-mod res {
+mod resources {
 use std::io;
 use io::Result;
 use std::io::Read;
@@ -71,9 +66,9 @@ pub trait Row {
 }
 }
 
-use res::Row;
-use res::Schema;
-use res::Pack;
+use resources::Row;
+use resources::Schema;
+use resources::Pack;
 
 #[derive(Debug)]
 struct StaticString<const N: usize>{ bytes: [u8; N], }
@@ -99,7 +94,8 @@ impl<const N: usize> From<&str> for StaticString<N> {
 }
 impl<const N: usize> std::fmt::Display for StaticString<N> {
 	fn fmt(&self, f:&mut fmt::Formatter) -> fmt::Result {
-		std::fmt::Write::write_char(f, '"')?;
+		use std::fmt::Write;
+		f.write_char('"')?;
 		for c in &self.bytes {
 			if *c == 0u8 { break }
 			f.write_char(*c as char)?;
@@ -109,47 +105,39 @@ impl<const N: usize> std::fmt::Display for StaticString<N> {
 		Ok(())
 	}
 }
-// impl<const N: usize> res::Row for StaticString<N> {
+// impl<const N: usize> resources::Row for StaticString<N> {
 // 	type Key = ();
 // // 	fn schema()->Schema<'static> {
 // // 		Schema{ fields: &["ab", "cd", "ef"] }
 // // 	}
 // }
-impl<const N: usize> res::Pack for StaticString<N> {
-	fn unpack(f: &mut impl Read)->io::Result<Self> {
+impl<const N: usize> resources::Pack for StaticString<N> {
+	fn unpack(f: &mut impl io::Read)->io::Result<Self> {
 		let mut x = [0u8; N];
 		f.read_exact(&mut x)?;
 		Ok(Self{ bytes: x, })
 	}
-	fn pack(self, f: &mut impl Write)->io::Result<()> {
-		f.write_all(self.bytes)
+	fn pack(self, f: &mut impl io::Write)->io::Result<()> {
+		f.write_all(&self.bytes)
 	}
 }
 impl<const N: usize> Default for StaticString<N> {
 	fn default()->Self { Self { bytes: [0u8; N] } }
 }
 
-// pack::unpack!{ struct KeyHdr {
-// 	constant: StaticString<8>,
-// 	nbif: i32,
-// 	nres: i32,
-// 	bifoffset: u32,
-// 	resoffset: u32,
-// } }
-
-#[derive(Default,Debug)]
+#[derive(Default,Debug,Pack)]
 struct KeyHdr {
-	constant: StaticString<8>,
+	#[header("KEY V1  ")]
 	nbif: i32,
 	nres: i32,
-// 	bifoffset: u32,
-// 	resoffset: u32,
+	bifoffset: u32,
+	resoffset: u32,
 }
 
 // impl Row for KeyHdr {
 // 	type Key = i32;
 // 	const SCHEMA: Schema<'static> = Schema { fields: &[
-// 		res::Column{ fieldname: "nbif", fieldtype: res::FieldType::Integer} ] };
+// 		resources::Column{ fieldname: "nbif", fieldtype: resources::FieldType::Integer} ] };
 // }
 
 // impl pack::Pack for KeyHdr {
@@ -159,7 +147,7 @@ struct KeyHdr {
 // 		.. Default::default() })
 // 	}
 // }
-// impl res::Pack for KeyHdr {
+// impl resources::Pack for KeyHdr {
 // 	fn unpack(mut f: &mut impl Read)->io::Result<Self> {
 // 		Ok(Self{constant: StaticString::<8>::unpack(&mut f)?,
 // 			nbif: i32::unpack(&mut f)?, nres: i32::unpack(&mut f)?,
@@ -177,7 +165,7 @@ struct KeyHdr {
 // 	.join(":")
 // }
 
-#[derive(Debug,Unpack)]
+#[derive(Debug,Pack)]
 struct Blah {
 	#[header("KEY V1  ")]
 	x: i32,
@@ -192,8 +180,11 @@ fn main() -> io::Result<()> {
 	let index = gamepath.join("chitin.key");
 	println!("game index is {:#?}", index);
 	let mut f = File::open(index).expect("file not found");
-	let x = Blah::unpack(&mut f)?;
-	println!("read Blah succeeded: {:?}", x);
+	let blah = KeyHdr::unpack(&mut f)?;
+	println!("read Blah succeeded: {blah:?}");
+	
+	let mut f = File::create("a")?;
+	blah.pack(&mut f)?;
 // 	let hdr = KeyHdr::unpack(&mut f)?;
 // 	println!("read succeeded buf: {:?}", hdr);
 // 	println!("schema is {}", Bytes8::schema());
