@@ -26,7 +26,7 @@ pub enum FieldType { Integer, String, Resref, Strref, Other }
 impl FieldType {
 	pub const fn sql(self)->&'static str {
 		match self {
-			FieldType::Integer | FieldType::Strref => "int",
+			FieldType::Integer | FieldType::Strref => "integer",
 			FieldType::String | FieldType::Resref => "text",
 			FieldType::Other => "null",
 		}
@@ -41,6 +41,47 @@ pub struct Column<'a> {
 pub struct Schema<'a> {
 	pub fields: &'a[Column<'a>], // fat pointer
 // 	pub fields: &'a[&'a str], // fat pointer
+}
+trait AddColumns { fn add_columns(&mut self, r:&Schema)->&Self; }
+impl AddColumns for String {
+	fn add_columns(&mut self, r: &Schema)->&Self {
+		let mut isfirst = true;
+		for Column { fieldname, .. } in r.fields.iter() {
+			if isfirst { isfirst = false; } else { self.push_str(","); }
+// 			write!(self, "\n \"{fieldname}\" ");
+		}
+		self
+	}
+}
+
+impl<'a> Schema<'a> {
+	pub fn create(&self, name: &str)->String {
+		use std::fmt::Write;
+		let mut s = String::from(format!("create table \"{name}\" ("));
+		let mut isfirst = true;
+		for Column { fieldname, fieldtype } in self.fields.iter() {
+			if isfirst { isfirst = false; }
+			else { s.push_str(","); }// XXX use format_args! instead
+			write!(&mut s, "\n \"{fieldname}\" {}", fieldtype.sql()).unwrap();
+		}
+		s.push_str(");");
+		s
+	}
+	fn add_columns(&mut self, s: String)->String {
+		let mut isfirst = true;
+		for Column { fieldname, .. } in self.fields.iter() {
+// 			if isfirst { isfirst = false; } else { s.push_str(","); }
+// 			s.push_str("\n \""); s.push_str(fieldname); s.push_str("\" ");
+		}
+		s
+	}
+	pub fn insert(&self, name: &str)->String {
+		let mut s = String::from("insert into \"");
+		s.push_str(name);
+		s.push_str("\" (");
+// 		let s = self.add_columns(s);
+		s
+	}
 }
 pub trait Pack: Sized {
 	fn unpack(f: &mut impl Read)->io::Result<Self>;
@@ -133,12 +174,6 @@ impl<const N: usize> std::fmt::Display for StaticString<N> {
 		Ok(())
 	}
 }
-// impl<const N: usize> resources::Row for StaticString<N> {
-// 	type Key = ();
-// // 	fn schema()->Schema<'static> {
-// // 		Schema{ fields: &["ab", "cd", "ef"] }
-// // 	}
-// }
 impl<const N: usize> resources::Pack for StaticString<N> {
 	fn unpack(f: &mut impl io::Read)->io::Result<Self> {
 		let mut x = [0u8; N];
@@ -160,8 +195,8 @@ struct KeyHdr {
 #[column(false, "toto", 3, abcd)]
 #[column(itemref)]
 	nres: i32,
-	bifoffset: u32,
 #[no_column]
+	bifoffset: u32,
 	resoffset: u32,
 }
 use resources::{FieldType, Column, ToBindable};
@@ -200,6 +235,7 @@ fn main() -> io::Result<()> {
 	let mut f = File::open(index).expect("file not found");
 	let blah = KeyHdr::unpack(&mut f)?;
 	println!("{:?}", KeyHdr::SCHEMA);
+	println!("{}", KeyHdr::SCHEMA.create("foo"));
 	println!("read Blah succeeded: {blah:?}");
 	
 	let mut f = File::create("a")?;

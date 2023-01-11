@@ -145,7 +145,8 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 	let (ident, flist) = read_struct_fields(parse_macro_input!(tokens));
 	let mut keyf = TS2::new();
 	let mut schema = TS2::new();
-	let mut col = 0;
+	let mut bind = TS2::new();
+	let mut col: usize = 0;
 	for Field { attrs, ident, ty, .. } in flist {
 		let mut no_column = false;
 		for (name, args) in attrs.into_iter().map(parse_attribute) {
@@ -156,17 +157,19 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 		}
 		if no_column { continue }
 		col+= 1;
-		let fieldname = proc_macro2::Literal::string(ident.unwrap().to_string().as_str());
+		let fieldname = proc_macro2::Literal::string(ident.as_ref().unwrap().to_string().as_str());
 		quote!{ Column { fieldname: #fieldname,
 			fieldtype: <#ty>::SQL_TYPE, }, }
 			.to_tokens(&mut schema);
+		quote!{ s.bind((#col, self.#ident.to_bindable()))?; }
+			.to_tokens(&mut bind);
 	}
 	let code = quote! {
 		impl resources::Row for #ident {
 			type Key = (#keyf);
 			const SCHEMA: Schema<'static> = Schema { fields: &[#schema] };
 			fn bind(&self, s: &mut Statement, k: &Self::Key)->sqlite::Result<()> {
-				Ok(())
+				#bind; Ok(())
 			}
 		}
 	};
