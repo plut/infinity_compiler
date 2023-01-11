@@ -19,10 +19,19 @@ use std::io::Read;
 use std::io::Write;
 use std::marker::Sized;
 use sqlite::Statement;
-struct Resref { name: i64, }
-struct Strref { value: i32, }
-#[derive(Debug)]
-pub enum FieldType { Integer, String, Resref, Strref }
+pub struct Resref { pub name: i64, }
+pub struct Strref { pub value: i32, }
+#[derive(Debug,Clone,Copy)]
+pub enum FieldType { Integer, String, Resref, Strref, Other }
+impl FieldType {
+	pub const fn sql(self)->&'static str {
+		match self {
+			FieldType::Integer | FieldType::Strref => "int",
+			FieldType::String | FieldType::Resref => "text",
+			FieldType::Other => "null",
+		}
+	}
+}
 #[derive(Debug)]
 pub struct Column<'a> {
 	pub fieldname: &'a str,
@@ -61,11 +70,13 @@ macro_rules! unpack_int {
 unpack_int!{i8,i16,i32,i64,u8,u16,u32,u64}
 pub trait ToBindable {
 	type SQLType: sqlite::BindableWithIndex;
+	const SQL_TYPE: FieldType;
 	fn to_bindable(&self)->Self::SQLType;
 }
 macro_rules! bind_int {
 	($($T:ty),*) => { $(impl ToBindable for $T {
 		type SQLType = i64;
+		const SQL_TYPE: FieldType = FieldType::Integer;
 		fn to_bindable(&self)->Self::SQLType { *self as i64 }
 	})* }
 }
@@ -84,6 +95,8 @@ pub trait Row {
 use resources::Row;
 use resources::Schema;
 use resources::Pack;
+use resources::Strref;
+use resources::Resref;
 
 #[derive(Debug)]
 struct StaticString<const N: usize>{ bytes: [u8; N], }
@@ -145,26 +158,26 @@ struct KeyHdr {
 	#[header("KEY V1  ")]
 	nbif: i32,
 #[column(false, "toto", 3, abcd)]
-#[column(itemref, i32)]
+#[column(itemref)]
 	nres: i32,
 	bifoffset: u32,
-#[column(foobar)]
+#[no_column]
 	resoffset: u32,
 }
 use resources::{FieldType, Column, ToBindable};
 
-impl resources::Row for KeyHdr {
-	type Key = (i32,);
-	const SCHEMA: Schema<'static> = Schema { fields: &[
-		Column{ fieldname: "nbif", fieldtype: FieldType::Integer, },
-		Column{ fieldname: "nres", fieldtype: FieldType::Integer, },
-	] };
-	fn bind(&self, s: &mut Statement, k: &Self::Key)->sqlite::Result<()> {
-		s.bind((1, self.nbif.to_bindable()))?;
-		s.bind((2, self.nres.to_bindable()))?;
-		Ok(())
-	}
-}
+// impl resources::Row for KeyHdr {
+// 	type Key = (i32,);
+// 	const SCHEMA: Schema<'static> = Schema { fields: &[
+// 		Column{ fieldname: "nbif", fieldtype: ToBindable<i32>::SQL_TYPE, },
+// 		Column{ fieldname: "nres", fieldtype: FieldType::Integer, },
+// 	] };
+// 	fn bind(&self, s: &mut Statement, k: &Self::Key)->sqlite::Result<()> {
+// 		s.bind((1, self.nbif.to_bindable()))?;
+// 		s.bind((2, self.nres.to_bindable()))?;
+// 		Ok(())
+// 	}
+// }
 
 // use std::string::ToString;
 // use std::iter::Iterator;
@@ -186,6 +199,7 @@ fn main() -> io::Result<()> {
 	println!("game index is {:#?}", index);
 	let mut f = File::open(index).expect("file not found");
 	let blah = KeyHdr::unpack(&mut f)?;
+	println!("{:?}", KeyHdr::SCHEMA);
 	println!("read Blah succeeded: {blah:?}");
 	
 	let mut f = File::create("a")?;

@@ -1,7 +1,7 @@
 #![allow(
 	unreachable_code, dead_code,
 	unused_variables, unused_imports, unused_macros, unused_parens,
-	unused_mut,unused_attributes,
+	unused_mut,unused_attributes,unused_assignments,
 )]
 extern crate proc_macro;
 // extern crate proc_macro2;
@@ -88,7 +88,8 @@ fn parse_attribute(Attribute{path, tokens, ..}: Attribute) -> (String, Vec<AttrA
 fn parse_attribute_args(tokens: TS2)->Vec<Expr> {
 	let args = Punctuated::<Expr, Token![,]>::parse_terminated
 		.parse(TokenStream::from(tokens)).unwrap();
-	if args.len() != 1 { panic!("args expression should have length 1"); }
+	if args.len() == 0 { return Vec::<Expr>::new() }
+	if args.len() > 1 { panic!("args expression should have length 0 or 1"); }
 	match args.first().unwrap() {
 		Expr::Paren(ExprParen{ expr, ..}) => vec![*expr.clone()],
 		Expr::Tuple(ExprTuple{ elems, .. }) => to_vector(elems),
@@ -123,7 +124,7 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 			}
 		}
 	};
-	println!("{}", code);
+// 	println!("{}", code);
 	TokenStream::from(code)
 }
 
@@ -139,29 +140,56 @@ fn pack_attr_header(readf: &mut TS2, writef: &mut TS2, args: Vec<AttrArg>) {
 
 // [column(itemref, i32, "references items", etc.)] pushes on key
 // [column(false)] suppresses next column
-#[proc_macro_derive(Row, attributes(column))]
+#[proc_macro_derive(Row, attributes(column,no_column))]
 pub fn derive_row(tokens: TokenStream) -> TokenStream {
 	let (ident, flist) = read_struct_fields(parse_macro_input!(tokens));
+	let mut keyf = TS2::new();
+	let mut schema = TS2::new();
+	let mut col = 0;
 	for Field { attrs, ident, ty, .. } in flist {
+		let mut no_column = false;
 		for (name, args) in attrs.into_iter().map(parse_attribute) {
 			match name.as_str() {
-				"column" => row_attr_column(args),
+				"column" => row_attr_column(&mut keyf, args.as_slice()),
+				"no_column" => no_column = true,
 				_ => () }
 		}
+		if no_column { continue }
+		col+= 1;
+		let fieldname = proc_macro2::Literal::string(ident.unwrap().to_string().as_str());
+		quote!{ Column { fieldname: #fieldname,
+			fieldtype: <#ty>::SQL_TYPE, }, }
+			.to_tokens(&mut schema);
 	}
 	let code = quote! {
-// 		impl resources::Row for #ident {
-// 			type Key = f64;
-// 			const SCHEMA: Schema<'static> = Schema { fields: &[] };
-// 		}
+		impl resources::Row for #ident {
+			type Key = (#keyf);
+			const SCHEMA: Schema<'static> = Schema { fields: &[#schema] };
+			fn bind(&self, s: &mut Statement, k: &Self::Key)->sqlite::Result<()> {
+				Ok(())
+			}
+		}
 	};
 	println!("{}", code);
+// 	TokenStream::new()
 	TokenStream::from(code)
 }
-fn row_attr_column(args: Vec<AttrArg>) {
+fn row_attr_column(keyf: &mut TS2, args: &[AttrArg]) {
 	if args.is_empty() { return }
 	println!("got column with {} fields", args.len());
+	match args {
+		[ AttrArg::Ident(i), ] =>
+		println!("identifier {i}"),
+		_ => (),
+	}
 	for (i, name) in args.into_iter().enumerate() {
 		println!("  arg {i} = \x1b[32m{name:?}\x1b[m");
+	}
+}
+fn ty_to_sql(s: &str)->&'static str {
+	match s {
+		"i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => "Integer",
+		"String" | "str" => "String",
+		_ => "null"
 	}
 }
