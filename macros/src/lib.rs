@@ -7,6 +7,7 @@ extern crate proc_macro;
 // extern crate proc_macro2;
 use proc_macro::TokenStream;
 type TS2 = proc_macro2::TokenStream;
+use proc_macro2::Span;
 use quote::quote;
 use quote::ToTokens;
 use syn;
@@ -140,29 +141,51 @@ fn pack_attr_header(readf: &mut TS2, writef: &mut TS2, args: Vec<AttrArg>) {
 
 // [column(itemref, i32, "references items", etc.)] pushes on key
 // [column(false)] suppresses next column
+#[derive(Default,Debug)]
+struct RowCurrent {
+	extra: String,
+	no_column: bool,
+}
+
 #[proc_macro_derive(Row, attributes(column,no_column))]
 pub fn derive_row(tokens: TokenStream) -> TokenStream {
+	use proc_macro2::Literal;
 	let (ident, flist) = read_struct_fields(parse_macro_input!(tokens));
-	let mut keyf = TS2::new();
+	let mut fields2 = Vec::<(String, String, String)>::new();
+	let mut col: usize = 0;
 	let mut schema = TS2::new();
 	let mut bind = TS2::new();
-	let mut col: usize = 0;
+	let mut add_schema = |fieldname: &str, fieldtype: &str, extra: &str| {
+		let ty = proc_macro2::Ident::new(fieldtype, Span::call_site());
+		quote!{ Column { fieldname: #fieldname, fieldtype: <#ty>::SQL_TYPE,
+			extra: #extra}, }.to_tokens(&mut schema);
+	};
 	for Field { attrs, ident, ty, .. } in flist {
-		let mut no_column = false;
+		let mut current = RowCurrent::default();
 		for (name, args) in attrs.into_iter().map(parse_attribute) {
 			match name.as_str() {
-				"column" => row_attr_column(&mut keyf, args.as_slice()),
-				"no_column" => no_column = true,
+				"column" => row_attr_column(&mut fields2, &mut current, &args[..]),
+// 				"no_column" => no_column = true,
 				_ => () }
 		}
-		if no_column { continue }
+		if current.no_column { continue }
 		col+= 1;
-		let fieldname = proc_macro2::Literal::string(ident.as_ref().unwrap().to_string().as_str());
-		quote!{ Column { fieldname: #fieldname,
-			fieldtype: <#ty>::SQL_TYPE, }, }
-			.to_tokens(&mut schema);
+		let fieldname = ident.as_ref().unwrap().to_string();
+		let fieldtype = toks_to_string(&ty);
+		add_schema(fieldname.as_str(), fieldtype.as_str(), current.extra.as_str());
 		quote!{ s.bind((#col, self.#ident.to_bindable()))?; }
 			.to_tokens(&mut bind);
+	}
+	let mut keyf = TS2::new();
+	let mut keycol = 0;
+	for (fieldname, fieldtype, extra) in fields2 {
+		col+= 1;
+		let ident = proc_macro2::Ident::new(fieldname.as_str(), Span::call_site());
+		let kc = proc_macro2::Literal::isize_unsuffixed(keycol);
+		let ty = proc_macro2::Ident::new(fieldtype.as_str(), Span::call_site());
+		add_schema(fieldname.as_str(), fieldtype.as_str(), extra.as_str());
+		quote!{ #ty, }.to_tokens(&mut keyf);
+		quote!{ s.bind((#col, k.#kc.to_bindable()))?; }.to_tokens(&mut bind);
 	}
 	let code = quote! {
 		impl resources::Row for #ident {
@@ -173,20 +196,27 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 			}
 		}
 	};
-	println!("{}", code);
-// 	TokenStream::new()
+	println!("\x1b[36m{}\x1b[m", code);
 	TokenStream::from(code)
 }
-fn row_attr_column(keyf: &mut TS2, args: &[AttrArg]) {
-	if args.is_empty() { return }
-	println!("got column with {} fields", args.len());
-	match args {
-		[ AttrArg::Ident(i), ] =>
-		println!("identifier {i}"),
-		_ => (),
-	}
-	for (i, name) in args.into_iter().enumerate() {
+fn row_attr_column(fields2: &mut Vec<(String,String,String)>, current: &mut RowCurrent, args: &[AttrArg]) {
+	use AttrArg::{Ident, Str};
+	println!("got column with {} fields: {args:?}", args.len());
+	for (i, name) in args.iter().enumerate() {
 		println!("  arg {i} = \x1b[32m{name:?}\x1b[m");
+	}
+	match args {
+		[ Ident(i), ] =>
+			if i == "false" { current.no_column = true; }
+			else {
+				println!("\x1b[31mdon't know what to do with identifier: {i}\x1b[m");
+			},
+		[ Str(s), ] => current.extra = s.to_owned(),
+		[ Ident(i), Ident(t), Str(s) ] =>
+			fields2.push((i.to_owned(), t.to_owned(), s.to_owned())),
+		[ Ident(i), Ident(t) ] =>
+			fields2.push((i.to_owned(), t.to_owned(), "".to_owned())),
+		_ => (),
 	}
 }
 fn ty_to_sql(s: &str)->&'static str {

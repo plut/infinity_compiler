@@ -2,8 +2,12 @@
 	unused_imports,
 	unused_macros,
 	unused_variables, dead_code,
+	unused_must_use,
 	unused_mut,
 	)]
+
+use std::any::type_name;
+fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
 use std::path::Path;
 use std::fs::File;
 use std::io;
@@ -19,8 +23,6 @@ use std::io::Read;
 use std::io::Write;
 use std::marker::Sized;
 use sqlite::Statement;
-pub struct Resref { pub name: i64, }
-pub struct Strref { pub value: i32, }
 #[derive(Debug,Clone,Copy)]
 pub enum FieldType { Integer, String, Resref, Strref, Other }
 impl FieldType {
@@ -36,65 +38,70 @@ impl FieldType {
 pub struct Column<'a> {
 	pub fieldname: &'a str,
 	pub fieldtype: FieldType,
+	pub extra: &'a str,
 }
 #[derive(Debug)]
 pub struct Schema<'a> {
 	pub fields: &'a[Column<'a>], // fat pointer
 // 	pub fields: &'a[&'a str], // fat pointer
 }
-trait AddColumns { fn add_columns(&mut self, r:&Schema)->&Self; }
-impl AddColumns for String {
-	fn add_columns(&mut self, r: &Schema)->&Self {
-		let mut isfirst = true;
-		for Column { fieldname, .. } in r.fields.iter() {
-			if isfirst { isfirst = false; } else { self.push_str(","); }
-// 			write!(self, "\n \"{fieldname}\" ");
-		}
-		self
-	}
-}
 
 impl<'a> Schema<'a> {
-	pub fn create(&self, name: &str)->String {
+	fn write_columns(&self, s: &mut String) {
+		let mut isfirst = true;
+		for Column { fieldname, .. } in self.fields.iter() {
+			if isfirst { isfirst = false; } else { s.push_str(","); }
+			s.push_str("\n \""); s.push_str(fieldname); s.push_str("\" ");
+		}
+	}
+	pub fn create_statement(&self, name: &str)->String {
 		use std::fmt::Write;
 		let mut s = String::from(format!("create table \"{name}\" ("));
 		let mut isfirst = true;
-		for Column { fieldname, fieldtype } in self.fields.iter() {
+		for Column { fieldname, fieldtype, extra } in self.fields.iter() {
 			if isfirst { isfirst = false; }
 			else { s.push_str(","); }// XXX use format_args! instead
-			write!(&mut s, "\n \"{fieldname}\" {}", fieldtype.sql()).unwrap();
+			write!(&mut s, "\n \"{fieldname}\" {} {extra}", fieldtype.sql()).unwrap();
 		}
-		s.push_str(");");
+		s.push_str(")");
 		s
 	}
-	fn add_columns(&mut self, s: String)->String {
-		let mut isfirst = true;
-		for Column { fieldname, .. } in self.fields.iter() {
-// 			if isfirst { isfirst = false; } else { s.push_str(","); }
-// 			s.push_str("\n \""); s.push_str(fieldname); s.push_str("\" ");
+	pub fn insert_statement(&self, name: &str)->String {
+		let mut s = String::from(format!("insert into \"{name}\" ("));
+		self.write_columns(&mut s);
+		s.push_str(") values (");
+		for c in 0..self.fields.iter().count() {
+			if c > 0 { s.push_str(","); }
+			s.push_str("?");
 		}
+		s.push_str(")");
 		s
 	}
-	pub fn insert(&self, name: &str)->String {
-		let mut s = String::from("insert into \"");
-		s.push_str(name);
-		s.push_str("\" (");
-// 		let s = self.add_columns(s);
+	pub fn select_statement(&self, name: &str)->String {
+		use std::fmt::Write;
+		let mut s = String::from("select ");
+		self.write_columns(&mut s);
+		write!(&mut s, "\nfrom \"{name}\" ").unwrap();
 		s
 	}
 }
 pub trait Pack: Sized {
+	fn read_bytes(f: &mut impl Read, n: usize)->io::Result<Vec<u8>> {
+		let mut buf = Vec::<u8>::with_capacity(n);
+		unsafe { buf.set_len(n); }
+		f.read(&mut buf)?; Ok(buf)
+	}
 	fn unpack(f: &mut impl Read)->io::Result<Self>;
 	fn pack(self, f: &mut impl io::Write)->io::Result<()> { unimplemented!() }
 
-	fn unpack_header(f: &mut impl io::Read, hdr: &str)->io::Result<()> {
-		let mut buf = Vec::<u8>::with_capacity(hdr.len());
-		unsafe { buf.set_len(hdr.len()); }
-		f.read_exact(&mut buf)?;
-		println!(" found {buf:?}; is equal to hdr? {}", buf == hdr.as_bytes());
+	fn unpack_header(f: &mut impl Read, hdr: &str)->io::Result<()> {
+		let buf = Self::read_bytes(f, hdr.len() as usize);
+// 		println!(" found {buf:?}; is equal to hdr? {}", buf == hdr.as_bytes());
 		Ok(())
 	}
-// 	fn pack(&self, f: &mut impl Write)->Result<()>;
+	fn vecunpack(mut f: &mut impl Read, n: usize)->io::Result<Vec<Self>> {
+		(1..n).map(|_| { Self::unpack(&mut f) }).collect()
+	}
 }
 macro_rules! unpack_int {
 	($($T:ty),*) => { $(impl Pack for $T {
@@ -132,12 +139,64 @@ pub trait Row {
 // 		where Self: Sized;
 }
 }
+mod gametypes {
+extern crate sqlite;
+use macros::{Pack, Row};
+use super::resources;
+use resources::{Pack, Row};
+use sqlite::Statement;
+use std::io;
+#[derive(Debug,Pack)] pub struct Resref { pub name: i64, }
+#[derive(Debug,Pack)] pub struct Strref { pub value: i32, }
+#[derive(Debug,Pack)] pub struct Restype { pub value: u16, }
+#[derive(Debug,Pack)] pub struct BifIndex { pub data: u32, }
+#[derive(Debug,Pack)] struct KeyHdr {
+	#[header("KEY V1  ")]
+	nbif: i32,
+	nres: i32,
+	bifoffset: u32,
+	resoffset: u32,
+}
+#[derive(Debug,Pack)] struct KeyBif {
+	filelength: u32,
+	offset: u32,
+	namelength: u16,
+	location: u16,
+}
+#[derive(Debug,Pack)] struct KeyRes {
+	name: Resref,
+	rtype: Restype,
+	location: BifIndex,
+}
+#[derive(Debug)] pub struct GameIndex {
+	gamedir: String,
+	bif: Vec<String>,
+}
+use std::path::Path;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+fn gameindex_from(dir: &str)->io::Result<GameIndex> {
+	let gameindex = Path::new(&dir).join("chitin.key");
+	let mut f = File::open(gameindex)?;
+	let hdr = KeyHdr::unpack(&mut f)?;
+	println!("{hdr:?}");
+	let bifentries = <KeyBif>::vecunpack(&mut f, hdr.nbif as usize)?;
+	let bif: io::Result<Vec<String>> = bifentries.into_iter().
+		map(|KeyBif{offset, namelength, ..}| {
+			f.seek(SeekFrom::Start(offset as u64))?;
+			let buf = KeyBif::read_bytes(&mut f, namelength as usize - 1)?;
+			Ok(String::from_utf8(buf).unwrap())
+		}).collect();
+	println!("{bif:?}");
+	todo!()
+}
+impl From<&str> for GameIndex {
+	fn from(dir: &str)->Self { gameindex_from(dir).unwrap() }
+}
+}
 
-use resources::Row;
-use resources::Schema;
-use resources::Pack;
-use resources::Strref;
-use resources::Resref;
+use resources::{Schema, Row, Pack};
+use gametypes::{Strref, Resref};
 
 #[derive(Debug)]
 struct StaticString<const N: usize>{ bytes: [u8; N], }
@@ -189,40 +248,27 @@ impl<const N: usize> Default for StaticString<N> {
 }
 
 #[derive(Default, Debug, Pack, Row)]
-struct KeyHdr {
+struct Blah {
 	#[header("KEY V1  ")]
 	nbif: i32,
-#[column(false, "toto", 3, abcd)]
-#[column(itemref)]
+#[column("primary key")]
+#[column(itemref, i32, "")]
 	nres: i32,
-#[no_column]
+#[column(false)]
 	bifoffset: u32,
 	resoffset: u32,
 }
 use resources::{FieldType, Column, ToBindable};
 
-// impl resources::Row for KeyHdr {
-// 	type Key = (i32,);
-// 	const SCHEMA: Schema<'static> = Schema { fields: &[
-// 		Column{ fieldname: "nbif", fieldtype: ToBindable<i32>::SQL_TYPE, },
-// 		Column{ fieldname: "nres", fieldtype: FieldType::Integer, },
-// 	] };
-// 	fn bind(&self, s: &mut Statement, k: &Self::Key)->sqlite::Result<()> {
-// 		s.bind((1, self.nbif.to_bindable()))?;
-// 		s.bind((2, self.nres.to_bindable()))?;
-// 		Ok(())
-// 	}
-// }
+const DB_FILE: &str = "game.sqlite";
 
-// use std::string::ToString;
-// use std::iter::Iterator;
-// fn foo(a: Vec<i32>)->String { format!("{:?}", a) }
-// fn foo2(a: &Vec<i32>)->String {
-// 	a.into_iter()
-// 	.map(std::string::ToString::to_string)
-// 	.collect::<Vec<String>>()
-// 	.join(":")
-// }
+fn create_db(db_file: &str)->io::Result<()> {
+	if std::path::Path::new(&db_file).exists() {
+		std::fs::remove_file(&db_file)?;
+	}
+	let db = sqlite::open(&db_file).unwrap();
+	Ok(())
+}
 
 fn main() -> io::Result<()> {
 // 	println!("s = {}", s);
@@ -231,17 +277,12 @@ fn main() -> io::Result<()> {
 // 	println!("{}", foo2(&vec![1,2,3]));
 	let gamepath = Path::new("/home/jerome/jeux/bg/game");
 	let index = gamepath.join("chitin.key");
-	println!("game index is {:#?}", index);
-	let mut f = File::open(index).expect("file not found");
-	let blah = KeyHdr::unpack(&mut f)?;
-	println!("{:?}", KeyHdr::SCHEMA);
-	println!("{}", KeyHdr::SCHEMA.create("foo"));
-	println!("read Blah succeeded: {blah:?}");
-	
-	let mut f = File::create("a")?;
-	blah.pack(&mut f)?;
-// 	let hdr = KeyHdr::unpack(&mut f)?;
-// 	println!("read succeeded buf: {:?}", hdr);
-// 	println!("schema is {}", Bytes8::schema());
+	gametypes::GameIndex::from("/home/jerome/jeux/bg/game");
+
+	create_db(&DB_FILE)?;
+	println!("{}", Blah::SCHEMA.create_statement("hdr"));
+	println!("{}", Blah::SCHEMA.insert_statement("hdr"));
+	println!("{}", Blah::SCHEMA.select_statement("hdr"));
+
 	Ok(())
 }
