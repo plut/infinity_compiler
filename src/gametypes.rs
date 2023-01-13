@@ -1,5 +1,5 @@
 use super::{Resref,Strref,StaticString, Pack, Row};
-#[derive(Debug,Pack)]
+#[derive(Debug,Pack,Row)]
 struct ItemEffect {
 	opcode: u16, //opcode,
 	target: u8, // EffectTarget,
@@ -18,12 +18,12 @@ struct ItemEffect {
 	saving_throw_bonus: i32,
 	stacking_id: u32,
 }
-#[derive(Debug,Pack)]
+#[derive(Debug,Pack,Row)]
 struct ItemAbility {
- 	attack_type: u8, // AttackType,
- 	must_identify: u8,
- 	location: u8,
- 	alternative_dice_sides: u8,
+	attack_type: u8, // AttackType,
+	must_identify: u8,
+	location: u8,
+	alternative_dice_sides: u8,
 	use_icon: Resref,
 	target_type: u8, // TargetType,
 	target_count: u8,
@@ -39,8 +39,8 @@ struct ItemAbility {
 	secondary_type: u8,
 	damage_bonus: u16,
 	damage_type: u16, // DamageType,
-	effect_count: u16, // = 0,
-	effect_index: u16, // = 0,
+#[column(false)] effect_count: u16, // = 0,
+#[column(false)] effect_index: u16, // = 0,
 	max_charges: u16,
 	depletion: u16,
 	flags: u32,
@@ -53,8 +53,9 @@ struct ItemAbility {
 	is_bullet: u16,
 }
 #[derive(Debug,Pack,Row)]
-struct Item {
+pub struct Item {
 #[header("ITM V1  ")]
+#[column(itemref, Resref, "primary key")]
 	unidentified_name: Strref,
 	name: Strref,
 	replacement: Resref,

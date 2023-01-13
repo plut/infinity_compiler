@@ -207,15 +207,15 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 			}
 		}
 	};
-	println!("\x1b[36m{}\x1b[m", code);
+// 	println!("\x1b[36m{}\x1b[m", code);
 	TokenStream::from(code)
 }
 fn row_attr_column(fields2: &mut Vec<(String,String,String)>, current: &mut RowCurrent, args: &[AttrArg]) {
 	use AttrArg::{Ident, Str};
 	println!("got column with {} fields: {args:?}", args.len());
-	for (i, name) in args.iter().enumerate() {
-		println!("  arg {i} = \x1b[32m{name:?}\x1b[m");
-	}
+// 	for (i, name) in args.iter().enumerate() {
+// 		println!("  arg {i} = \x1b[32m{name:?}\x1b[m");
+// 	}
 	match args {
 		[ Ident(i), ] =>
 			if i == "false" { current.no_column = true; }

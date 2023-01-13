@@ -49,18 +49,18 @@ pub struct Schema<'a> {
 }
 
 impl<'a> Schema<'a> {
-	fn write_columns(&self, s: &mut String) {
+	pub fn write_columns(&self, s: &mut String) {
 		let mut isfirst = true;
 		for Column { fieldname, .. } in self.fields.iter() {
 			if isfirst { isfirst = false; } else { s.push_str(","); }
 			s.push_str("\n \""); s.push_str(fieldname); s.push_str("\" ");
 		}
 	}
-	pub fn create_statement(&self, name: &str)->String {
+	pub fn create_query(&self, name: &str, more: &[Column])->String {
 		use std::fmt::Write;
 		let mut s = String::from(format!("create table \"{name}\" ("));
 		let mut isfirst = true;
-		for Column { fieldname, fieldtype, extra } in self.fields.iter() {
+		for Column { fieldname, fieldtype, extra } in self.fields.iter().chain(more.iter()) {
 			if isfirst { isfirst = false; }
 			else { s.push_str(","); }// XXX use format_args! instead
 			write!(&mut s, "\n \"{fieldname}\" {} {extra}", fieldtype.sql()).unwrap();
@@ -68,7 +68,7 @@ impl<'a> Schema<'a> {
 		s.push_str(")");
 		s
 	}
-	pub fn insert_statement(&self, name: &str)->String {
+	pub fn insert_query(&self, name: &str)->String {
 		let mut s = String::from(format!("insert into \"{name}\" ("));
 		self.write_columns(&mut s);
 		s.push_str(") values (");
@@ -79,7 +79,7 @@ impl<'a> Schema<'a> {
 		s.push_str(")");
 		s
 	}
-	pub fn select_statement(&self, name: &str)->String {
+	pub fn select_query(&self, name: &str)->String {
 		use std::fmt::Write;
 		let mut s = String::from("select ");
 		self.write_columns(&mut s);
@@ -322,6 +322,7 @@ mod gametypes;
 
 use resources::{Schema, Row, Pack};
 use gameindex::{Strref, Resref};
+use gametypes::{Item};
 
 // #[derive(Debug)]
 #[derive(Clone,Copy)]
@@ -379,26 +380,45 @@ impl<const N: usize> Default for StaticString<N> {
 	fn default()->Self { Self { bytes: [0u8; N] } }
 }
 
-#[derive(Default, Debug, Pack, Row)]
-struct Blah {
-	#[header("KEY V1  ")]
-	nbif: i32,
-#[column("primary key")]
-#[column(itemref, i32, "")]
-	nres: i32,
-#[column(false)]
-	bifoffset: u32,
-	resoffset: u32,
-}
+// #[derive(Default, Debug, Pack, Row)]
+// struct Blah {
+// 	#[header("KEY V1  ")]
+// 	nbif: i32,
+// #[column("primary key")]
+// #[column(itemref, i32, "")]
+// 	nres: i32,
+// #[column(false)]
+// 	bifoffset: u32,
+// 	resoffset: u32,
+// }
 use resources::{FieldType, Column, ToBindable};
 
 const DB_FILE: &str = "game.sqlite";
 
+fn create_resource(db: &Connection, name: &str, schema: Schema)->sqlite::Result<()> {
+	use std::fmt::Write;
+	db.execute(schema.create_query(format!("res_{name}").as_str(), &[]))?;
+	db.execute(schema.create_query(format!("add_{name}").as_str(),
+		&[Column{fieldname: "source",  fieldtype: FieldType::Text, extra: ""}]))?;
+	db.execute(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str())?;
+	let mut cols = String::new(); schema.write_columns(&mut cols);
+	let mut view = String::from(format!(r#"create view "{name}" as
+with "u" as (select {cols} from "res_{name}" union select {cols} from "add_{name}") select "#));
+	let key = "itemref";
+	for (i, Column { fieldname, fieldtype,.. }) in schema.fields.iter().enumerate() {
+		if i > 0 { write!(&mut view, ",\n").unwrap(); }
+		write!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{key}" and "field"='{fieldname}' order by rowid desc limit 1), "{fieldname}") as "{fieldname}" "#).unwrap();
+	}
+	write!(&mut view, r#"from "u""#).unwrap();
+	println!("{view}");
+	Ok(())
+}
 fn create_db(db_file: &str)->io::Result<Connection> {
 	if Path::new(&db_file).exists() {
 		std::fs::remove_file(&db_file)?;
 	}
 	let db = sqlite::open(&db_file).unwrap();
+	create_resource(&db, "items", Item::SCHEMA).unwrap();
 	Ok(db)
 }
 
@@ -425,9 +445,9 @@ fn main() -> io::Result<()> {
 // 	}
 
 	create_db(&DB_FILE)?;
-	println!("{}", Blah::SCHEMA.create_statement("hdr"));
-	println!("{}", Blah::SCHEMA.insert_statement("hdr"));
-	println!("{}", Blah::SCHEMA.select_statement("hdr"));
+	println!("{}", Item::SCHEMA.create_query("res_items", &[]));
+	println!("{}", Item::SCHEMA.insert_query("res_items"));
+	println!("{}", Item::SCHEMA.select_query("res_items"));
 
 	Ok(())
 }
