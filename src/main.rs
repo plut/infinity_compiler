@@ -147,8 +147,9 @@ use macros::{Pack, Row};
 use super::resources;
 use resources::{Pack, Row};
 use sqlite::Statement;
+use std::fmt::Debug;
 use std::io;
-#[derive(Debug)] pub struct Resref { pub name: super::StaticString::<8>, }
+#[derive(Debug,Clone,Copy)] pub struct Resref { pub name: super::StaticString::<8>, }
 impl Pack for Resref {
 	fn unpack(f: &mut impl Read)->io::Result<Self> {
 		let mut name = super::StaticString::<8>::unpack(f)?;
@@ -222,7 +223,7 @@ impl<'a> From<&'a str> for GameIndex<'a> {
 	pub path: std::path::PathBuf,
 	pub sourcefile: usize,
 	pub resources: &'a Vec<KeyRes>,
-	pub file: Option<std::io::BufReader<std::fs::File>>,
+	pub file: Option::<std::io::BufReader<std::fs::File>>,
 }
 impl<'a> IntoIterator for &'a GameIndex<'a> {
 	type Item = BifView<'a>;
@@ -241,27 +242,46 @@ impl<'a> Iterator for GameIndexItr<'a> {
 	}
 }
 #[derive(Debug)] pub struct BifViewItr<'a> {
-	pub bifview: &'a BifView<'a>,
+	pub bifview: &'a mut BifView<'a>,
 	pub state: usize,
 }
-impl<'a> BifView<'a> {
-	fn open(&mut self)->&mut impl Read {
-		if self.file.is_none() {
-			self.file = Some(std::io::BufReader::new(File::open(&self.path).unwrap()));
-		}
-		self.file.as_mut().unwrap()
+pub struct ResHandle<'a> {
+	bif: &'a mut Option<BifFile>,
+	path: &'a std::path::PathBuf,
+	location: BifIndex,
+	restype: Restype,
+}
+impl<'a> ResHandle<'a> {
+	pub fn read(&mut self)->io::Result<Vec<u8>> {
+		biffile(&mut self.bif, self.path);
+		let mut biffile = self.bif.as_mut().unwrap();
+		let j = self.location.resourceindex();
+		let BifResource{ offset, size, restype, .. } = &biffile.resources[j];
+		assert_eq!(restype, &self.restype);
+		biffile.buf.seek(SeekFrom::Start(*offset as u64))?;
+		BifHdr::read_bytes(&mut biffile.buf, *size as usize)
 	}
 }
-#[derive(Debug)] pub struct ResItem<'a> {
-	pub restype: Restype,
-	pub resref: &'a Resref,
-	pub index: usize,
-	pub bif: &'a BifView<'a>,
-}
-impl<'a> IntoIterator for &'a BifView<'a> {
-	type Item = ResItem<'a>;
-	type IntoIter = BifViewItr<'a>;
-	fn into_iter(self)->Self::IntoIter { BifViewItr{ bifview: self, state: 0, } }
+
+impl<'a> GameIndex<'a> {
+	// we pass a function with arguments:
+	// cursor: () -> Cursor
+	// resname, restype: resource identifier
+// 	pub fn for_each<F,G>(&self, f: impl Fn(Resref, Restype, F)->())->io::Result<()>
+	pub fn for_each<F>(&self, f: F)->io::Result<()>
+	where F: (Fn(Resref, Restype, ResHandle)->()) {
+		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
+			let path = Path::new(self.gamedir).join(filename);
+			let mut bif = Option::<BifFile>::default();
+			for (i, res) in self.resources.iter().enumerate() {
+				let mut rread = ResHandle{ bif: &mut bif, path: &path,
+					location: res.location, restype: res.restype, };
+				if res.location.sourcefile() != sourcefile { continue }
+				f(res.resref, res.restype, rread)
+			}
+		}
+		Ok(())
+	}
 }
 #[derive(Debug,Pack)] pub struct BifHdr {
 	#[header("BIFFV1  ")]
@@ -276,39 +296,23 @@ impl<'a> IntoIterator for &'a BifView<'a> {
 	restype: Restype,
 	_unknown: u16,
 }
-fn biffile_from<'a>(file: impl AsRef<Path>+std::fmt::Debug)->io::Result<Vec<BifResource>> {
+fn bifresources<'a>(file: impl AsRef<Path>+Debug)->io::Result<Vec<BifResource>> {
 	let mut f = File::open(file)?;
 	let hdr = BifHdr::unpack(&mut f)?;
-// 	println!("bif hdr for {file:?}: {hdr:?}");
 	f.seek(SeekFrom::Start(hdr.offset as u64))?;
 	BifResource::vecunpack(&mut f, hdr.nres as usize)
 }
-impl<'a> Iterator for BifViewItr<'a> {
-	type Item = ResItem<'a>;
-	fn next(&mut self)->Option<Self::Item> {
-		loop {
-			// iterate (self.state) over the *global* set of resources
-			// (self.bifview.resources):
-			if self.state >= self.bifview.resources.len() { return None }
-			let r = &self.bifview.resources[self.state];
-			self.state+= 1;
-			// filter out all resources not belonging to current file:
-			if r.location.sourcefile() != self.bifview.sourcefile { continue }
-
-// 			if self.resources.is_none() {
-// 				println!("\x1b[31;1mOpening file {}\x1b[m", self.bifview.filename.to_str().unwrap());
-// 				self.resources = Some(biffile_from(&self.bifview.filename).unwrap());
-// 				println!("this file has {} resources", self.resources.as_ref().unwrap().len());
-// 			}
-			let index = r.location.resourceindex();
-			return Some(ResItem { restype: r.restype, resref: &r.resref, index,
-				bif: &self.bifview })
-		}
-	}
+struct BifFile {
+	buf: std::io::BufReader<std::fs::File>,
+	resources: Vec<BifResource>,
 }
-impl<'a> ResItem<'a> {
-	fn to_cursor(&self) {
+fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->io::Result<&'a BifFile> {
+	if o.is_none() {
+		let resources = bifresources(path)?;
+		let buf = std::io::BufReader::new(File::open(path)?);
+		*o = Some(BifFile{buf, resources});
 	}
+	Ok(o.as_ref().unwrap())
 }
 } // mod gametypes
 
@@ -316,6 +320,7 @@ use resources::{Schema, Row, Pack};
 use gametypes::{Strref, Resref};
 
 // #[derive(Debug)]
+#[derive(Clone,Copy)]
 pub struct StaticString<const N: usize>{ bytes: [u8; N], }
 impl<const N: usize> PartialEq<&str> for StaticString<N> {
 	fn eq(&self, other: &&str) -> bool {
@@ -399,15 +404,24 @@ fn main() -> io::Result<()> {
 	let gamepath = Path::new("/home/jerome/jeux/bg/game");
 	let index = gamepath.join("chitin.key");
 	let game = gametypes::GameIndex::from("/home/jerome/jeux/bg/game");
-	for bif in &game {
-// 		println!("in file {:?} {}", a.filename, type_of(&a.filename));
-		for r in &bif {
-			if r.restype.value == 0x03ed {
-				println!("found an item {} in {:?} ", r.resref.name, bif.path);
-			}
-// 				println!("{r:?}");
+	game.for_each(|rref, rtype, mut handle| {
+		if rtype.value == 0x03ed {
+// 			println!("{rref:?} {rtype:?}");
+			let v = handle.read().unwrap();
+// 			println!("{:?}", std::str::from_utf8(&v[0..8]).unwrap());
 		}
-	}
+		
+	});
+
+// 	for mut bif in &game {
+// 		println!("in file {:?} {}", a.filename, type_of(&a.filename));
+// 		for r in &mut bif {
+// 			if r.restype.value == 0x03ed {
+// // 				println!("found an item {} in {:?} ", r.resref.name, bif.path);
+// 			}
+// // 				println!("{r:?}");
+// 		}
+// 	}
 
 	create_db(&DB_FILE)?;
 	println!("{}", Blah::SCHEMA.create_statement("hdr"));
