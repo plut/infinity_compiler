@@ -1,7 +1,13 @@
 #![allow(
-	unreachable_code, dead_code,
-	unused_variables, unused_imports, unused_macros, unused_parens,
-	unused_mut,unused_attributes,unused_assignments,
+// 	unreachable_code,
+	dead_code,
+// 	unused_variables,
+	unused_imports,
+// 	unused_macros,
+// 	unused_parens,
+// 	unused_mut,
+// 	unused_attributes,
+// 	unused_assignments,
 )]
 extern crate proc_macro;
 // extern crate proc_macro2;
@@ -116,11 +122,11 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 		quote!{ self.#ident.pack(f)?; }.to_tokens(&mut writef);
 	}
 	let code = quote! {
-		impl resources::Pack for #ident {
-			fn unpack(f: &mut impl io::Read)->io::Result<Self> {
+		impl crate::resources::Pack for #ident {
+			fn unpack(f: &mut impl std::io::Read)->std::io::Result<Self> {
 				#readf; Ok(Self{ #build })
 			}
-			fn pack(self, f: &mut impl io::Write)->io::Result<()> {
+			fn pack(self, f: &mut impl std::io::Write)->std::io::Result<()> {
 				#writef; Ok(())
 			}
 		}
@@ -157,8 +163,11 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 	let mut bind = TS2::new();
 	let mut add_schema = |fieldname: &str, fieldtype: &str, extra: &str| {
 		let ty = proc_macro2::Ident::new(fieldtype, Span::call_site());
-		quote!{ Column { fieldname: #fieldname, fieldtype: <#ty>::SQL_TYPE,
-			extra: #extra}, }.to_tokens(&mut schema);
+		quote!{ crate::resources::Column {
+			fieldname: #fieldname,
+			fieldtype: <#ty as crate::resources::ToBindable>::SQL_TYPE,
+			extra: #extra},
+		}.to_tokens(&mut schema);
 	};
 	for Field { attrs, ident, ty, .. } in flist {
 		let mut current = RowCurrent::default();
@@ -177,10 +186,10 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 			.to_tokens(&mut bind);
 	}
 	let mut keyf = TS2::new();
-	let mut keycol = 0;
+	let keycol = 0;
 	for (fieldname, fieldtype, extra) in fields2 {
 		col+= 1;
-		let ident = proc_macro2::Ident::new(fieldname.as_str(), Span::call_site());
+// 		let ident = proc_macro2::Ident::new(fieldname.as_str(), Span::call_site());
 		let kc = proc_macro2::Literal::isize_unsuffixed(keycol);
 		let ty = proc_macro2::Ident::new(fieldtype.as_str(), Span::call_site());
 		add_schema(fieldname.as_str(), fieldtype.as_str(), extra.as_str());
@@ -188,10 +197,12 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 		quote!{ s.bind((#col, k.#kc.to_bindable()))?; }.to_tokens(&mut bind);
 	}
 	let code = quote! {
-		impl resources::Row for #ident {
+		impl crate::resources::Row for #ident {
 			type Key = (#keyf);
-			const SCHEMA: Schema<'static> = Schema { fields: &[#schema] };
-			fn bind(&self, s: &mut Statement, k: &Self::Key)->sqlite::Result<()> {
+			const SCHEMA: crate::resources::Schema<'static> =
+				crate::resources::Schema { fields: &[#schema] };
+			fn bind(&self, s: &mut sqlite::Statement, k: &Self::Key)->sqlite::Result<()> {
+				use crate::resources::ToBindable;
 				#bind; Ok(())
 			}
 		}
@@ -219,10 +230,10 @@ fn row_attr_column(fields2: &mut Vec<(String,String,String)>, current: &mut RowC
 		_ => (),
 	}
 }
-fn ty_to_sql(s: &str)->&'static str {
-	match s {
-		"i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => "Integer",
-		"String" | "str" => "String",
-		_ => "null"
-	}
-}
+// fn ty_to_sql(s: &str)->&'static str {
+// 	match s {
+// 		"i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => "Integer",
+// 		"String" | "str" => "String",
+// 		_ => "null"
+// 	}
+// }

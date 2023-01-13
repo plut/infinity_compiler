@@ -1,9 +1,10 @@
 #![allow(
 	unused_imports,
-	unused_macros,
-	unused_variables, dead_code,
-	unused_must_use,
-	unused_mut,
+// 	unused_macros,
+	unused_variables,
+	dead_code,
+// 	unused_must_use,
+// 	unused_mut,
 	)]
 
 use std::any::type_name;
@@ -12,6 +13,7 @@ use std::path::Path;
 use std::fs::File;
 use std::io;
 use std::fmt;
+use std::fmt::{Display,Debug,Formatter};
 use std::cmp::min;
 use macros::{Pack, Row};
 extern crate sqlite;
@@ -22,15 +24,14 @@ use std::io;
 use std::io::Read;
 use std::io::Write;
 use std::marker::Sized;
-use std::iter::{IntoIterator,Iterator};
 use sqlite::Statement;
 #[derive(Debug,Clone,Copy)]
-pub enum FieldType { Integer, String, Resref, Strref, Other }
+pub enum FieldType { Integer, Text, Resref, Strref, Other }
 impl FieldType {
 	pub const fn sql(self)->&'static str {
 		match self {
 			FieldType::Integer | FieldType::Strref => "integer",
-			FieldType::String | FieldType::Resref => "text",
+			FieldType::Text | FieldType::Resref => "text",
 			FieldType::Other => "null",
 		}
 	}
@@ -88,7 +89,7 @@ impl<'a> Schema<'a> {
 }
 pub trait Pack: Sized {
 	fn unpack(f: &mut impl Read)->io::Result<Self>;
-	fn pack(self, f: &mut impl io::Write)->io::Result<()> { unimplemented!() }
+	fn pack(self, _f: &mut impl io::Write)->io::Result<()> { unimplemented!() }
 
 	// associated functions:
 	fn read_bytes(f: &mut impl Read, n: usize)->io::Result<Vec<u8>> {
@@ -97,8 +98,8 @@ pub trait Pack: Sized {
 		f.read(&mut buf)?; Ok(buf)
 	}
 	fn unpack_header(f: &mut impl Read, hdr: &str)->io::Result<()> {
-		let buf = Self::read_bytes(f, hdr.len() as usize);
-// 		println!(" found {buf:?}; is equal to hdr? {}", buf == hdr.as_bytes());
+		let buf = Self::read_bytes(f, hdr.len() as usize)?;
+		assert_eq!(&buf[..], hdr.as_bytes());
 		Ok(())
 	}
 	fn vecunpack(mut f: &mut impl Read, n: usize)->io::Result<Vec<Self>> {
@@ -119,18 +120,28 @@ macro_rules! unpack_int {
 }
 unpack_int!{i8,i16,i32,i64,u8,u16,u32,u64}
 pub trait ToBindable {
-	type SQLType: sqlite::BindableWithIndex;
+	type SQLType<'a>: sqlite::BindableWithIndex where Self: 'a;
 	const SQL_TYPE: FieldType;
-	fn to_bindable(&self)->Self::SQLType;
+	fn to_bindable<'a>(&'a self)->Self::SQLType<'a>;
 }
 macro_rules! bind_int {
 	($($T:ty),*) => { $(impl ToBindable for $T {
-		type SQLType = i64;
+		type SQLType<'a> = i64;
 		const SQL_TYPE: FieldType = FieldType::Integer;
-		fn to_bindable(&self)->Self::SQLType { *self as i64 }
+		fn to_bindable<'a>(&'a self)->Self::SQLType<'a> { *self as i64 }
 	})* }
 }
 bind_int!{i8,i16,i32,u8,u16,u32}
+impl ToBindable for crate::gameindex::Strref {
+	type SQLType<'a> = i64;
+	const SQL_TYPE: FieldType = FieldType::Integer;
+	fn to_bindable<'a>(&'a self)->Self::SQLType<'a> { self.value as i64 }
+}
+impl ToBindable for crate::gameindex::Resref {
+	type SQLType<'a> = &'a str;
+	const SQL_TYPE: FieldType = FieldType::Text;
+	fn to_bindable<'a>(&'a self)->Self::SQLType<'a> { std::str::from_utf8(&self.name.bytes).unwrap() }
+}
 
 pub trait Row {
 	type Key;
@@ -141,18 +152,22 @@ pub trait Row {
 // 		where Self: Sized;
 }
 } // mod resources
-mod gametypes {
+mod gameindex {
 extern crate sqlite;
 use macros::{Pack, Row};
 use super::resources;
 use resources::{Pack, Row};
 use sqlite::Statement;
-use std::fmt::Debug;
+use std::fmt::{Display,Debug};
+use std::fs::File;
 use std::io;
-#[derive(Debug,Clone,Copy)] pub struct Resref { pub name: super::StaticString::<8>, }
+use std::io::{Read, Seek, SeekFrom, BufReader};
+use std::path::{Path, PathBuf};
+use super::StaticString;
+#[derive(Debug,Clone,Copy)] pub struct Resref { pub name: StaticString::<8>, }
 impl Pack for Resref {
 	fn unpack(f: &mut impl Read)->io::Result<Self> {
-		let mut name = super::StaticString::<8>::unpack(f)?;
+		let mut name = StaticString::<8>::unpack(f)?;
 		name.bytes.make_ascii_lowercase();
 		Ok(Self { name, })
 	}
@@ -190,9 +205,6 @@ impl BifIndex {
 	pub resources: Vec<KeyRes>,
 }
 
-use std::path::Path;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 fn gameindex_from<'a>(gamedir: &'a str)->io::Result<GameIndex<'a>> {
 	let gameindex = Path::new(&gamedir).join("chitin.key");
 	let mut f = File::open(gameindex)?;
@@ -206,7 +218,6 @@ fn gameindex_from<'a>(gamedir: &'a str)->io::Result<GameIndex<'a>> {
 		let buf = KeyBif::read_bytes(&mut f, namelength as usize - 1)?;
 		bifnames.push(String::from_utf8(buf).unwrap());
 		bifsizes.push(filelength);
-		let l = bifnames.len();
 	};
 	f.seek(SeekFrom::Start(hdr.resoffset as u64))?;
 	let resources = <KeyRes>::vecunpack(&mut f, hdr.nres as usize)?;
@@ -220,10 +231,10 @@ impl<'a> From<&'a str> for GameIndex<'a> {
 	state: usize,
 }
 #[derive(Debug)] pub struct BifView<'a> { // element of GameIndex
-	pub path: std::path::PathBuf,
+	pub path: PathBuf,
 	pub sourcefile: usize,
 	pub resources: &'a Vec<KeyRes>,
-	pub file: Option::<std::io::BufReader<std::fs::File>>,
+	pub file: Option::<BufReader<File>>,
 }
 impl<'a> IntoIterator for &'a GameIndex<'a> {
 	type Item = BifView<'a>;
@@ -241,20 +252,16 @@ impl<'a> Iterator for GameIndexItr<'a> {
 		Some(r)
 	}
 }
-#[derive(Debug)] pub struct BifViewItr<'a> {
-	pub bifview: &'a mut BifView<'a>,
-	pub state: usize,
-}
 pub struct ResHandle<'a> {
 	bif: &'a mut Option<BifFile>,
-	path: &'a std::path::PathBuf,
+	path: &'a PathBuf,
 	location: BifIndex,
 	restype: Restype,
 }
 impl<'a> ResHandle<'a> {
 	pub fn read(&mut self)->io::Result<Vec<u8>> {
-		biffile(&mut self.bif, self.path);
-		let mut biffile = self.bif.as_mut().unwrap();
+		biffile(&mut self.bif, self.path)?;
+		let biffile = self.bif.as_mut().unwrap();
 		let j = self.location.resourceindex();
 		let BifResource{ offset, size, restype, .. } = &biffile.resources[j];
 		assert_eq!(restype, &self.restype);
@@ -264,17 +271,13 @@ impl<'a> ResHandle<'a> {
 }
 
 impl<'a> GameIndex<'a> {
-	// we pass a function with arguments:
-	// cursor: () -> Cursor
-	// resname, restype: resource identifier
-// 	pub fn for_each<F,G>(&self, f: impl Fn(Resref, Restype, F)->())->io::Result<()>
 	pub fn for_each<F>(&self, f: F)->io::Result<()>
 	where F: (Fn(Resref, Restype, ResHandle)->()) {
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
 			let path = Path::new(self.gamedir).join(filename);
 			let mut bif = Option::<BifFile>::default();
-			for (i, res) in self.resources.iter().enumerate() {
-				let mut rread = ResHandle{ bif: &mut bif, path: &path,
+			for res in self.resources.iter() {
+				let rread = ResHandle{ bif: &mut bif, path: &path,
 					location: res.location, restype: res.restype, };
 				if res.location.sourcefile() != sourcefile { continue }
 				f(res.resref, res.restype, rread)
@@ -303,21 +306,22 @@ fn bifresources<'a>(file: impl AsRef<Path>+Debug)->io::Result<Vec<BifResource>> 
 	BifResource::vecunpack(&mut f, hdr.nres as usize)
 }
 struct BifFile {
-	buf: std::io::BufReader<std::fs::File>,
+	buf: BufReader<File>,
 	resources: Vec<BifResource>,
 }
 fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->io::Result<&'a BifFile> {
 	if o.is_none() {
 		let resources = bifresources(path)?;
-		let buf = std::io::BufReader::new(File::open(path)?);
+		let buf = BufReader::new(File::open(path)?);
 		*o = Some(BifFile{buf, resources});
 	}
 	Ok(o.as_ref().unwrap())
 }
-} // mod gametypes
+} // mod gameindex
+mod gametypes;
 
 use resources::{Schema, Row, Pack};
-use gametypes::{Strref, Resref};
+use gameindex::{Strref, Resref};
 
 // #[derive(Debug)]
 #[derive(Clone,Copy)]
@@ -345,8 +349,8 @@ impl<const N: usize> From<&str> for StaticString<N> {
 		Self { bytes: bytes, }
 	}
 }
-impl<const N: usize> std::fmt::Display for StaticString<N> {
-	fn fmt(&self, f:&mut fmt::Formatter) -> fmt::Result {
+impl<const N: usize> Display for StaticString<N> {
+	fn fmt(&self, f:&mut Formatter) -> fmt::Result {
 		use std::fmt::Write;
 		f.write_char('"')?;
 		for c in &self.bytes {
@@ -358,10 +362,8 @@ impl<const N: usize> std::fmt::Display for StaticString<N> {
 		Ok(())
 	}
 }
-impl<const N: usize> std::fmt::Debug for StaticString<N> {
-	fn fmt(&self, f:&mut fmt::Formatter) -> fmt::Result {
-		std::fmt::Display::fmt(self, f)
-	}
+impl<const N: usize> Debug for StaticString<N> {
+	fn fmt(&self, f:&mut fmt::Formatter) -> fmt::Result { Display::fmt(self, f) }
 }
 impl<const N: usize> resources::Pack for StaticString<N> {
 	fn unpack(f: &mut impl io::Read)->io::Result<Self> {
@@ -393,7 +395,7 @@ use resources::{FieldType, Column, ToBindable};
 const DB_FILE: &str = "game.sqlite";
 
 fn create_db(db_file: &str)->io::Result<Connection> {
-	if std::path::Path::new(&db_file).exists() {
+	if Path::new(&db_file).exists() {
 		std::fs::remove_file(&db_file)?;
 	}
 	let db = sqlite::open(&db_file).unwrap();
@@ -401,9 +403,8 @@ fn create_db(db_file: &str)->io::Result<Connection> {
 }
 
 fn main() -> io::Result<()> {
-	let gamepath = Path::new("/home/jerome/jeux/bg/game");
-	let index = gamepath.join("chitin.key");
-	let game = gametypes::GameIndex::from("/home/jerome/jeux/bg/game");
+	let gamedir = "/home/jerome/jeux/bg/game";
+	let game = gameindex::GameIndex::from(gamedir);
 	game.for_each(|rref, rtype, mut handle| {
 		if rtype.value == 0x03ed {
 // 			println!("{rref:?} {rtype:?}");
@@ -411,7 +412,7 @@ fn main() -> io::Result<()> {
 // 			println!("{:?}", std::str::from_utf8(&v[0..8]).unwrap());
 		}
 		
-	});
+	})?;
 
 // 	for mut bif in &game {
 // 		println!("in file {:?} {}", a.filename, type_of(&a.filename));
