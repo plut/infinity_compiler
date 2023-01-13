@@ -87,14 +87,15 @@ impl<'a> Schema<'a> {
 	}
 }
 pub trait Pack: Sized {
+	fn unpack(f: &mut impl Read)->io::Result<Self>;
+	fn pack(self, f: &mut impl io::Write)->io::Result<()> { unimplemented!() }
+
+	// associated functions:
 	fn read_bytes(f: &mut impl Read, n: usize)->io::Result<Vec<u8>> {
 		let mut buf = Vec::<u8>::with_capacity(n);
 		unsafe { buf.set_len(n); }
 		f.read(&mut buf)?; Ok(buf)
 	}
-	fn unpack(f: &mut impl Read)->io::Result<Self>;
-	fn pack(self, f: &mut impl io::Write)->io::Result<()> { unimplemented!() }
-
 	fn unpack_header(f: &mut impl Read, hdr: &str)->io::Result<()> {
 		let buf = Self::read_bytes(f, hdr.len() as usize);
 // 		println!(" found {buf:?}; is equal to hdr? {}", buf == hdr.as_bytes());
@@ -147,14 +148,21 @@ use super::resources;
 use resources::{Pack, Row};
 use sqlite::Statement;
 use std::io;
-#[derive(Debug,Pack)] pub struct Resref { pub name: super::StaticString::<8>, }
+#[derive(Debug)] pub struct Resref { pub name: super::StaticString::<8>, }
+impl Pack for Resref {
+	fn unpack(f: &mut impl Read)->io::Result<Self> {
+		let mut name = super::StaticString::<8>::unpack(f)?;
+		name.bytes.make_ascii_lowercase();
+		Ok(Self { name, })
+	}
+}
 #[derive(Debug,Pack,Clone,Copy)] pub struct Strref { pub value: i32, }
-#[derive(Debug,Pack,Clone,Copy)] pub struct Restype { pub value: u16, }
+#[derive(Debug,Pack,Clone,Copy,PartialEq)] pub struct Restype { pub value: u16, }
 #[derive(Debug,Pack,Clone,Copy)] pub struct BifIndex { pub data: u32, }
 impl BifIndex {
-	fn sourcefile(&self)->u32 { self.data >> 20 }
-	fn resourceindex(&self)->u32 { self.data & 0x3fff }
-	fn tilesetindex(&self)->u32 { (self.data >> 14) & 0x3f }
+	fn sourcefile(&self)->usize { (self.data >> 20) as usize }
+	fn resourceindex(&self)->usize { (self.data & 0x3fff) as usize }
+	fn tilesetindex(&self)->usize { ((self.data >> 14) & 0x3f) as usize }
 }
 #[derive(Debug,Pack)] struct KeyHdr {
 	#[header("KEY V1  ")]
@@ -170,8 +178,8 @@ impl BifIndex {
 	location: u16,
 }
 #[derive(Debug,Pack)] pub struct KeyRes {
-	name: Resref,
-	rtype: Restype,
+	resref: Resref,
+	restype: Restype,
 	location: BifIndex,
 }
 #[derive(Debug)] pub struct GameIndex<'a> {
@@ -189,7 +197,7 @@ fn gameindex_from<'a>(gamedir: &'a str)->io::Result<GameIndex<'a>> {
 	let mut f = File::open(gameindex)?;
 	let hdr = KeyHdr::unpack(&mut f)?;
 	println!("{hdr:?}");
-	let bifentries = <KeyBif>::vecunpack(&mut f, hdr.nbif as usize)?;
+	let bifentries = KeyBif::vecunpack(&mut f, hdr.nbif as usize)?;
 	let mut bifnames = Vec::<String>::new();
 	let mut bifsizes = Vec::<u32>::new();
 	for KeyBif{offset, namelength, filelength, ..} in bifentries {
@@ -197,6 +205,7 @@ fn gameindex_from<'a>(gamedir: &'a str)->io::Result<GameIndex<'a>> {
 		let buf = KeyBif::read_bytes(&mut f, namelength as usize - 1)?;
 		bifnames.push(String::from_utf8(buf).unwrap());
 		bifsizes.push(filelength);
+		let l = bifnames.len();
 	};
 	f.seek(SeekFrom::Start(hdr.resoffset as u64))?;
 	let resources = <KeyRes>::vecunpack(&mut f, hdr.nres as usize)?;
@@ -210,9 +219,10 @@ impl<'a> From<&'a str> for GameIndex<'a> {
 	state: usize,
 }
 #[derive(Debug)] pub struct BifView<'a> { // element of GameIndex
-	pub filename: &'a str,
+	pub path: std::path::PathBuf,
 	pub sourcefile: usize,
 	pub resources: &'a Vec<KeyRes>,
+	pub file: Option<std::io::BufReader<std::fs::File>>,
 }
 impl<'a> IntoIterator for &'a GameIndex<'a> {
 	type Item = BifView<'a>;
@@ -224,36 +234,80 @@ impl<'a> Iterator for GameIndexItr<'a> {
 	fn next(&mut self)->Option<Self::Item> {
 		if self.state >= self.index.bifnames.len() { return None }
 		let filename = &self.index.bifnames[self.state];
+		let r = BifView{ path: Path::new(self.index.gamedir).join(filename),
+			sourcefile: self.state, resources: &self.index.resources, file: None };
 		self.state+= 1;
-		Some(BifView{ filename, sourcefile: self.state, resources: &self.index.resources })
+		Some(r)
 	}
 }
 #[derive(Debug)] pub struct BifViewItr<'a> {
 	pub bifview: &'a BifView<'a>,
 	pub state: usize,
 }
-#[derive(Debug)] pub struct BifResource<'a> {
-	pub rtype: Restype,
-	pub name: &'a Resref,
-	pub index: u32,
+impl<'a> BifView<'a> {
+	fn open(&mut self)->&mut impl Read {
+		if self.file.is_none() {
+			self.file = Some(std::io::BufReader::new(File::open(&self.path).unwrap()));
+		}
+		self.file.as_mut().unwrap()
+	}
+}
+#[derive(Debug)] pub struct ResItem<'a> {
+	pub restype: Restype,
+	pub resref: &'a Resref,
+	pub index: usize,
+	pub bif: &'a BifView<'a>,
 }
 impl<'a> IntoIterator for &'a BifView<'a> {
-	type Item = BifResource<'a>;
+	type Item = ResItem<'a>;
 	type IntoIter = BifViewItr<'a>;
 	fn into_iter(self)->Self::IntoIter { BifViewItr{ bifview: self, state: 0, } }
 }
+#[derive(Debug,Pack)] pub struct BifHdr {
+	#[header("BIFFV1  ")]
+	nres: u32,
+	ntilesets: u32,
+	offset: u32,
+}
+#[derive(Debug,Pack)] pub struct BifResource {
+	locator: BifIndex,
+	offset: u32,
+	size: u32,
+	restype: Restype,
+	_unknown: u16,
+}
+fn biffile_from<'a>(file: impl AsRef<Path>+std::fmt::Debug)->io::Result<Vec<BifResource>> {
+	let mut f = File::open(file)?;
+	let hdr = BifHdr::unpack(&mut f)?;
+// 	println!("bif hdr for {file:?}: {hdr:?}");
+	f.seek(SeekFrom::Start(hdr.offset as u64))?;
+	BifResource::vecunpack(&mut f, hdr.nres as usize)
+}
 impl<'a> Iterator for BifViewItr<'a> {
-	type Item = BifResource<'a>;
+	type Item = ResItem<'a>;
 	fn next(&mut self)->Option<Self::Item> {
 		loop {
+			// iterate (self.state) over the *global* set of resources
+			// (self.bifview.resources):
 			if self.state >= self.bifview.resources.len() { return None }
 			let r = &self.bifview.resources[self.state];
 			self.state+= 1;
-			if r.location.sourcefile() == self.bifview.sourcefile as u32 {
-				return Some(BifResource { rtype: r.rtype, name: &r.name,
-					index: r.location.resourceindex()})
-			}
+			// filter out all resources not belonging to current file:
+			if r.location.sourcefile() != self.bifview.sourcefile { continue }
+
+// 			if self.resources.is_none() {
+// 				println!("\x1b[31;1mOpening file {}\x1b[m", self.bifview.filename.to_str().unwrap());
+// 				self.resources = Some(biffile_from(&self.bifview.filename).unwrap());
+// 				println!("this file has {} resources", self.resources.as_ref().unwrap().len());
+// 			}
+			let index = r.location.resourceindex();
+			return Some(ResItem { restype: r.restype, resref: &r.resref, index,
+				bif: &self.bifview })
 		}
+	}
+}
+impl<'a> ResItem<'a> {
+	fn to_cursor(&self) {
 	}
 }
 } // mod gametypes
@@ -265,14 +319,17 @@ use gametypes::{Strref, Resref};
 pub struct StaticString<const N: usize>{ bytes: [u8; N], }
 impl<const N: usize> PartialEq<&str> for StaticString<N> {
 	fn eq(&self, other: &&str) -> bool {
-		for (i, c) in other.chars().enumerate() {
+		for (i, c) in other.bytes().enumerate() {
 			if i >= N { return false }
 			if !c.is_ascii() { return false }
-			if self.bytes[i] != (c as u8) { return false }
-			if c == '\0' { return true }
+			if self.bytes[i] != c { return false }
+			if c == 0u8 { return true }
 		}
 		true
 	}
+}
+impl<const N: usize> PartialEq<StaticString<N>> for StaticString<N> {
+	fn eq(&self, other: &StaticString<N>)->bool { self.bytes == other.bytes }
 }
 impl<const N: usize> From<&str> for StaticString<N> {
 // 	let s = StaticString::<8>::from("ABC");
@@ -341,14 +398,14 @@ fn create_db(db_file: &str)->io::Result<Connection> {
 fn main() -> io::Result<()> {
 	let gamepath = Path::new("/home/jerome/jeux/bg/game");
 	let index = gamepath.join("chitin.key");
-	let g = gametypes::GameIndex::from("/home/jerome/jeux/bg/game");
-	println!("g.bifnames.len() = {}", g.bifnames.len());
-	for a in &g {
-		println!("in file {}", a.filename);
-		if a.filename == "data/Tutorial.Bif" {
-			for r in &a {
-				println!("{r:?}");
+	let game = gametypes::GameIndex::from("/home/jerome/jeux/bg/game");
+	for bif in &game {
+// 		println!("in file {:?} {}", a.filename, type_of(&a.filename));
+		for r in &bif {
+			if r.restype.value == 0x03ed {
+				println!("found an item {} in {:?} ", r.resref.name, bif.path);
 			}
+// 				println!("{r:?}");
 		}
 	}
 
