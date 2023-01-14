@@ -12,6 +12,7 @@ fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
 use std::path::Path;
 use std::fs::File;
 use std::io;
+use std::io::{Cursor};
 use std::fmt;
 use std::fmt::{Display,Debug,Formatter};
 use std::cmp::min;
@@ -169,13 +170,20 @@ use macros::{Pack, Row};
 use super::resources;
 use resources::{Pack, Row};
 use sqlite::Statement;
-use std::fmt::{Display,Debug};
+use std::fmt;
+use std::fmt::{Display,Debug,Formatter};
 use std::fs::File;
 use std::io;
-use std::io::{Read, Seek, SeekFrom, BufReader};
+use std::io::{Read, Seek, SeekFrom, BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use super::StaticString;
-#[derive(Debug,Clone,Copy)] pub struct Resref { pub name: StaticString::<8>, }
+#[derive(Clone,Copy)] pub struct Resref { pub name: StaticString::<8>, }
+impl Debug for Resref {
+	fn fmt(&self, f:&mut Formatter)->fmt::Result { Debug::fmt(&self.name, f) }
+}
+impl Display for Resref {
+	fn fmt(&self, f:&mut Formatter)->fmt::Result {Display::fmt(&self.name, f)}
+}
 impl Pack for Resref {
 	fn unpack(f: &mut impl Read)->io::Result<Self> {
 		let mut name = StaticString::<8>::unpack(f)?;
@@ -184,7 +192,7 @@ impl Pack for Resref {
 	}
 }
 #[derive(Debug,Pack,Clone,Copy)] pub struct Strref { pub value: i32, }
-#[derive(Debug,Pack,Clone,Copy,PartialEq)] pub struct Restype { pub value: u16, }
+#[derive(Debug,Pack,Clone,Copy,PartialEq,Eq)] pub struct Restype { pub value: u16, }
 #[derive(Debug,Pack,Clone,Copy)] pub struct BifIndex { pub data: u32, }
 impl BifIndex {
 	fn sourcefile(&self)->usize { (self.data >> 20) as usize }
@@ -270,14 +278,14 @@ pub struct ResHandle<'a> {
 	restype: Restype,
 }
 impl<'a> ResHandle<'a> {
-	pub fn read(&mut self)->io::Result<Vec<u8>> {
-		biffile(&mut self.bif, self.path)?;
+	pub fn open(&mut self)->io::Cursor<Vec<u8>> {
+		biffile(&mut self.bif, self.path).unwrap();
 		let biffile = self.bif.as_mut().unwrap();
 		let j = self.location.resourceindex();
 		let BifResource{ offset, size, restype, .. } = &biffile.resources[j];
 		assert_eq!(restype, &self.restype);
-		biffile.buf.seek(SeekFrom::Start(*offset as u64))?;
-		BifHdr::read_bytes(&mut biffile.buf, *size as usize)
+		biffile.buf.seek(SeekFrom::Start(*offset as u64)).unwrap();
+		Cursor::new(BifHdr::read_bytes(&mut biffile.buf, *size as usize).unwrap())
 	}
 }
 
@@ -332,7 +340,8 @@ fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->
 mod gametypes;
 
 use resources::{Schema, Row, Pack};
-use gameindex::{Strref, Resref};
+use resources::{FieldType, Column, ToBindable};
+use gameindex::{GameIndex, Strref, Resref, ResHandle};
 use gametypes::{Item};
 
 // #[derive(Debug)]
@@ -402,7 +411,6 @@ impl<const N: usize> Default for StaticString<N> {
 // 	bifoffset: u32,
 // 	resoffset: u32,
 // }
-use resources::{FieldType, Column, ToBindable};
 
 const DB_FILE: &str = "game.sqlite";
 
@@ -480,30 +488,35 @@ fn create_db(db_file: &str)->Connection {
 	create_resource(&db, "items", Item::SCHEMA, "itemref", "items");
 	db
 }
+fn populate_item(db: &Connection, itemref: &Resref, cursor: &mut Cursor<Vec<u8>>) {
+	let mut item = Item::unpack(cursor);
+	println!("{item:?} {itemref:?}");
+}
+fn populate(db: &Connection, game: &GameIndex) {
+	game.for_each(|resref, restype, mut handle| {
+		match restype {
+		constants::RESTYPE_ITM => populate_item(db, &resref, &mut handle.open()),
+		_ => {
+		},
+		};
+	}).unwrap();
+}
+mod constants;
 
 fn main() -> io::Result<()> {
 	let gamedir = "/home/jerome/jeux/bg/game";
-	let game = gameindex::GameIndex::from(gamedir);
-	game.for_each(|rref, rtype, mut handle| {
-		if rtype.value == 0x03ed {
-// 			println!("{rref:?} {rtype:?}");
-			let v = handle.read().unwrap();
-// 			println!("{:?}", std::str::from_utf8(&v[0..8]).unwrap());
-		}
-		
-	})?;
-
-// 	for mut bif in &game {
-// 		println!("in file {:?} {}", a.filename, type_of(&a.filename));
-// 		for r in &mut bif {
-// 			if r.restype.value == 0x03ed {
-// // 				println!("found an item {} in {:?} ", r.resref.name, bif.path);
-// 			}
-// // 				println!("{r:?}");
+	let game = GameIndex::from(gamedir);
+	let db = create_db(&DB_FILE);
+	populate(&db, &game);
+// 	game.for_each(|rref, rtype, mut handle| {
+// 		if rtype.value == 0x03ed {
+// // 			println!("{rref:?} {rtype:?}");
+// 			let v = handle.read();
+// // 			println!("{:?}", std::str::from_utf8(&v[0..8]).unwrap());
 // 		}
-// 	}
+// 		
+// 	})?;
 
-	create_db(&DB_FILE);
 // 	println!("{}", Item::SCHEMA.create_query("res_items", ""));
 // 	println!("{}", Item::SCHEMA.insert_query("res_items"));
 // 	println!("{}", Item::SCHEMA.select_query("res_items"));
