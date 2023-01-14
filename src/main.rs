@@ -49,23 +49,34 @@ pub struct Schema<'a> {
 }
 
 impl<'a> Schema<'a> {
-	pub fn write_columns(&self, s: &mut String) {
+	pub fn primary_key(&'a self)->Option<&'a str> {
+		for Column { fieldname, extra, .. } in self.fields.iter() {
+			if extra == &"primary key" { return Some(&fieldname) }
+		}
+		None
+	}
+	pub fn write_columns_pre(&self, s: &mut String, prefix: &str) {
 		let mut isfirst = true;
+		use std::fmt::Write;
 		for Column { fieldname, .. } in self.fields.iter() {
 			if isfirst { isfirst = false; } else { s.push_str(","); }
-			s.push_str("\n \""); s.push_str(fieldname); s.push_str("\" ");
+			write!(s, r#" {prefix}"{fieldname}" "#).unwrap();
+// 			s.push_str("\n ");
+// 			s.
+// 			\""); s.push_str(fieldname); s.push_str("\" ");
 		}
 	}
-	pub fn create_query(&self, name: &str, more: &[Column])->String {
+	pub fn write_columns(&self, s: &mut String) { self.write_columns_pre(s, "") }
+	pub fn create_query(&self, name: &str, more: &str)->String {
 		use std::fmt::Write;
 		let mut s = String::from(format!("create table \"{name}\" ("));
 		let mut isfirst = true;
-		for Column { fieldname, fieldtype, extra } in self.fields.iter().chain(more.iter()) {
+		for Column { fieldname, fieldtype, extra } in self.fields.iter() {
 			if isfirst { isfirst = false; }
 			else { s.push_str(","); }// XXX use format_args! instead
 			write!(&mut s, "\n \"{fieldname}\" {} {extra}", fieldtype.sql()).unwrap();
 		}
-		s.push_str(")");
+		write!(&mut s, "{more})").unwrap();
 		s
 	}
 	pub fn insert_query(&self, name: &str)->String {
@@ -395,31 +406,79 @@ use resources::{FieldType, Column, ToBindable};
 
 const DB_FILE: &str = "game.sqlite";
 
-fn create_resource(db: &Connection, name: &str, schema: Schema)->sqlite::Result<()> {
+fn create_resource(db: &Connection, name: &str, schema: Schema, dirtykey: &str, dirtyname: &str) {
 	use std::fmt::Write;
-	db.execute(schema.create_query(format!("res_{name}").as_str(), &[]))?;
+	db.execute(schema.create_query(format!("res_{name}").as_str(), "")).unwrap();
 	db.execute(schema.create_query(format!("add_{name}").as_str(),
-		&[Column{fieldname: "source",  fieldtype: FieldType::Text, extra: ""}]))?;
-	db.execute(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str())?;
+		r#", "source" text"#)).unwrap();
+	db.execute(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str()).unwrap();
 	let mut cols = String::new(); schema.write_columns(&mut cols);
+	let key = schema.primary_key().unwrap();
+	{ // create main view
 	let mut view = String::from(format!(r#"create view "{name}" as
 with "u" as (select {cols} from "res_{name}" union select {cols} from "add_{name}") select "#));
-	let key = "itemref";
-	for (i, Column { fieldname, fieldtype,.. }) in schema.fields.iter().enumerate() {
+	for (i, Column {fieldname, fieldtype,..}) in schema.fields.iter().enumerate(){
 		if i > 0 { write!(&mut view, ",\n").unwrap(); }
-		write!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{key}" and "field"='{fieldname}' order by rowid desc limit 1), "{fieldname}") as "{fieldname}" "#).unwrap();
+		if *fieldname == key {
+			write!(&mut view, r#""{fieldname}""#).unwrap();
+		} else {
+			write!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{key}" and "field"='{fieldname}' order by rowid desc limit 1), "{fieldname}") as "{fieldname}" "#).unwrap();
+		}
 	}
-	write!(&mut view, r#"from "u""#).unwrap();
-	println!("{view}");
-	Ok(())
+	write!(&mut view, r#" from "u""#).unwrap();
+	db.execute(view).unwrap();
+	}
+	let dirtytable = String::from(format!("dirty_{dirtyname}"));
+	db.execute(String::from(format!(r#"create table if not exists "{dirtytable}" ("name" text primary key)"#))).unwrap();
+	for (i, Column {fieldname, ..}) in schema.fields.iter().enumerate() {
+		if *fieldname == key { continue }
+		let trig = String::from(format!(
+r#"create trigger "update_{name}_{fieldname}"
+instead of update on "{name}" when new."{fieldname}" is not null
+	and new."{fieldname}" <> old."{fieldname}"
+begin
+	insert or ignore into "{dirtytable}" values (new."{dirtykey}");
+	insert into "edit_{name}" ("source", "resource", "field", "value") values
+		((select "component" from "current"), new."{key}", '{fieldname}',
+		new."{fieldname}");
+end"#));
+		db.execute(trig).unwrap();
+	}
+	let mut newcols = String::new();
+	schema.write_columns_pre(&mut newcols, "new.");
+	println!("newcols={newcols}");
+	let trig = String::from(format!(
+r#"create trigger "insert_{name}"
+instead of insert on "{name}"
+begin
+	insert into "add_{name}" ({cols}) values ({newcols});
+	insert or ignore into "{dirtytable}" values (new."{dirtykey}");
+end"#));
+	db.execute(trig).unwrap();
+	let trig = String::from(format!(
+r#"create trigger "delete_{name}"
+instead of delete on "{name}"
+begin
+	insert or ignore into "{dirtytable}" values (old."{dirtykey}");
+	delete from "add_{name}" where "{key}" = old."{key}";
+end"#));
+	db.execute(trig).unwrap();
+	let trig = String::from(format!(
+r#"create trigger "unedit_{name}"
+after delete on "edit_{name}"
+begin
+	insert or ignore into "{dirtytable}" values (old."resource");
+end"#));
+	db.execute(trig).unwrap();
 }
-fn create_db(db_file: &str)->io::Result<Connection> {
+fn create_db(db_file: &str)->Connection {
 	if Path::new(&db_file).exists() {
-		std::fs::remove_file(&db_file)?;
+		std::fs::remove_file(&db_file).unwrap();
 	}
 	let db = sqlite::open(&db_file).unwrap();
-	create_resource(&db, "items", Item::SCHEMA).unwrap();
-	Ok(db)
+	db.execute(r#"create table "current" ("component" text)"#).unwrap();
+	create_resource(&db, "items", Item::SCHEMA, "itemref", "items");
+	db
 }
 
 fn main() -> io::Result<()> {
@@ -444,10 +503,10 @@ fn main() -> io::Result<()> {
 // 		}
 // 	}
 
-	create_db(&DB_FILE)?;
-	println!("{}", Item::SCHEMA.create_query("res_items", &[]));
-	println!("{}", Item::SCHEMA.insert_query("res_items"));
-	println!("{}", Item::SCHEMA.select_query("res_items"));
+	create_db(&DB_FILE);
+// 	println!("{}", Item::SCHEMA.create_query("res_items", ""));
+// 	println!("{}", Item::SCHEMA.insert_query("res_items"));
+// 	println!("{}", Item::SCHEMA.select_query("res_items"));
 
 	Ok(())
 }

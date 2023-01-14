@@ -23,12 +23,9 @@ use syn::Data::Struct;
 use syn::DataStruct;
 use syn::DeriveInput;
 use syn::Expr;
-use syn::ExprLit;
-use syn::ExprParen;
-use syn::ExprPath;
-use syn::ExprTuple;
+use syn::{ExprLit, ExprParen, ExprPath, ExprTuple};
 use syn::Field;
-use syn::Fields::Named;
+use syn::Fields::{Named, Unnamed};
 use syn::Path;
 use syn::Token;
 use syn::parse::Parser;
@@ -55,6 +52,7 @@ fn read_struct_fields(d: syn::DeriveInput) -> (syn::Ident, Punctuated<Field, Com
 	let DeriveInput{ ident, data, .. } = d; // parse_macro_input!(tokens);
 	let flist = match data {
 		Struct(DataStruct{ fields: Named(f), ..}) => f.named,
+// 		Struct(DataStruct{ fields: Unnamed(f), .. }) => f.unnamed,
 		_ => panic!("only struct with named fields!") };
 	(ident, flist)
 }
