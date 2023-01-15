@@ -180,21 +180,27 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 		add_schema(fieldname.as_str(), fieldtype.as_str(), current.extra.as_str());
 		quote!{ self.#ident, }.to_tokens(&mut params);
 	}
-	let mut keyf = TS2::new();
-	let keycol = 0;
+	let mut key_in = TS2::new();
+	let mut keycol_in = 0;
 	for (fieldname, fieldtype, extra) in fields2 {
-		let kc = proc_macro2::Literal::isize_unsuffixed(keycol);
-		let ty = proc_macro2::Ident::new(fieldtype.as_str(), Span::call_site());
-		add_schema(fieldname.as_str(), fieldtype.as_str(), extra.as_str());
-		quote!{ #ty, }.to_tokens(&mut keyf);
-		quote!{ k.#kc, }.to_tokens(&mut params);
+		if fieldtype == "auto" {
+			add_schema(fieldname.as_str(), "i32", extra.as_str());
+			quote!{ crate::rusqlite::types::Null, }.to_tokens(&mut params);
+		} else {
+			add_schema(fieldname.as_str(), fieldtype.as_str(), extra.as_str());
+			let kc = proc_macro2::Literal::isize_unsuffixed(keycol_in);
+			let ty = proc_macro2::Ident::new(fieldtype.as_str(), Span::call_site());
+			quote!{ #ty, }.to_tokens(&mut key_in);
+			quote!{ k.#kc, }.to_tokens(&mut params);
+			keycol_in+= 1;
+		}
 	}
 	let code = quote! {
 		impl crate::database::Row for #ident {
-			type Key = (#keyf);
+			type KeyIn = (#key_in);
 			const SCHEMA: crate::database::Schema<'static> =
 				crate::database::Schema { fields: &[#schema] };
-				fn execute(&self, s: &mut crate::rusqlite::Statement, k: &Self::Key) {
+				fn execute(&self, s: &mut crate::rusqlite::Statement, k: &Self::KeyIn) {
 					s.execute(rusqlite::params![#params]).unwrap();
 				}
 		}

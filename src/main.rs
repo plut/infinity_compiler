@@ -376,9 +376,10 @@ impl rusqlite::ToSql for crate::gameindex::Resref {
 }
 
 pub trait Row {
-	type Key;
+	type KeyIn;
+	// type KeyOut;
 	const SCHEMA: Schema<'static>;
-	fn execute(&self, s: &mut Statement, key: &Self::Key);
+	fn execute(&self, s: &mut Statement, key: &Self::KeyIn);
 // 	fn read(s: &mut Statement<'_>)->Result<(Self, Self::Key)>
 // 		where Self: Sized;
 }
@@ -488,11 +489,13 @@ use std::io::{Seek, SeekFrom};
 use std::fmt::{Debug};
 use macros::{Pack, Row};
 use rusqlite::{Connection};
+use rusqlite::types::Null;
 
 
 resources!{
 	items: Item, "itemref", "items";
-	item_abilities: Item, "itemref", "items";
+	item_abilities: ItemAbility, "itemref", "items";
+	item_effects: ItemEffect, "itemref", "items";
 }
 
 fn create_db(db_file: &str)->Connection {
@@ -542,7 +545,7 @@ const DB_FILE: &str = "game.sqlite";
 fn main() -> io::Result<()> {
 	let gamedir = "/home/jerome/jeux/bg/game";
 	let game = GameIndex::from(gamedir);
-	println!("{RESOURCES:?}"); return Ok(());
+// 	println!("{:?}", RESOURCES.item_abilities); return Ok(());
 	let db = create_db(&DB_FILE);
 // 	let s = std::str::from_utf8(&[0]).unwrap();
 // 	println!("{s:?} {:?}", s.bytes());

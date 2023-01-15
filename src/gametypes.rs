@@ -1,6 +1,7 @@
 use crate::{Resref,Strref,Pack,Row};
 #[derive(Debug,Pack,Row)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
+#[column(abref, i32, r#"references "item_abilities"("abref")"#)]
 	opcode: u16, //opcode,
 	target: u8, // EffectTarget,
 	power: u8,
@@ -20,6 +21,7 @@ use crate::{Resref,Strref,Pack,Row};
 }
 #[derive(Debug,Pack,Row)] pub struct ItemAbility {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
+#[column(abref, auto, "primary key")]
 	attack_type: u8, // AttackType,
 	must_identify: u8,
 	location: u8,
