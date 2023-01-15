@@ -131,7 +131,7 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 	};
 // 	println!("{}", code);
 	TokenStream::from(code)
-}
+} // Pack
 
 fn pack_attr_header(readf: &mut TS2, writef: &mut TS2, args: Vec<AttrArg>) {
 	match &args[..] {
@@ -158,12 +158,12 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 	let mut fields2 = Vec::<(String, String, String)>::new();
 	let mut col: usize = 0;
 	let mut schema = TS2::new();
-	let mut bind = TS2::new();
+	let mut params = TS2::new();
 	let mut add_schema = |fieldname: &str, fieldtype: &str, extra: &str| {
 		let ty = proc_macro2::Ident::new(fieldtype, Span::call_site());
 		quote!{ crate::resources::Column {
 			fieldname: #fieldname,
-			fieldtype: <#ty as crate::resources::ToBindable>::SQL_TYPE,
+			fieldtype: <#ty as crate::resources::SqlType>::SQL_TYPE,
 			extra: #extra},
 		}.to_tokens(&mut schema);
 	};
@@ -180,34 +180,35 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 		let fieldname = ident.as_ref().unwrap().to_string();
 		let fieldtype = toks_to_string(&ty);
 		add_schema(fieldname.as_str(), fieldtype.as_str(), current.extra.as_str());
-		quote!{ s.bind((#col, self.#ident.to_bindable()))?; }
-			.to_tokens(&mut bind);
+		quote!{ self.#ident, }.to_tokens(&mut params);
 	}
 	let mut keyf = TS2::new();
 	let keycol = 0;
 	for (fieldname, fieldtype, extra) in fields2 {
 		col+= 1;
-// 		let ident = proc_macro2::Ident::new(fieldname.as_str(), Span::call_site());
 		let kc = proc_macro2::Literal::isize_unsuffixed(keycol);
 		let ty = proc_macro2::Ident::new(fieldtype.as_str(), Span::call_site());
 		add_schema(fieldname.as_str(), fieldtype.as_str(), extra.as_str());
 		quote!{ #ty, }.to_tokens(&mut keyf);
-		quote!{ s.bind((#col, k.#kc.to_bindable()))?; }.to_tokens(&mut bind);
+		quote!{ k.#kc, }.to_tokens(&mut params);
 	}
 	let code = quote! {
 		impl crate::resources::Row for #ident {
 			type Key = (#keyf);
 			const SCHEMA: crate::resources::Schema<'static> =
 				crate::resources::Schema { fields: &[#schema] };
-			fn bind(&self, s: &mut sqlite::Statement, k: &Self::Key)->sqlite::Result<()> {
-				use crate::resources::ToBindable;
-				#bind; Ok(())
-			}
+				fn execute(&self, s: &mut crate::rusqlite::Statement, k: &Self::Key) {
+					s.execute(rusqlite::params![#params]).unwrap();
+				}
+// 			fn bind(&self, s: &mut sqlite::Statement, k: &Self::Key)->sqlite::Result<()> {
+// 				use crate::resources::ToBindable;
+// 				#bind; Ok(())
+// 			}
 		}
 	};
 // 	println!("\x1b[36m{}\x1b[m", code);
 	TokenStream::from(code)
-}
+} // Row
 fn row_attr_column(fields2: &mut Vec<(String,String,String)>, current: &mut RowCurrent, args: &[AttrArg]) {
 	use AttrArg::{Ident, Str};
 	println!("got column with {} fields: {args:?}", args.len());

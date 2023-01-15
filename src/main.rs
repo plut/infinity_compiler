@@ -6,30 +6,36 @@
 // 	unused_must_use,
 // 	unused_mut,
 	)]
+extern crate rusqlite;
 
 use std::any::type_name;
 fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
 use std::path::Path;
 use std::fs::File;
 use std::io;
-use std::io::{Cursor};
+use std::io::{Cursor, Seek, SeekFrom};
 use std::fmt;
 use std::fmt::{Display,Debug,Formatter};
 use std::cmp::min;
 use macros::{Pack, Row};
-extern crate sqlite;
-use sqlite::{Connection,Statement};
+use rusqlite::{Connection,Statement};
+// macro_rules! exec {
+// 	($db:expr, $s:literal$(,$arg:expr)*) => {
+// 		$db.execute(String::from(format!($s $(,$arg)*))).unwrap()
+// 	};
+// }
 
 mod resources {
+extern crate num;
 use std::io;
 use std::io::Read;
 use std::io::Write;
 use std::marker::Sized;
-use sqlite::Statement;
+use rusqlite::{Connection, Statement};
 #[derive(Debug,Clone,Copy)]
 pub enum FieldType { Integer, Text, Resref, Strref, Other }
 impl FieldType {
-	pub const fn sql(self)->&'static str {
+	pub const fn affinity(self)->&'static str {
 		match self {
 			FieldType::Integer | FieldType::Strref => "integer",
 			FieldType::Text | FieldType::Resref => "text",
@@ -62,9 +68,6 @@ impl<'a> Schema<'a> {
 		for Column { fieldname, .. } in self.fields.iter() {
 			if isfirst { isfirst = false; } else { s.push_str(","); }
 			write!(s, r#" {prefix}"{fieldname}" "#).unwrap();
-// 			s.push_str("\n ");
-// 			s.
-// 			\""); s.push_str(fieldname); s.push_str("\" ");
 		}
 	}
 	pub fn write_columns(&self, s: &mut String) { self.write_columns_pre(s, "") }
@@ -74,8 +77,8 @@ impl<'a> Schema<'a> {
 		let mut isfirst = true;
 		for Column { fieldname, fieldtype, extra } in self.fields.iter() {
 			if isfirst { isfirst = false; }
-			else { s.push_str(","); }// XXX use format_args! instead
-			write!(&mut s, "\n \"{fieldname}\" {} {extra}", fieldtype.sql()).unwrap();
+			else { s.push_str(","); }
+			write!(&mut s, "\n \"{fieldname}\" {} {extra}", fieldtype.affinity()).unwrap();
 		}
 		write!(&mut s, "{more})").unwrap();
 		s
@@ -97,6 +100,9 @@ impl<'a> Schema<'a> {
 		self.write_columns(&mut s);
 		write!(&mut s, "\nfrom \"{name}\" ").unwrap();
 		s
+	}
+	pub fn insert<'b>(&'b self, db: &'b Connection, name: &'b str)->Statement {
+		db.prepare(self.insert_query(name).as_ref()).unwrap()
 	}
 }
 pub trait Pack: Sized {
@@ -131,45 +137,37 @@ macro_rules! unpack_int {
 	})* }
 }
 unpack_int!{i8,i16,i32,i64,u8,u16,u32,u64}
-pub trait ToBindable {
-	type SQLType<'a>: sqlite::BindableWithIndex where Self: 'a;
-	const SQL_TYPE: FieldType;
-	fn to_bindable<'a>(&'a self)->Self::SQLType<'a>;
-}
-macro_rules! bind_int {
-	($($T:ty),*) => { $(impl ToBindable for $T {
-		type SQLType<'a> = i64;
-		const SQL_TYPE: FieldType = FieldType::Integer;
-		fn to_bindable<'a>(&'a self)->Self::SQLType<'a> { *self as i64 }
-	})* }
-}
-bind_int!{i8,i16,i32,u8,u16,u32}
-impl ToBindable for crate::gameindex::Strref {
-	type SQLType<'a> = i64;
+pub trait SqlType { const SQL_TYPE: FieldType; }
+impl<T> SqlType for T where T: num::Integer {
 	const SQL_TYPE: FieldType = FieldType::Integer;
-	fn to_bindable<'a>(&'a self)->Self::SQLType<'a> { self.value as i64 }
 }
-impl ToBindable for crate::gameindex::Resref {
-	type SQLType<'a> = &'a str;
+impl SqlType for crate::gameindex::Strref {
+	const SQL_TYPE: FieldType = FieldType::Integer;
+}
+impl rusqlite::ToSql for crate::gameindex::Strref {
+	fn to_sql<'a>(&'a self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.value.to_sql() }
+}
+impl SqlType for crate::gameindex::Resref {
 	const SQL_TYPE: FieldType = FieldType::Text;
-	fn to_bindable<'a>(&'a self)->Self::SQLType<'a> { std::str::from_utf8(&self.name.bytes).unwrap() }
+}
+impl rusqlite::ToSql for crate::gameindex::Resref {
+	fn to_sql<'a>(&'a self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.name.as_ref().to_sql() }
 }
 
 pub trait Row {
 	type Key;
 	const SCHEMA: Schema<'static>;
-// 	fn schema()->Schema<'static>;
-	fn bind(&self, s: &mut Statement, k: &Self::Key) -> sqlite::Result<()>;
+	fn execute(&self, s: &mut Statement, key: &Self::Key);
 // 	fn read(s: &mut Statement<'_>)->Result<(Self, Self::Key)>
 // 		where Self: Sized;
 }
 } // mod resources
 mod gameindex {
-extern crate sqlite;
+extern crate rusqlite;
 use macros::{Pack, Row};
 use super::resources;
 use resources::{Pack, Row};
-use sqlite::Statement;
+use rusqlite::{Connection, Statement};
 use std::fmt;
 use std::fmt::{Display,Debug,Formatter};
 use std::fs::File;
@@ -290,8 +288,8 @@ impl<'a> ResHandle<'a> {
 }
 
 impl<'a> GameIndex<'a> {
-	pub fn for_each<F>(&self, f: F)->io::Result<()>
-	where F: (Fn(Resref, Restype, ResHandle)->()) {
+	pub fn for_each<F>(&self, mut f: F)->io::Result<()>
+	where F: (FnMut(Resref, Restype, ResHandle)->()) {
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
 			let path = Path::new(self.gamedir).join(filename);
 			let mut bif = Option::<BifFile>::default();
@@ -339,10 +337,9 @@ fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->
 } // mod gameindex
 mod gametypes;
 
-use resources::{Schema, Row, Pack};
-use resources::{FieldType, Column, ToBindable};
+use resources::{Schema, Row, Pack, FieldType, Column};
 use gameindex::{GameIndex, Strref, Resref, ResHandle};
-use gametypes::{Item};
+use gametypes::*;
 
 // #[derive(Debug)]
 #[derive(Clone,Copy)]
@@ -368,6 +365,14 @@ impl<const N: usize> From<&str> for StaticString<N> {
 		let mut bytes = [0u8; N];
 		for i in 0..min(s_bytes.len(), N-1) { bytes[i] = s_bytes[i]; }
 		Self { bytes: bytes, }
+	}
+}
+impl<const N: usize> AsRef<str> for StaticString<N> {
+	fn as_ref(&self)->&str {
+		let r = self.bytes.iter().enumerate().find_map(|(i, c)| {
+			if *c == 0 { Some(i) } else { None } });
+		let n = r.unwrap_or(N);
+		std::str::from_utf8(&self.bytes[..n]).unwrap()
 	}
 }
 impl<const N: usize> Display for StaticString<N> {
@@ -416,10 +421,10 @@ const DB_FILE: &str = "game.sqlite";
 
 fn create_resource(db: &Connection, name: &str, schema: Schema, dirtykey: &str, dirtyname: &str) {
 	use std::fmt::Write;
-	db.execute(schema.create_query(format!("res_{name}").as_str(), "")).unwrap();
-	db.execute(schema.create_query(format!("add_{name}").as_str(),
-		r#", "source" text"#)).unwrap();
-	db.execute(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str()).unwrap();
+	db.exec(schema.create_query(format!("res_{name}").as_str(), ""));
+	db.exec(schema.create_query(format!("add_{name}").as_str(),
+		r#", "source" text"#));
+	db.exec(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str());
 	let mut cols = String::new(); schema.write_columns(&mut cols);
 	let key = schema.primary_key().unwrap();
 	{ // create main view
@@ -434,10 +439,10 @@ with "u" as (select {cols} from "res_{name}" union select {cols} from "add_{name
 		}
 	}
 	write!(&mut view, r#" from "u""#).unwrap();
-	db.execute(view).unwrap();
+	db.exec(view);
 	}
 	let dirtytable = String::from(format!("dirty_{dirtyname}"));
-	db.execute(String::from(format!(r#"create table if not exists "{dirtytable}" ("name" text primary key)"#))).unwrap();
+	db.exec(String::from(format!(r#"create table if not exists "{dirtytable}" ("name" text primary key)"#)));
 	for (i, Column {fieldname, ..}) in schema.fields.iter().enumerate() {
 		if *fieldname == key { continue }
 		let trig = String::from(format!(
@@ -450,7 +455,7 @@ begin
 		((select "component" from "current"), new."{key}", '{fieldname}',
 		new."{fieldname}");
 end"#));
-		db.execute(trig).unwrap();
+		db.exec(trig);
 	}
 	let mut newcols = String::new();
 	schema.write_columns_pre(&mut newcols, "new.");
@@ -462,7 +467,7 @@ begin
 	insert into "add_{name}" ({cols}) values ({newcols});
 	insert or ignore into "{dirtytable}" values (new."{dirtykey}");
 end"#));
-	db.execute(trig).unwrap();
+	db.exec(trig);
 	let trig = String::from(format!(
 r#"create trigger "delete_{name}"
 instead of delete on "{name}"
@@ -470,36 +475,57 @@ begin
 	insert or ignore into "{dirtytable}" values (old."{dirtykey}");
 	delete from "add_{name}" where "{key}" = old."{key}";
 end"#));
-	db.execute(trig).unwrap();
+	db.exec(trig);
 	let trig = String::from(format!(
 r#"create trigger "unedit_{name}"
 after delete on "edit_{name}"
 begin
 	insert or ignore into "{dirtytable}" values (old."resource");
 end"#));
-	db.execute(trig).unwrap();
+	db.exec(trig);
+}
+trait Exec {
+	fn exec(&self, s: impl AsRef<str>);
+}
+impl Exec for Connection {
+	fn exec(&self, s: impl AsRef<str>) { self.execute(s.as_ref(), []).unwrap(); }
 }
 fn create_db(db_file: &str)->Connection {
 	if Path::new(&db_file).exists() {
 		std::fs::remove_file(&db_file).unwrap();
 	}
-	let db = sqlite::open(&db_file).unwrap();
-	db.execute(r#"create table "current" ("component" text)"#).unwrap();
+	let db = Connection::open(&db_file).unwrap();
+	db.exec(r#"create table "current" ("component" text)"#);
+	db.exec(r#"create table "resref_orig" ("resref" text primary key)"#);
+	db.exec(r#"create table "resref_dict" ("key" text primary key, "resref" text)"#);
+	db.exec(r#"create table "strref_dict" ("key" text primary key, "strref" integer)"#);
 	create_resource(&db, "items", Item::SCHEMA, "itemref", "items");
 	db
 }
-fn populate_item(db: &Connection, itemref: &Resref, cursor: &mut Cursor<Vec<u8>>) {
-	let mut item = Item::unpack(cursor);
-	println!("{item:?} {itemref:?}");
-}
 fn populate(db: &Connection, game: &GameIndex) {
+	db.exec("begin transaction");
+	let mut items = Item::SCHEMA.insert(&db, "res_items");
 	game.for_each(|resref, restype, mut handle| {
 		match restype {
-		constants::RESTYPE_ITM => populate_item(db, &resref, &mut handle.open()),
+constants::RESTYPE_ITM => {
+	let mut cursor = handle.open();
+	let item = Item::unpack(&mut cursor).unwrap();
+	cursor.seek(SeekFrom::Start(item.abilities_offset as u64)).unwrap();
+	let mut ab_n = Vec::<u16>::with_capacity(item.abilities_count as usize);
+	let mut ab_i = Vec::<i64>::with_capacity(item.abilities_count as usize);
+	for i in 0..item.abilities_count {
+		let ab = ItemAbility::unpack(&mut cursor).unwrap();
+		ab_n.push(ab.effect_count);
+		ab_i.push(db.last_insert_rowid());
+	}
+	println!("inserting item {resref}: {ab_n:?} {ab_i:?}");
+	item.execute(&mut items, &(resref,));
+		},
 		_ => {
 		},
 		};
 	}).unwrap();
+	db.exec("commit");
 }
 mod constants;
 
@@ -507,6 +533,8 @@ fn main() -> io::Result<()> {
 	let gamedir = "/home/jerome/jeux/bg/game";
 	let game = GameIndex::from(gamedir);
 	let db = create_db(&DB_FILE);
+// 	let s = std::str::from_utf8(&[0]).unwrap();
+// 	println!("{s:?} {:?}", s.bytes());
 	populate(&db, &game);
 // 	game.for_each(|rref, rtype, mut handle| {
 // 		if rtype.value == 0x03ed {
