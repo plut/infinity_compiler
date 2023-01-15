@@ -1,4 +1,4 @@
-use super::{Resref,Strref,StaticString, Pack, Row};
+use crate::{Resref,Strref,Pack,Row};
 #[derive(Debug,Pack,Row)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
 	opcode: u16, //opcode,

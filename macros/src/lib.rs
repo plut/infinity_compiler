@@ -120,7 +120,7 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 		quote!{ self.#ident.pack(f)?; }.to_tokens(&mut writef);
 	}
 	let code = quote! {
-		impl crate::resources::Pack for #ident {
+		impl crate::gameindex::Pack for #ident {
 			fn unpack(f: &mut impl std::io::Read)->std::io::Result<Self> {
 				#readf; Ok(Self{ #build })
 			}
@@ -156,14 +156,13 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 	use proc_macro2::Literal;
 	let (ident, flist) = read_struct_fields(parse_macro_input!(tokens));
 	let mut fields2 = Vec::<(String, String, String)>::new();
-	let mut col: usize = 0;
 	let mut schema = TS2::new();
 	let mut params = TS2::new();
 	let mut add_schema = |fieldname: &str, fieldtype: &str, extra: &str| {
 		let ty = proc_macro2::Ident::new(fieldtype, Span::call_site());
-		quote!{ crate::resources::Column {
+		quote!{ crate::database::Column {
 			fieldname: #fieldname,
-			fieldtype: <#ty as crate::resources::SqlType>::SQL_TYPE,
+			fieldtype: <#ty as crate::database::SqlType>::SQL_TYPE,
 			extra: #extra},
 		}.to_tokens(&mut schema);
 	};
@@ -176,7 +175,6 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 				_ => () }
 		}
 		if current.no_column { continue }
-		col+= 1;
 		let fieldname = ident.as_ref().unwrap().to_string();
 		let fieldtype = toks_to_string(&ty);
 		add_schema(fieldname.as_str(), fieldtype.as_str(), current.extra.as_str());
@@ -185,7 +183,6 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 	let mut keyf = TS2::new();
 	let keycol = 0;
 	for (fieldname, fieldtype, extra) in fields2 {
-		col+= 1;
 		let kc = proc_macro2::Literal::isize_unsuffixed(keycol);
 		let ty = proc_macro2::Ident::new(fieldtype.as_str(), Span::call_site());
 		add_schema(fieldname.as_str(), fieldtype.as_str(), extra.as_str());
@@ -193,10 +190,10 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 		quote!{ k.#kc, }.to_tokens(&mut params);
 	}
 	let code = quote! {
-		impl crate::resources::Row for #ident {
+		impl crate::database::Row for #ident {
 			type Key = (#keyf);
-			const SCHEMA: crate::resources::Schema<'static> =
-				crate::resources::Schema { fields: &[#schema] };
+			const SCHEMA: crate::database::Schema<'static> =
+				crate::database::Schema { fields: &[#schema] };
 				fn execute(&self, s: &mut crate::rusqlite::Statement, k: &Self::Key) {
 					s.execute(rusqlite::params![#params]).unwrap();
 				}

@@ -1,110 +1,92 @@
 #![allow(
 	unused_imports,
+	unreachable_code,
 // 	unused_macros,
 	unused_variables,
 	dead_code,
 // 	unused_must_use,
 // 	unused_mut,
 	)]
-extern crate rusqlite;
 
-use std::any::type_name;
-fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
-use std::path::Path;
-use std::fs::File;
-use std::io;
-use std::io::{Cursor, Seek, SeekFrom};
+mod gameindex {
+/// This mod contains code related to the KEY/BIF side of the database.
+/// Main interface:
+///  - `Pack` trait;
+///  - `Resref`, `Strref` basic types;
+///  - `Gameindex` type and iterator.
+extern crate rusqlite;
+use macros::Pack;
+use std::cmp::min;
 use std::fmt;
 use std::fmt::{Display,Debug,Formatter};
-use std::cmp::min;
-use macros::{Pack, Row};
-use rusqlite::{Connection,Statement};
-// macro_rules! exec {
-// 	($db:expr, $s:literal$(,$arg:expr)*) => {
-// 		$db.execute(String::from(format!($s $(,$arg)*))).unwrap()
-// 	};
-// }
-
-mod resources {
-extern crate num;
+use std::fs::File;
 use std::io;
-use std::io::Read;
-use std::io::Write;
-use std::marker::Sized;
-use rusqlite::{Connection, Statement};
-#[derive(Debug,Clone,Copy)]
-pub enum FieldType { Integer, Text, Resref, Strref, Other }
-impl FieldType {
-	pub const fn affinity(self)->&'static str {
-		match self {
-			FieldType::Integer | FieldType::Strref => "integer",
-			FieldType::Text | FieldType::Resref => "text",
-			FieldType::Other => "null",
+use std::io::{Read, Write, Seek, SeekFrom, BufReader, Cursor};
+use std::path::{Path, PathBuf};
+
+#[derive(Clone,Copy)]
+pub struct StaticString<const N: usize>{ bytes: [u8; N], }
+impl<const N: usize> PartialEq<&str> for StaticString<N> {
+	fn eq(&self, other: &&str) -> bool {
+		for (i, c) in other.bytes().enumerate() {
+			if i >= N { return false }
+			if !c.is_ascii() { return false }
+			if self.bytes[i] != c { return false }
+			if c == 0u8 { return true }
 		}
+		true
 	}
 }
-#[derive(Debug)]
-pub struct Column<'a> {
-	pub fieldname: &'a str,
-	pub fieldtype: FieldType,
-	pub extra: &'a str,
+impl<const N: usize> PartialEq<StaticString<N>> for StaticString<N> {
+	fn eq(&self, other: &StaticString<N>)->bool { self.bytes == other.bytes }
 }
-#[derive(Debug)]
-pub struct Schema<'a> {
-	pub fields: &'a[Column<'a>], // fat pointer
-// 	pub fields: &'a[&'a str], // fat pointer
+impl<const N: usize> From<&str> for StaticString<N> {
+// 	let s = StaticString::<8>::from("ABC");
+	fn from(s: &str) -> Self {
+		let s_bytes = s.as_bytes();
+		let mut bytes = [0u8; N];
+		for i in 0..min(s_bytes.len(), N-1) { bytes[i] = s_bytes[i]; }
+		Self { bytes: bytes, }
+	}
+}
+impl<const N: usize> AsRef<str> for StaticString<N> {
+	fn as_ref(&self)->&str {
+		let r = self.bytes.iter().enumerate().find_map(|(i, c)| {
+			if *c == 0 { Some(i) } else { None } });
+		let n = r.unwrap_or(N);
+		std::str::from_utf8(&self.bytes[..n]).unwrap()
+	}
+}
+impl<const N: usize> Display for StaticString<N> {
+	fn fmt(&self, f:&mut Formatter) -> fmt::Result {
+		use std::fmt::Write;
+		f.write_char('"')?;
+		for c in &self.bytes {
+			if *c == 0u8 { break }
+			f.write_char(*c as char)?;
+		}
+		f.write_char('"')?;
+		f.write_fmt(format_args!("{}", N))?;
+		Ok(())
+	}
+}
+impl<const N: usize> Debug for StaticString<N> {
+	fn fmt(&self, f:&mut fmt::Formatter) -> fmt::Result { Display::fmt(self, f) }
+}
+impl<const N: usize> Pack for StaticString<N> {
+	fn unpack(f: &mut impl io::Read)->io::Result<Self> {
+		let mut x = [0u8; N];
+		f.read_exact(&mut x)?;
+		Ok(Self{ bytes: x, })
+	}
+	fn pack(self, f: &mut impl io::Write)->io::Result<()> {
+		f.write_all(&self.bytes)
+	}
+}
+impl<const N: usize> Default for StaticString<N> {
+	fn default()->Self { Self { bytes: [0u8; N] } }
 }
 
-impl<'a> Schema<'a> {
-	pub fn primary_key(&'a self)->Option<&'a str> {
-		for Column { fieldname, extra, .. } in self.fields.iter() {
-			if extra == &"primary key" { return Some(&fieldname) }
-		}
-		None
-	}
-	pub fn write_columns_pre(&self, s: &mut String, prefix: &str) {
-		let mut isfirst = true;
-		use std::fmt::Write;
-		for Column { fieldname, .. } in self.fields.iter() {
-			if isfirst { isfirst = false; } else { s.push_str(","); }
-			write!(s, r#" {prefix}"{fieldname}" "#).unwrap();
-		}
-	}
-	pub fn write_columns(&self, s: &mut String) { self.write_columns_pre(s, "") }
-	pub fn create_query(&self, name: &str, more: &str)->String {
-		use std::fmt::Write;
-		let mut s = String::from(format!("create table \"{name}\" ("));
-		let mut isfirst = true;
-		for Column { fieldname, fieldtype, extra } in self.fields.iter() {
-			if isfirst { isfirst = false; }
-			else { s.push_str(","); }
-			write!(&mut s, "\n \"{fieldname}\" {} {extra}", fieldtype.affinity()).unwrap();
-		}
-		write!(&mut s, "{more})").unwrap();
-		s
-	}
-	pub fn insert_query(&self, name: &str)->String {
-		let mut s = String::from(format!("insert into \"{name}\" ("));
-		self.write_columns(&mut s);
-		s.push_str(") values (");
-		for c in 0..self.fields.iter().count() {
-			if c > 0 { s.push_str(","); }
-			s.push_str("?");
-		}
-		s.push_str(")");
-		s
-	}
-	pub fn select_query(&self, name: &str)->String {
-		use std::fmt::Write;
-		let mut s = String::from("select ");
-		self.write_columns(&mut s);
-		write!(&mut s, "\nfrom \"{name}\" ").unwrap();
-		s
-	}
-	pub fn insert<'b>(&'b self, db: &'b Connection, name: &'b str)->Statement {
-		db.prepare(self.insert_query(name).as_ref()).unwrap()
-	}
-}
 pub trait Pack: Sized {
 	fn unpack(f: &mut impl Read)->io::Result<Self>;
 	fn pack(self, _f: &mut impl io::Write)->io::Result<()> { unimplemented!() }
@@ -137,44 +119,6 @@ macro_rules! unpack_int {
 	})* }
 }
 unpack_int!{i8,i16,i32,i64,u8,u16,u32,u64}
-pub trait SqlType { const SQL_TYPE: FieldType; }
-impl<T> SqlType for T where T: num::Integer {
-	const SQL_TYPE: FieldType = FieldType::Integer;
-}
-impl SqlType for crate::gameindex::Strref {
-	const SQL_TYPE: FieldType = FieldType::Integer;
-}
-impl rusqlite::ToSql for crate::gameindex::Strref {
-	fn to_sql<'a>(&'a self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.value.to_sql() }
-}
-impl SqlType for crate::gameindex::Resref {
-	const SQL_TYPE: FieldType = FieldType::Text;
-}
-impl rusqlite::ToSql for crate::gameindex::Resref {
-	fn to_sql<'a>(&'a self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.name.as_ref().to_sql() }
-}
-
-pub trait Row {
-	type Key;
-	const SCHEMA: Schema<'static>;
-	fn execute(&self, s: &mut Statement, key: &Self::Key);
-// 	fn read(s: &mut Statement<'_>)->Result<(Self, Self::Key)>
-// 		where Self: Sized;
-}
-} // mod resources
-mod gameindex {
-extern crate rusqlite;
-use macros::{Pack, Row};
-use super::resources;
-use resources::{Pack, Row};
-use rusqlite::{Connection, Statement};
-use std::fmt;
-use std::fmt::{Display,Debug,Formatter};
-use std::fs::File;
-use std::io;
-use std::io::{Read, Seek, SeekFrom, BufReader, Cursor};
-use std::path::{Path, PathBuf};
-use super::StaticString;
 #[derive(Clone,Copy)] pub struct Resref { pub name: StaticString::<8>, }
 impl Debug for Resref {
 	fn fmt(&self, f:&mut Formatter)->fmt::Result { Debug::fmt(&self.name, f) }
@@ -269,6 +213,7 @@ impl<'a> Iterator for GameIndexItr<'a> {
 		Some(r)
 	}
 }
+
 pub struct ResHandle<'a> {
 	bif: &'a mut Option<BifFile>,
 	path: &'a PathBuf,
@@ -335,179 +280,221 @@ fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->
 	Ok(o.as_ref().unwrap())
 }
 } // mod gameindex
-mod gametypes;
-
-use resources::{Schema, Row, Pack, FieldType, Column};
-use gameindex::{GameIndex, Strref, Resref, ResHandle};
-use gametypes::*;
-
-// #[derive(Debug)]
-#[derive(Clone,Copy)]
-pub struct StaticString<const N: usize>{ bytes: [u8; N], }
-impl<const N: usize> PartialEq<&str> for StaticString<N> {
-	fn eq(&self, other: &&str) -> bool {
-		for (i, c) in other.bytes().enumerate() {
-			if i >= N { return false }
-			if !c.is_ascii() { return false }
-			if self.bytes[i] != c { return false }
-			if c == 0u8 { return true }
+mod database {
+/// This mod groups all code connected with the SQL side of the database.
+/// Main exports are:
+///  - `Row` trait: connect a structure to a SQL row;
+///  - `Schema` type: description of a particular SQL table;
+///  - `ResourceView` type: data associated with a game resource.
+extern crate num;
+use rusqlite::{Connection, Statement};
+#[derive(Debug,Clone,Copy)]
+pub enum FieldType { Integer, Text, Resref, Strref, Other }
+impl FieldType {
+	pub const fn affinity(self)->&'static str {
+		match self {
+			FieldType::Integer | FieldType::Strref => "integer",
+			FieldType::Text | FieldType::Resref => "text",
+			FieldType::Other => "null",
 		}
-		true
 	}
 }
-impl<const N: usize> PartialEq<StaticString<N>> for StaticString<N> {
-	fn eq(&self, other: &StaticString<N>)->bool { self.bytes == other.bytes }
+#[derive(Debug)] pub struct Column<'a> {
+	pub fieldname: &'a str,
+	pub fieldtype: FieldType,
+	pub extra: &'a str,
 }
-impl<const N: usize> From<&str> for StaticString<N> {
-// 	let s = StaticString::<8>::from("ABC");
-	fn from(s: &str) -> Self {
-		let s_bytes = s.as_bytes();
-		let mut bytes = [0u8; N];
-		for i in 0..min(s_bytes.len(), N-1) { bytes[i] = s_bytes[i]; }
-		Self { bytes: bytes, }
+#[derive(Debug)] pub struct Schema<'a> {
+	pub fields: &'a[Column<'a>], // fat pointer
+// 	pub fields: &'a[&'a str], // fat pointer
+}
+impl<'a> Schema<'a> {
+	pub fn primary_key(&'a self)->Option<&'a str> {
+		for Column { fieldname, extra, .. } in self.fields.iter() {
+			if extra == &"primary key" { return Some(&fieldname) }
+		}
+		None
 	}
-}
-impl<const N: usize> AsRef<str> for StaticString<N> {
-	fn as_ref(&self)->&str {
-		let r = self.bytes.iter().enumerate().find_map(|(i, c)| {
-			if *c == 0 { Some(i) } else { None } });
-		let n = r.unwrap_or(N);
-		std::str::from_utf8(&self.bytes[..n]).unwrap()
-	}
-}
-impl<const N: usize> Display for StaticString<N> {
-	fn fmt(&self, f:&mut Formatter) -> fmt::Result {
+	pub fn write_columns_pre(&self, s: &mut String, prefix: &str) {
+		let mut isfirst = true;
 		use std::fmt::Write;
-		f.write_char('"')?;
-		for c in &self.bytes {
-			if *c == 0u8 { break }
-			f.write_char(*c as char)?;
-		}
-		f.write_char('"')?;
-		f.write_fmt(format_args!("{}", N))?;
-		Ok(())
-	}
-}
-impl<const N: usize> Debug for StaticString<N> {
-	fn fmt(&self, f:&mut fmt::Formatter) -> fmt::Result { Display::fmt(self, f) }
-}
-impl<const N: usize> resources::Pack for StaticString<N> {
-	fn unpack(f: &mut impl io::Read)->io::Result<Self> {
-		let mut x = [0u8; N];
-		f.read_exact(&mut x)?;
-		Ok(Self{ bytes: x, })
-	}
-	fn pack(self, f: &mut impl io::Write)->io::Result<()> {
-		f.write_all(&self.bytes)
-	}
-}
-impl<const N: usize> Default for StaticString<N> {
-	fn default()->Self { Self { bytes: [0u8; N] } }
-}
-
-// #[derive(Default, Debug, Pack, Row)]
-// struct Blah {
-// 	#[header("KEY V1  ")]
-// 	nbif: i32,
-// #[column("primary key")]
-// #[column(itemref, i32, "")]
-// 	nres: i32,
-// #[column(false)]
-// 	bifoffset: u32,
-// 	resoffset: u32,
-// }
-
-const DB_FILE: &str = "game.sqlite";
-
-fn create_resource(db: &Connection, name: &str, schema: Schema, dirtykey: &str, dirtyname: &str) {
-	use std::fmt::Write;
-	db.exec(schema.create_query(format!("res_{name}").as_str(), ""));
-	db.exec(schema.create_query(format!("add_{name}").as_str(),
-		r#", "source" text"#));
-	db.exec(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str());
-	let mut cols = String::new(); schema.write_columns(&mut cols);
-	let key = schema.primary_key().unwrap_or("rowid");
-	{ // create main view
-	let mut view = String::from(format!(r#"create view "{name}" as
-with "u" as (select {cols} from "res_{name}" union select {cols} from "add_{name}") select "#));
-	for (i, Column {fieldname, fieldtype,..}) in schema.fields.iter().enumerate(){
-		if i > 0 { write!(&mut view, ",\n").unwrap(); }
-		if *fieldname == key {
-			write!(&mut view, r#""{fieldname}""#).unwrap();
-		} else {
-			write!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{key}" and "field"='{fieldname}' order by rowid desc limit 1), "{fieldname}") as "{fieldname}" "#).unwrap();
+		for Column { fieldname, .. } in self.fields.iter() {
+			if isfirst { isfirst = false; } else { s.push_str(","); }
+			write!(s, r#" {prefix}"{fieldname}" "#).unwrap();
 		}
 	}
-	write!(&mut view, r#" from "u""#).unwrap();
-	db.exec(view);
+	pub fn write_columns(&self, s: &mut String) { self.write_columns_pre(s, "") }
+	pub fn create_query(&self, name: &str, more: &str)->String {
+		use std::fmt::Write;
+		let mut s = String::from(format!("create table \"{name}\" ("));
+		let mut isfirst = true;
+		for Column { fieldname, fieldtype, extra } in self.fields.iter() {
+			if isfirst { isfirst = false; }
+			else { s.push_str(","); }
+			write!(&mut s, "\n \"{fieldname}\" {} {extra}", fieldtype.affinity()).unwrap();
+		}
+		write!(&mut s, "{more})").unwrap();
+		s
 	}
-	let dirtytable = String::from(format!("dirty_{dirtyname}"));
-	db.exec(String::from(format!(r#"create table if not exists "{dirtytable}" ("name" text primary key)"#)));
-	for (i, Column {fieldname, ..}) in schema.fields.iter().enumerate() {
-		if *fieldname == key { continue }
-		let trig = String::from(format!(
-r#"create trigger "update_{name}_{fieldname}"
-instead of update on "{name}" when new."{fieldname}" is not null
-	and new."{fieldname}" <> old."{fieldname}"
-begin
-	insert or ignore into "{dirtytable}" values (new."{dirtykey}");
-	insert into "edit_{name}" ("source", "resource", "field", "value") values
-		((select "component" from "current"), new."{key}", '{fieldname}',
-		new."{fieldname}");
-end"#));
-		db.exec(trig);
+	pub fn insert_query(&self, name: &str)->String {
+		let mut s = String::from(format!("insert into \"{name}\" ("));
+		self.write_columns(&mut s);
+		s.push_str(") values (");
+		for c in 0..self.fields.iter().count() {
+			if c > 0 { s.push_str(","); }
+			s.push_str("?");
+		}
+		s.push_str(")");
+		s
 	}
-	let mut newcols = String::new();
-	schema.write_columns_pre(&mut newcols, "new.");
-	println!("newcols={newcols}");
-	let trig = String::from(format!(
-r#"create trigger "insert_{name}"
-instead of insert on "{name}"
-begin
-	insert into "add_{name}" ({cols}) values ({newcols});
-	insert or ignore into "{dirtytable}" values (new."{dirtykey}");
-end"#));
-	db.exec(trig);
-	let trig = String::from(format!(
-r#"create trigger "delete_{name}"
-instead of delete on "{name}"
-begin
-	insert or ignore into "{dirtytable}" values (old."{dirtykey}");
-	delete from "add_{name}" where "{key}" = old."{key}";
-end"#));
-	db.exec(trig);
-	let trig = String::from(format!(
-r#"create trigger "unedit_{name}"
-after delete on "edit_{name}"
-begin
-	insert or ignore into "{dirtytable}" values (old."resource");
-end"#));
-	db.exec(trig);
+	pub fn select_query(&self, name: &str)->String {
+		use std::fmt::Write;
+		let mut s = String::from("select ");
+		self.write_columns(&mut s);
+		write!(&mut s, "\nfrom \"{name}\" ").unwrap();
+		s
+	}
+	pub fn insert<'b>(&'b self, db: &'b Connection, name: &'b str)->Statement {
+		db.prepare(self.insert_query(name).as_ref()).unwrap()
+	}
 }
-trait Exec {
-	fn exec(&self, s: impl AsRef<str>);
+pub trait SqlType { const SQL_TYPE: FieldType; }
+impl<T> SqlType for T where T: num::Integer {
+	const SQL_TYPE: FieldType = FieldType::Integer;
 }
+impl SqlType for crate::gameindex::Strref {
+	const SQL_TYPE: FieldType = FieldType::Integer;
+}
+impl rusqlite::ToSql for crate::gameindex::Strref {
+	fn to_sql<'a>(&'a self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.value.to_sql() }
+}
+impl SqlType for crate::gameindex::Resref {
+	const SQL_TYPE: FieldType = FieldType::Text;
+}
+impl rusqlite::ToSql for crate::gameindex::Resref {
+	fn to_sql<'a>(&'a self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.name.as_ref().to_sql() }
+}
+
+pub trait Row {
+	type Key;
+	const SCHEMA: Schema<'static>;
+	fn execute(&self, s: &mut Statement, key: &Self::Key);
+// 	fn read(s: &mut Statement<'_>)->Result<(Self, Self::Key)>
+// 		where Self: Sized;
+}
+pub trait Exec { fn exec(&self, s: impl AsRef<str>); }
 impl Exec for Connection {
 	fn exec(&self, s: impl AsRef<str>) { self.execute(s.as_ref(), ()).unwrap(); }
 }
-#[derive(Debug)] struct ResourceView<'a> {
-	name: &'a str,
-	schema: Schema<'a>,
-	dirtykey: &'a str,
-	dirtyname: &'a str,
+#[derive(Debug)] pub struct ResourceView<'a> {
+	pub name: &'a str,
+	pub schema: Schema<'a>,
+	pub dirtykey: &'a str,
+	pub dirtyname: &'a str,
 }
-const fn resourceview<'a>((name, schema, dirtykey, dirtyname): (&'a str, Schema<'a>, &'a str, &'a str))->ResourceView<'a> {
-		ResourceView::<'a>{ name, schema, dirtykey, dirtyname }
+impl<'a> ResourceView<'a> {
+	pub fn create(&self, db: &Connection) {
+		let ResourceView { name, schema, dirtykey, dirtyname } = self;
+		use std::fmt::Write;
+		db.exec(schema.create_query(format!("res_{name}").as_str(), ""));
+		db.exec(schema.create_query(format!("add_{name}").as_str(),
+			r#", "source" text"#));
+		db.exec(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str());
+		let mut cols = String::new(); schema.write_columns(&mut cols);
+		let key = schema.primary_key().unwrap_or("rowid");
+		{ // create main view
+		let mut view = String::from(format!(r#"create view "{name}" as
+	with "u" as (select {cols} from "res_{name}" union select {cols} from "add_{name}") select "#));
+		for (i, Column {fieldname, fieldtype,..}) in schema.fields.iter().enumerate(){
+			if i > 0 { write!(&mut view, ",\n").unwrap(); }
+			if *fieldname == key {
+				write!(&mut view, r#""{fieldname}""#).unwrap();
+			} else {
+				write!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{key}" and "field"='{fieldname}' order by rowid desc limit 1), "{fieldname}") as "{fieldname}" "#).unwrap();
+			}
+		}
+		write!(&mut view, r#" from "u""#).unwrap();
+		db.exec(view);
+		}
+		let dirtytable = String::from(format!("dirty_{dirtyname}"));
+		db.exec(String::from(format!(r#"create table if not exists "{dirtytable}" ("name" text primary key)"#)));
+		for (i, Column {fieldname, ..}) in schema.fields.iter().enumerate() {
+			if *fieldname == key { continue }
+			let trig = String::from(format!(
+	r#"create trigger "update_{name}_{fieldname}"
+	instead of update on "{name}" when new."{fieldname}" is not null
+		and new."{fieldname}" <> old."{fieldname}"
+	begin
+		insert or ignore into "{dirtytable}" values (new."{dirtykey}");
+		insert into "edit_{name}" ("source", "resource", "field", "value") values
+			((select "component" from "current"), new."{key}", '{fieldname}',
+			new."{fieldname}");
+	end"#));
+			db.exec(trig);
+		}
+		let mut newcols = String::new();
+		schema.write_columns_pre(&mut newcols, "new.");
+		println!("newcols={newcols}");
+		let trig = String::from(format!(
+	r#"create trigger "insert_{name}"
+	instead of insert on "{name}"
+	begin
+		insert into "add_{name}" ({cols}) values ({newcols});
+		insert or ignore into "{dirtytable}" values (new."{dirtykey}");
+	end"#));
+		db.exec(trig);
+		let trig = String::from(format!(
+	r#"create trigger "delete_{name}"
+	instead of delete on "{name}"
+	begin
+		insert or ignore into "{dirtytable}" values (old."{dirtykey}");
+		delete from "add_{name}" where "{key}" = old."{key}";
+	end"#));
+		db.exec(trig);
+		let trig = String::from(format!(
+	r#"create trigger "unedit_{name}"
+	after delete on "edit_{name}"
+	begin
+		insert or ignore into "{dirtytable}" values (old."resource");
+	end"#));
+		db.exec(trig);
 	}
-// impl<'a> From<(&'a str, Schema<'a>, &'a str, &'a str)> for ResourceView<'a> {
-// 	fn from((name, schema, dirtykey, dirtyname): (&'a str, Schema<'a>, &'a str, &'a str))->Self {
-// 		Self{ name, schema, dirtykey, dirtyname }
-// 	}
-// }
-const RESOURCES: [ResourceView<'static>; 1] = [
-	resourceview(("items", Item::SCHEMA, "itemref", "items")),
-	resourceview(("item_abilities", ItemAbility::SCHEMA, "itemref", "items")),
-];
+}
+macro_rules! resources {
+	($($n:ident: $T:ty, $dk:literal, $dn:literal);*$(;)?) => {
+		#[derive(Debug)]
+		struct ResourceDef<'a> { $($n: ResourceView<'a>),* }
+		const RESOURCES: ResourceDef = ResourceDef {
+			$($n: ResourceView { name: stringify!($n), schema: <$T>::SCHEMA,
+			dirtykey: $dk, dirtyname: $dn}),*
+		};
+	}
+}
+pub(crate) use resources;
+} // mod resources
+extern crate rusqlite;
+mod gametypes;
+mod constants;
+
+use database::{Row, ResourceView, Exec, resources};
+use gameindex::{GameIndex, Pack, Strref, Resref};
+use gametypes::*;
+
+use std::any::type_name;
+fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
+use std::path::Path;
+use std::io;
+use std::io::{Seek, SeekFrom};
+use std::fmt::{Debug};
+use macros::{Pack, Row};
+use rusqlite::{Connection};
+
+
+resources!{
+	items: Item, "itemref", "items";
+	item_abilities: Item, "itemref", "items";
+}
+
 fn create_db(db_file: &str)->Connection {
 	if Path::new(&db_file).exists() {
 		std::fs::remove_file(&db_file).unwrap();
@@ -517,9 +504,8 @@ fn create_db(db_file: &str)->Connection {
 	db.exec(r#"create table "resref_orig" ("resref" text primary key)"#);
 	db.exec(r#"create table "resref_dict" ("key" text primary key, "resref" text)"#);
 	db.exec(r#"create table "strref_dict" ("key" text primary key, "strref" integer)"#);
-	create_resource(&db, "items", Item::SCHEMA, "itemref", "items");
-	create_resource(&db, "item_abilities", ItemAbility::SCHEMA,
-		"itemref", "items");
+	RESOURCES.items.create(&db);
+	RESOURCES.item_abilities.create(&db);
 	db
 }
 fn populate(db: &Connection, game: &GameIndex) {
@@ -550,11 +536,13 @@ constants::RESTYPE_ITM => {
 	}).unwrap();
 	db.exec("commit");
 }
-mod constants;
+
+const DB_FILE: &str = "game.sqlite";
 
 fn main() -> io::Result<()> {
 	let gamedir = "/home/jerome/jeux/bg/game";
 	let game = GameIndex::from(gamedir);
+	println!("{RESOURCES:?}"); return Ok(());
 	let db = create_db(&DB_FILE);
 // 	let s = std::str::from_utf8(&[0]).unwrap();
 // 	println!("{s:?} {:?}", s.bytes());
