@@ -1,5 +1,6 @@
 use super::{Resref,Strref,StaticString, Pack, Row};
 #[derive(Debug,Pack,Row)] pub struct ItemEffect {
+#[column(itemref, Resref, r#"references "items"("itemref")"#)]
 	opcode: u16, //opcode,
 	target: u8, // EffectTarget,
 	power: u8,
@@ -18,6 +19,7 @@ use super::{Resref,Strref,StaticString, Pack, Row};
 	stacking_id: u32,
 }
 #[derive(Debug,Pack,Row)] pub struct ItemAbility {
+#[column(itemref, Resref, r#"references "items"("itemref")"#)]
 	attack_type: u8, // AttackType,
 	must_identify: u8,
 	location: u8,

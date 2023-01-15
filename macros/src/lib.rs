@@ -200,10 +200,6 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 				fn execute(&self, s: &mut crate::rusqlite::Statement, k: &Self::Key) {
 					s.execute(rusqlite::params![#params]).unwrap();
 				}
-// 			fn bind(&self, s: &mut sqlite::Statement, k: &Self::Key)->sqlite::Result<()> {
-// 				use crate::resources::ToBindable;
-// 				#bind; Ok(())
-// 			}
 		}
 	};
 // 	println!("\x1b[36m{}\x1b[m", code);

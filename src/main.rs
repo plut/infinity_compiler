@@ -426,7 +426,7 @@ fn create_resource(db: &Connection, name: &str, schema: Schema, dirtykey: &str, 
 		r#", "source" text"#));
 	db.exec(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str());
 	let mut cols = String::new(); schema.write_columns(&mut cols);
-	let key = schema.primary_key().unwrap();
+	let key = schema.primary_key().unwrap_or("rowid");
 	{ // create main view
 	let mut view = String::from(format!(r#"create view "{name}" as
 with "u" as (select {cols} from "res_{name}" union select {cols} from "add_{name}") select "#));
@@ -488,8 +488,26 @@ trait Exec {
 	fn exec(&self, s: impl AsRef<str>);
 }
 impl Exec for Connection {
-	fn exec(&self, s: impl AsRef<str>) { self.execute(s.as_ref(), []).unwrap(); }
+	fn exec(&self, s: impl AsRef<str>) { self.execute(s.as_ref(), ()).unwrap(); }
 }
+#[derive(Debug)] struct ResourceView<'a> {
+	name: &'a str,
+	schema: Schema<'a>,
+	dirtykey: &'a str,
+	dirtyname: &'a str,
+}
+const fn resourceview<'a>((name, schema, dirtykey, dirtyname): (&'a str, Schema<'a>, &'a str, &'a str))->ResourceView<'a> {
+		ResourceView::<'a>{ name, schema, dirtykey, dirtyname }
+	}
+// impl<'a> From<(&'a str, Schema<'a>, &'a str, &'a str)> for ResourceView<'a> {
+// 	fn from((name, schema, dirtykey, dirtyname): (&'a str, Schema<'a>, &'a str, &'a str))->Self {
+// 		Self{ name, schema, dirtykey, dirtyname }
+// 	}
+// }
+const RESOURCES: [ResourceView<'static>; 1] = [
+	resourceview(("items", Item::SCHEMA, "itemref", "items")),
+	resourceview(("item_abilities", ItemAbility::SCHEMA, "itemref", "items")),
+];
 fn create_db(db_file: &str)->Connection {
 	if Path::new(&db_file).exists() {
 		std::fs::remove_file(&db_file).unwrap();
@@ -500,26 +518,31 @@ fn create_db(db_file: &str)->Connection {
 	db.exec(r#"create table "resref_dict" ("key" text primary key, "resref" text)"#);
 	db.exec(r#"create table "strref_dict" ("key" text primary key, "strref" integer)"#);
 	create_resource(&db, "items", Item::SCHEMA, "itemref", "items");
+	create_resource(&db, "item_abilities", ItemAbility::SCHEMA,
+		"itemref", "items");
 	db
 }
 fn populate(db: &Connection, game: &GameIndex) {
 	db.exec("begin transaction");
 	let mut items = Item::SCHEMA.insert(&db, "res_items");
+	let mut item_abilities= ItemAbility::SCHEMA.insert(&db, "res_item_abilities");
 	game.for_each(|resref, restype, mut handle| {
 		match restype {
 constants::RESTYPE_ITM => {
 	let mut cursor = handle.open();
 	let item = Item::unpack(&mut cursor).unwrap();
+	item.execute(&mut items, &(resref,));
+
 	cursor.seek(SeekFrom::Start(item.abilities_offset as u64)).unwrap();
 	let mut ab_n = Vec::<u16>::with_capacity(item.abilities_count as usize);
 	let mut ab_i = Vec::<i64>::with_capacity(item.abilities_count as usize);
 	for i in 0..item.abilities_count {
 		let ab = ItemAbility::unpack(&mut cursor).unwrap();
+		ab.execute(&mut item_abilities, &(resref,));
 		ab_n.push(ab.effect_count);
 		ab_i.push(db.last_insert_rowid());
 	}
 	println!("inserting item {resref}: {ab_n:?} {ab_i:?}");
-	item.execute(&mut items, &(resref,));
 		},
 		_ => {
 		},
