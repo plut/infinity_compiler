@@ -1,7 +1,7 @@
 use crate::{Resref,Strref,Pack,Row};
 #[derive(Debug,Pack,Row)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
-#[column(abref, i32, r#"references "item_abilities"("abref")"#)]
+#[column(abref, i64, r#"references "item_abilities"("abref")"#)]
 	opcode: u16, //opcode,
 	target: u8, // EffectTarget,
 	power: u8,

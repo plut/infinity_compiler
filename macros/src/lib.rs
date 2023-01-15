@@ -184,7 +184,8 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 	let mut keycol_in = 0;
 	for (fieldname, fieldtype, extra) in fields2 {
 		if fieldtype == "auto" {
-			add_schema(fieldname.as_str(), "i32", extra.as_str());
+			// we use i64 since this is the return type of last_insert_rowid()
+			add_schema(fieldname.as_str(), "i64", extra.as_str());
 			quote!{ crate::rusqlite::types::Null, }.to_tokens(&mut params);
 		} else {
 			add_schema(fieldname.as_str(), fieldtype.as_str(), extra.as_str());

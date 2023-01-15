@@ -460,6 +460,8 @@ impl<'a> ResourceView<'a> {
 	end"#));
 		db.exec(trig);
 	}
+	pub fn insert(&self, db: &'a Connection)->Statement {
+		self.schema.insert(&db, self.name) }
 }
 macro_rules! resources {
 	($($n:ident: $T:ty, $dk:literal, $dn:literal);*$(;)?) => {
@@ -509,12 +511,14 @@ fn create_db(db_file: &str)->Connection {
 	db.exec(r#"create table "strref_dict" ("key" text primary key, "strref" integer)"#);
 	RESOURCES.items.create(&db);
 	RESOURCES.item_abilities.create(&db);
+	RESOURCES.item_effects.create(&db);
 	db
 }
 fn populate(db: &Connection, game: &GameIndex) {
 	db.exec("begin transaction");
-	let mut items = Item::SCHEMA.insert(&db, "res_items");
-	let mut item_abilities= ItemAbility::SCHEMA.insert(&db, "res_item_abilities");
+	let mut items = RESOURCES.items.insert(&db);
+	let mut item_abilities = RESOURCES.item_abilities.insert(&db);
+	let mut item_effects = RESOURCES.item_effects.insert(&db);
 	game.for_each(|resref, restype, mut handle| {
 		match restype {
 constants::RESTYPE_ITM => {
@@ -532,6 +536,18 @@ constants::RESTYPE_ITM => {
 		ab_i.push(db.last_insert_rowid());
 	}
 	println!("inserting item {resref}: {ab_n:?} {ab_i:?}");
+	cursor.seek(SeekFrom::Start(item.effect_offset as u64)).unwrap();
+	for j in 0..item.effect_count { // on-equip effects
+		let eff = ItemEffect::unpack(&mut cursor).unwrap();
+		eff.execute(&mut item_effects, &(resref, -1i64));
+	}
+	for (i, n) in ab_n.iter().enumerate() {
+		for j in 0..*n {
+			let eff = ItemEffect::unpack(&mut cursor).unwrap();
+			eff.execute(&mut item_effects, &(resref, ab_i[i]));
+		}
+	}
+
 		},
 		_ => {
 		},
@@ -547,21 +563,6 @@ fn main() -> io::Result<()> {
 	let game = GameIndex::from(gamedir);
 // 	println!("{:?}", RESOURCES.item_abilities); return Ok(());
 	let db = create_db(&DB_FILE);
-// 	let s = std::str::from_utf8(&[0]).unwrap();
-// 	println!("{s:?} {:?}", s.bytes());
 	populate(&db, &game);
-// 	game.for_each(|rref, rtype, mut handle| {
-// 		if rtype.value == 0x03ed {
-// // 			println!("{rref:?} {rtype:?}");
-// 			let v = handle.read();
-// // 			println!("{:?}", std::str::from_utf8(&v[0..8]).unwrap());
-// 		}
-// 		
-// 	})?;
-
-// 	println!("{}", Item::SCHEMA.create_query("res_items", ""));
-// 	println!("{}", Item::SCHEMA.insert_query("res_items"));
-// 	println!("{}", Item::SCHEMA.select_query("res_items"));
-
 	Ok(())
 }
