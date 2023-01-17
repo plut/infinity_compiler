@@ -21,7 +21,7 @@ use crate::{Resref,Strref,Pack,Table};
 	stacking_id: u32,
 }
 #[derive(Debug,Pack,Table)] pub struct ItemAbility {
-#[column(itemref, Resref, r#"references "items"("itemref")"#)]
+#[column(itemref, Option<Resref>, r#"references "items"("itemref")"#)]
 #[column(abref, auto, "primary key")]
 	attack_type: u8, // AttackType,
 	must_identify: u8,

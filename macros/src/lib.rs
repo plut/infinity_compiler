@@ -12,8 +12,11 @@
 extern crate proc_macro;
 // extern crate proc_macro2;
 use proc_macro::TokenStream;
-type TS2 = proc_macro2::TokenStream;
-use proc_macro2::Span;
+use proc_macro2 as pm2;
+type TS2 = pm2::TokenStream;
+type Ident2 = pm2::Ident;
+type Type2 = pm2::Ident;
+use pm2::Span;
 use quote::quote;
 use quote::ToTokens;
 use syn;
@@ -28,6 +31,7 @@ use syn::Field;
 use syn::Fields::{Named, Unnamed};
 use syn::Path;
 use syn::Token;
+use syn::Type;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
@@ -68,6 +72,7 @@ enum AttrArg {
 	Str(String),
 	Int(isize),
 	Ident(String),
+	Type(syn::Type),
 	Other(),
 }
 impl From<Expr> for AttrArg {
@@ -87,18 +92,51 @@ impl From<Expr> for AttrArg {
 	}
 }
 fn parse_attribute(Attribute{path, tokens, ..}: Attribute) -> (String, Vec<AttrArg>) {
-	(path.get_ident().unwrap().to_string(),
-	parse_attribute_args(tokens).into_iter().map(AttrArg::from).collect())
+	(path.get_ident().unwrap().to_string(), parse_attribute_args(tokens))
 }
-fn parse_attribute_args(tokens: TS2)->Vec<Expr> {
-	let args = Punctuated::<Expr, Token![,]>::parse_terminated
-		.parse(TokenStream::from(tokens)).unwrap();
-	if args.len() == 0 { return Vec::<Expr>::new() }
-	if args.len() > 1 { panic!("args expression should have length 0 or 1"); }
-	match args.first().unwrap() {
-		Expr::Paren(ExprParen{ expr, ..}) => vec![*expr.clone()],
-		Expr::Tuple(ExprTuple{ elems, .. }) => to_vector(elems),
-		_ => panic!("unknown expression") }
+
+fn split_stream(stream: pm2::TokenStream)->Vec<pm2::TokenStream> {
+	let mut v = vec![pm2::TokenStream::new()];
+	for tree in stream {
+		if match tree {
+			pm2::TokenTree::Punct(ref p) => p.as_char() == ',',
+			_ => false } {
+			v.push(pm2::TokenStream::new());
+		} else {
+			let n = v.len();
+			v[n-1].extend(std::iter::once(tree));
+		}
+	}
+	v
+}
+
+fn parse_attribute_args(tokens: TS2)->Vec<AttrArg> {
+	// TODO: make this generic, by
+	// 1. turning into an iterator,
+	// 2. making the return type into a parameter
+	let mut r = Vec::<AttrArg>::new();
+	let stream = match tokens.into_iter().next() {
+		None => { return r },
+		Some(pm2::TokenTree::Group(g)) => g.stream(),
+		_ => unimplemented!()
+	};
+	let mut iter = split_stream(stream).into_iter();
+
+	let a = match iter.next() { None=>return r, Some(a)=>a };
+	let b: syn::Expr = syn::parse2(a).expect("an expression");
+	r.push(AttrArg::from(b));
+
+	// 2nd argument is a type:
+	let a = match iter.next() { None=>return r, Some(a)=>a };
+	let b: syn::Type = syn::parse2(a).expect("a type");
+	r.push(AttrArg::Type(b));
+
+	// 3rd argument is an expression:
+	let a = match iter.next() { None=>return r, Some(a)=>a };
+	let b: syn::Expr = syn::parse2(a).expect("an expression");
+	r.push(AttrArg::from(b));
+
+	return r
 }
 
 #[proc_macro_derive(Pack, attributes(header))]
@@ -153,15 +191,15 @@ struct RowCurrent {
 
 #[proc_macro_derive(Table, attributes(column,no_column))]
 pub fn derive_row(tokens: TokenStream) -> TokenStream {
-	use proc_macro2::Literal;
+	use pm2::Literal;
 	let (ident, flist) = read_struct_fields(parse_macro_input!(tokens));
-	let mut fields2 = Vec::<(String, String, String)>::new();
+	let mut fields2 = Vec::<(String, syn::Type, String)>::new();
 	let mut schema = TS2::new();
 	let mut params = TS2::new();
 	let mut build = TS2::new();
 	let mut ncol = 0usize;
-	let mut add_schema = |fieldname: &str, fieldtype: &str, extra: &str| {
-		let ty = proc_macro2::Ident::new(fieldtype, Span::call_site());
+	let ty_i64: syn::Type = syn::parse_str("i64").unwrap();
+	let mut add_schema = |fieldname: &str, ty: &syn::Type, extra: &str| {
 		quote!{ crate::database::Column {
 			fieldname: #fieldname,
 			fieldtype: <#ty as crate::database::SqlType>::SQL_TYPE,
@@ -181,27 +219,26 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 			continue
 		}
 		let fieldname = ident.as_ref().unwrap().to_string();
-		let fieldtype = toks_to_string(&ty);
-		add_schema(fieldname.as_str(), fieldtype.as_str(), current.extra.as_str());
+// 		let fieldtype = toks_to_string(&ty);
+		add_schema(fieldname.as_str(), &ty, current.extra.as_str());
 		quote!{ self.#ident, }.to_tokens(&mut params);
-		quote!{ #ident: row.get_unwrap::<_,#ty>(#ncol), }.to_tokens(&mut build);
+		quote!{ #ident: row.get::<_,#ty>(#ncol)?, }.to_tokens(&mut build);
 		ncol+= 1;
 	}
 	let mut key_in = TS2::new();
 	let mut keycol_in = 0;
 	let mut key_out = TS2::new();
 	let mut build2 = TS2::new();
-	for (fieldname, fieldtype, extra) in fields2 {
-		if fieldtype == "auto" {
+	for (fieldname, ty, extra) in fields2 {
+		if toks_to_string(&ty) == "auto" {
 			// we use i64 since this is the return type of last_insert_rowid()
-			add_schema(fieldname.as_str(), "i64", extra.as_str());
+			add_schema(fieldname.as_str(), &ty_i64, extra.as_str());
 			quote!{ crate::rusqlite::types::Null, }.to_tokens(&mut params);
-			quote!{ row.get_unwrap::<_,i64>(#ncol), }.to_tokens(&mut build2);
+			quote!{ row.get::<_,i64>(#ncol)?, }.to_tokens(&mut build2);
 			quote!{ i64, }.to_tokens(&mut key_out);
 		} else {
-			add_schema(fieldname.as_str(), fieldtype.as_str(), extra.as_str());
-			let kc = proc_macro2::Literal::isize_unsuffixed(keycol_in);
-			let ty = proc_macro2::Ident::new(fieldtype.as_str(), Span::call_site());
+			add_schema(fieldname.as_str(), &ty, extra.as_str());
+			let kc = pm2::Literal::isize_unsuffixed(keycol_in);
 			quote!{ #ty, }.to_tokens(&mut key_in);
 			quote!{ k.#kc, }.to_tokens(&mut params);
 			quote!{ #ty, }.to_tokens(&mut key_out);
@@ -219,17 +256,17 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 				fn execute(&self, s: &mut crate::rusqlite::Statement, k: &Self::KeyIn) {
 					s.execute(rusqlite::params![#params]).unwrap();
 				}
-				fn read(row: &crate::rusqlite::Row)->(Self, Self::KeyOut) {
-					(Self{ #build }, (#build2))
+				fn read(row: &crate::rusqlite::Row)->crate::rusqlite::Result<(Self, Self::KeyOut)> {
+					Ok((Self{ #build }, (#build2)))
 				}
 		}
 	};
 	println!("\x1b[36m{}\x1b[m", code);
 	TokenStream::from(code)
 } // Table
-fn row_attr_column(fields2: &mut Vec<(String,String,String)>, current: &mut RowCurrent, args: &[AttrArg]) {
-	use AttrArg::{Ident, Str};
-	println!("got column with {} fields: {args:?}", args.len());
+fn row_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut RowCurrent, args: &[AttrArg]) {
+	use AttrArg::{Ident, Str, Type};
+// 	println!("got column with {} fields: {args:?}", args.len());
 // 	for (i, name) in args.iter().enumerate() {
 // 		println!("  arg {i} = \x1b[32m{name:?}\x1b[m");
 // 	}
@@ -240,10 +277,10 @@ fn row_attr_column(fields2: &mut Vec<(String,String,String)>, current: &mut RowC
 				println!("\x1b[31mdon't know what to do with identifier: {i}\x1b[m");
 			},
 		[ Str(s), ] => current.extra = s.to_owned(),
-		[ Ident(i), Ident(t), Str(s) ] =>
-			fields2.push((i.to_owned(), t.to_owned(), s.to_owned())),
-		[ Ident(i), Ident(t) ] =>
-			fields2.push((i.to_owned(), t.to_owned(), "".to_owned())),
+		[ Ident(i), Type(t), Str(s) ] =>
+			fields2.push((i.to_owned(), t.clone(), s.to_owned())),
+		[ Ident(i), Type(t) ] =>
+			fields2.push((i.to_owned(), t.clone(), "".to_owned())),
 		_ => (),
 	}
 }

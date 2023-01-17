@@ -361,12 +361,12 @@ impl<'a> Schema<'a> {
 	}
 	pub fn compile_query(&self, name: &str, condition: &str)->String {
 		use std::fmt::Write;
-		let mut select = String::from(format!(r#"select\n  "#));
+		let mut select = String::from("select\n  ");
 		let mut source = String::from("\nfrom (select\n  ");
 		let mut isfirst = true;
 		#[inline] fn trans(dest: &mut String, what: &str, f: &str) {
 			write!(dest, r#""{f}", (select "{what}" from "{what}_dict" as "o"
-			where "o"."key" = "s"."{f}" as "trans_{f}""#).unwrap();
+			where "o"."key" = "s"."{f}") as "trans_{f}""#).unwrap();
 		}
 		for (i, Column {fieldname: f,fieldtype,..}) in self.fields.iter().enumerate() {
 			if !isfirst {
@@ -376,12 +376,14 @@ impl<'a> Schema<'a> {
 			match fieldtype {
 		FieldType::Resref => {
 			trans(&mut source, "resref", f);
-			write!(&mut select, r#""{f}" as "a_{f}", "trans_{f}",
+// 			"{f}" as "a_{f}", "trans_{f}",
+			write!(&mut select, r#"
 			case when exists (select 1 from "resref_orig" as "o" where "o"."resref" = "t"."{f}") then "{f}" else "trans_{f}" end as "{f}""#).unwrap();
 		},
 		FieldType::Strref => {
 			trans(&mut source, "strref", f);
-			write!(&mut select, r#""{f}" as "a_{f}", "trans_{f}",
+ //"{f}" as "a_{f}", "trans_{f}",
+			write!(&mut select, r#"
 			case when typeof("{f}") == 'integer' then "{f}" else ifnull("trans_{f}", "{f}") end as "{f}""#).unwrap();
 		},
 		x => {
@@ -395,9 +397,18 @@ impl<'a> Schema<'a> {
 	}
 }
 pub trait SqlType { const SQL_TYPE: FieldType; }
-impl<T> SqlType for T where T: num::Integer {
-	const SQL_TYPE: FieldType = FieldType::Integer;
+impl<T> SqlType for Option<T> where T: SqlType {
+	const SQL_TYPE: FieldType = T::SQL_TYPE;
 }
+macro_rules! sqltype_int {
+	($($T:ty),*) => { $(impl SqlType for $T {
+		const SQL_TYPE: FieldType = FieldType::Integer;
+	})* }
+}
+sqltype_int!{i8,i16,i32,i64,u8,u16,u32,u64}
+// impl<T> SqlType for T where T: num::Integer {
+// 	const SQL_TYPE: FieldType = FieldType::Integer;
+// }
 impl SqlType for crate::gameindex::Strref {
 	const SQL_TYPE: FieldType = FieldType::Strref;
 }
@@ -427,7 +438,7 @@ pub trait Table: Sized {
 	type KeyOut;
 	const SCHEMA: Schema<'static>;
 	fn execute(&self, s: &mut Statement, key: &Self::KeyIn);
-	fn read(r: &Row)->(Self, Self::KeyOut);
+	fn read(r: &Row)->rusqlite::Result<(Self, Self::KeyOut)>;
 }
 pub trait Exec { fn exec(&self, s: impl AsRef<str>); }
 impl Exec for Connection {
@@ -481,7 +492,6 @@ impl<'a> ResourceView<'a> {
 		}
 		let mut newcols = String::new();
 		schema.write_columns_pre(&mut newcols, "new.");
-		println!("newcols={newcols}");
 		let trig = String::from(format!(
 	r#"create trigger "insert_{name}"
 	instead of insert on "{name}"
@@ -511,6 +521,9 @@ impl<'a> ResourceView<'a> {
 	}
 	pub fn find_dirty(&self, db: &'a Connection)->Statement {
 		let ResourceView { name, schema, dirtykey, dirtyname } = self;
+		let s = schema.compile_query(name,
+		&String::from(format!(r#"where exists (select 1 from "dirty_{dirtyname}" where "name" = "s"."{dirtykey}")"#)));
+		println!("{}", s);
 		db.prepare(&schema.compile_query(name,
 		&String::from(format!(r#"where exists (select 1 from "dirty_{dirtyname}" where "name" = "s"."{dirtykey}")"#)))).unwrap()
 	}
@@ -582,12 +595,12 @@ constants::RESTYPE_ITM => {
 	let item = Item::unpack(&mut cursor).unwrap();
 	item.execute(&mut items, &(resref,));
 
-// 	cursor.seek(SeekFrom::Start(item.abilities_offset as u64)).unwrap();
+	cursor.seek(SeekFrom::Start(item.abilities_offset as u64)).unwrap();
 // 	let mut ab_n = Vec::<u16>::with_capacity(item.abilities_count as usize);
 // 	let mut ab_i = Vec::<i64>::with_capacity(item.abilities_count as usize);
 // 	for i in 0..item.abilities_count {
 // 		let ab = ItemAbility::unpack(&mut cursor).unwrap();
-// 		ab.execute(&mut item_abilities, &(resref,));
+// 		ab.execute(&mut item_abilities, &(Some(resref),));
 // 		ab_n.push(ab.effect_count);
 // 		ab_i.push(db.last_insert_rowid());
 // 	}
@@ -603,7 +616,7 @@ constants::RESTYPE_ITM => {
 // 			eff.execute(&mut item_effects, &(resref, ab_i[i]));
 // 		}
 // 	}
-// 
+
 		},
 		_ => {
 		},
@@ -614,9 +627,20 @@ constants::RESTYPE_ITM => {
 fn save(db: &Connection, game: &GameIndex) {
 	// save items
 	let mut s = RESOURCES.items.find_dirty(&db);
-	while let Some(row) = s.query(()).unwrap().next().unwrap() {
-		let (item, (itemref,)) = Item::read(&row);
-		println!("modified item: {itemref}");
+	let mut q = s.query(()).unwrap();
+	let mut i = 0;
+	while let Some(row) = q.next().unwrap() {
+// 		let x = Item::read(&row);
+		i+= 1;
+		println!("(i={i} field 30 is {:?}", row.get::<_,String>(30));
+		if i > 3 { break }
+// 		if x.is_err() { println!("bad item!");
+			for i in 0..31 {
+				println!("  field {i} as string: {:?}", row.get::<_,String>(i));
+			}
+// 		continue }
+// 		let (item, (itemref,)) = x.unwrap();
+// 		println!("modified item: {itemref}");
 	}
 }
 
@@ -628,5 +652,16 @@ fn main() -> io::Result<()> {
 // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
 	let db = create_db(&DB_FILE);
 	populate(&db, &game);
+	db.execute_batch(r#"
+-- update "items" set price=5 where itemref='sw1h01';
+insert into "items" ("itemref", "name", "replacement") values
+("New Item!", "New Item name!", "Replacement");
+insert into "resref_dict" values
+("New Item!", "NEWITEM"),
+("Replacement", "REPLAC");
+insert into "strref_dict" values
+("New Item name!", 35001);
+	"#).unwrap();
+	save(&db, &game);
 	Ok(())
 }
