@@ -1,5 +1,6 @@
-use crate::{Resref,Strref,Pack,Row};
-#[derive(Debug,Pack,Row)] pub struct ItemEffect {
+use crate::{Resref,Strref,Pack,Table};
+/*
+#[derive(Debug,Pack,Table)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
 #[column(abref, i64, r#"references "item_abilities"("abref")"#)]
 	opcode: u16, //opcode,
@@ -19,7 +20,7 @@ use crate::{Resref,Strref,Pack,Row};
 	saving_throw_bonus: i32,
 	stacking_id: u32,
 }
-#[derive(Debug,Pack,Row)] pub struct ItemAbility {
+#[derive(Debug,Pack,Table)] pub struct ItemAbility {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
 #[column(abref, auto, "primary key")]
 	attack_type: u8, // AttackType,
@@ -54,7 +55,8 @@ use crate::{Resref,Strref,Pack,Row};
 	is_bolt: u16,
 	is_bullet: u16,
 }
-#[derive(Debug,Pack,Row)] pub struct Item {
+*/
+#[derive(Debug,Pack,Table)] pub struct Item {
 #[header("ITM V1  ")]
 #[column(itemref, Resref, "primary key")]
 	unidentified_name: Strref,

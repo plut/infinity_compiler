@@ -151,13 +151,15 @@ struct RowCurrent {
 	no_column: bool,
 }
 
-#[proc_macro_derive(Row, attributes(column,no_column))]
+#[proc_macro_derive(Table, attributes(column,no_column))]
 pub fn derive_row(tokens: TokenStream) -> TokenStream {
 	use proc_macro2::Literal;
 	let (ident, flist) = read_struct_fields(parse_macro_input!(tokens));
 	let mut fields2 = Vec::<(String, String, String)>::new();
 	let mut schema = TS2::new();
 	let mut params = TS2::new();
+	let mut build = TS2::new();
+	let mut ncol = 0usize;
 	let mut add_schema = |fieldname: &str, fieldtype: &str, extra: &str| {
 		let ty = proc_macro2::Ident::new(fieldtype, Span::call_site());
 		quote!{ crate::database::Column {
@@ -174,41 +176,57 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 // 				"no_column" => no_column = true,
 				_ => () }
 		}
-		if current.no_column { continue }
+		if current.no_column {
+			quote!{ #ident: #ty::default(), }.to_tokens(&mut build);
+			continue
+		}
 		let fieldname = ident.as_ref().unwrap().to_string();
 		let fieldtype = toks_to_string(&ty);
 		add_schema(fieldname.as_str(), fieldtype.as_str(), current.extra.as_str());
 		quote!{ self.#ident, }.to_tokens(&mut params);
+		quote!{ #ident: row.get_unwrap::<_,#ty>(#ncol), }.to_tokens(&mut build);
+		ncol+= 1;
 	}
 	let mut key_in = TS2::new();
 	let mut keycol_in = 0;
+	let mut key_out = TS2::new();
+	let mut build2 = TS2::new();
 	for (fieldname, fieldtype, extra) in fields2 {
 		if fieldtype == "auto" {
 			// we use i64 since this is the return type of last_insert_rowid()
 			add_schema(fieldname.as_str(), "i64", extra.as_str());
 			quote!{ crate::rusqlite::types::Null, }.to_tokens(&mut params);
+			quote!{ row.get_unwrap::<_,i64>(#ncol), }.to_tokens(&mut build2);
+			quote!{ i64, }.to_tokens(&mut key_out);
 		} else {
 			add_schema(fieldname.as_str(), fieldtype.as_str(), extra.as_str());
 			let kc = proc_macro2::Literal::isize_unsuffixed(keycol_in);
 			let ty = proc_macro2::Ident::new(fieldtype.as_str(), Span::call_site());
 			quote!{ #ty, }.to_tokens(&mut key_in);
 			quote!{ k.#kc, }.to_tokens(&mut params);
+			quote!{ #ty, }.to_tokens(&mut key_out);
+			quote!{ row.get_unwrap::<_,#ty>(#ncol), }.to_tokens(&mut build2);
 			keycol_in+= 1;
 		}
+		ncol+= 1;
 	}
 	let code = quote! {
-		impl crate::database::Row for #ident {
+		impl crate::database::Table for #ident {
 			type KeyIn = (#key_in);
+			type KeyOut = (#key_out);
 			const SCHEMA: crate::database::Schema<'static> =
 				crate::database::Schema { fields: &[#schema] };
 				fn execute(&self, s: &mut crate::rusqlite::Statement, k: &Self::KeyIn) {
 					s.execute(rusqlite::params![#params]).unwrap();
 				}
+				fn read(row: &crate::rusqlite::Row)->(Self, Self::KeyOut) {
+					(Self{ #build }, (#build2))
+				}
 		}
 	};
-// 	println!("\x1b[36m{}\x1b[m", code);
+	println!("\x1b[36m{}\x1b[m", code);
 	TokenStream::from(code)
-} // Row
+} // Table
 fn row_attr_column(fields2: &mut Vec<(String,String,String)>, current: &mut RowCurrent, args: &[AttrArg]) {
 	use AttrArg::{Ident, Str};
 	println!("got column with {} fields: {args:?}", args.len());
