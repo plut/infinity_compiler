@@ -14,15 +14,14 @@ mod gameindex {
 ///  - `Pack` trait;
 ///  - `Resref`, `Strref` basic types;
 ///  - `Gameindex` type and iterator.
-extern crate rusqlite;
 use macros::Pack;
 use std::cmp::min;
 use std::fmt;
 use std::fmt::{Display,Debug,Formatter};
 use std::fs::File;
-use std::io;
-use std::io::{Read, Write, Seek, SeekFrom, BufReader, Cursor};
+use std::io::{self, Read, Write, Seek, SeekFrom, BufReader, Cursor};
 use std::path::{Path, PathBuf};
+use anyhow::{Result, Context};
 
 #[derive(Clone,Copy)]
 pub struct StaticString<const N: usize>{ bytes: [u8; N], }
@@ -166,25 +165,32 @@ impl BifIndex {
 	pub resources: Vec<KeyRes>,
 }
 
-fn gameindex_from<'a>(gamedir: &'a str)->io::Result<GameIndex<'a>> {
-	let gameindex = Path::new(&gamedir).join("chitin.key");
-	let mut f = File::open(gameindex)?;
-	let hdr = KeyHdr::unpack(&mut f)?;
-	let bifentries = KeyBif::vecunpack(&mut f, hdr.nbif as usize)?;
-	let mut bifnames = Vec::<String>::new();
-	let mut bifsizes = Vec::<u32>::new();
-	for KeyBif{offset, namelength, filelength, ..} in bifentries {
-		f.seek(SeekFrom::Start(offset as u64))?;
-		let buf = KeyBif::read_bytes(&mut f, namelength as usize - 1)?;
-		bifnames.push(String::from_utf8(buf).unwrap());
-		bifsizes.push(filelength);
-	};
-	f.seek(SeekFrom::Start(hdr.resoffset as u64))?;
-	let resources = <KeyRes>::vecunpack(&mut f, hdr.nres as usize)?;
-	Ok(GameIndex{ gamedir, bifnames, resources, bifsizes })
-}
-impl<'a> From<&'a str> for GameIndex<'a> {
-	fn from(dir: &'a str)->Self { gameindex_from(dir).unwrap() }
+impl<'a> GameIndex<'a> {
+	pub fn open(gamedir: &'a str)->Result<Self> {
+		let indexfile = Path::new(&gamedir).join("chitin.key");
+		let mut f = File::open(&indexfile)
+			.with_context(|| format!("cannot open game index: {}",
+				indexfile.to_str().unwrap()))?;
+		let hdr = KeyHdr::unpack(&mut f)
+			.with_context(|| format!("bad KEY header in file: {}",
+				indexfile.to_str().unwrap()))?;
+		let bifentries = KeyBif::vecunpack(&mut f, hdr.nbif as usize)
+			.with_context(|| format!("could not read {} BIF entries in file: {}",
+				hdr.nbif, indexfile.to_str().unwrap()))?;
+		let mut bifnames = Vec::<String>::new();
+		let mut bifsizes = Vec::<u32>::new();
+		for KeyBif{offset, namelength, filelength, ..} in bifentries {
+			f.seek(SeekFrom::Start(offset as u64))?;
+			let buf = KeyBif::read_bytes(&mut f, namelength as usize - 1)?;
+			bifnames.push(String::from_utf8(buf)?);
+			bifsizes.push(filelength);
+		};
+		f.seek(SeekFrom::Start(hdr.resoffset as u64))?;
+		let resources = <KeyRes>::vecunpack(&mut f, hdr.nres as usize)
+			.with_context(|| format!("could not read {} BIF resources in file: {}",
+				hdr.nres, indexfile.to_str().unwrap()))?;
+		Ok(GameIndex{ gamedir, bifnames, resources, bifsizes })
+	}
 }
 #[derive(Debug)] pub struct GameIndexItr<'a> {
 	index: &'a GameIndex<'a>,
@@ -220,20 +226,20 @@ pub struct ResHandle<'a> {
 	restype: Restype,
 }
 impl<'a> ResHandle<'a> {
-	pub fn open(&mut self)->io::Cursor<Vec<u8>> {
-		biffile(&mut self.bif, self.path).unwrap();
+	pub fn open(&mut self)->Result<io::Cursor<Vec<u8>>> {
+		biffile(&mut self.bif, self.path)?;
 		let biffile = self.bif.as_mut().unwrap();
 		let j = self.location.resourceindex();
 		let BifResource{ offset, size, restype, .. } = &biffile.resources[j];
 		assert_eq!(restype, &self.restype);
-		biffile.buf.seek(SeekFrom::Start(*offset as u64)).unwrap();
-		Cursor::new(BifHdr::read_bytes(&mut biffile.buf, *size as usize).unwrap())
+		biffile.buf.seek(SeekFrom::Start(*offset as u64))?;
+		Ok(Cursor::new(BifHdr::read_bytes(&mut biffile.buf, *size as usize)?))
 	}
 }
 
 impl<'a> GameIndex<'a> {
-	pub fn for_each<F>(&self, mut f: F)->io::Result<()>
-	where F: (FnMut(Resref, Restype, ResHandle)->()) {
+	pub fn for_each<F>(&self, mut f: F)->Result<()>
+	where F: (FnMut(Resref, Restype, ResHandle)->Result<()>) {
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
 			let path = Path::new(self.gamedir).join(filename);
 			let mut bif = Option::<BifFile>::default();
@@ -241,7 +247,7 @@ impl<'a> GameIndex<'a> {
 				let rread = ResHandle{ bif: &mut bif, path: &path,
 					location: res.location, restype: res.restype, };
 				if res.location.sourcefile() != sourcefile { continue }
-				f(res.resref, res.restype, rread)
+				f(res.resref, res.restype, rread)?
 			}
 		}
 		Ok(())
@@ -285,49 +291,38 @@ mod database {
 ///  - `Table` trait: connect a structure to a SQL row;
 ///  - `Schema` type: description of a particular SQL table;
 ///  - `ResourceView` type: data associated with a game resource.
-extern crate num;
+use std::marker::PhantomData;
 use rusqlite::{Connection, Statement, ToSql};
 use rusqlite::types::{FromSql, ValueRef};
 use crate::{Resref,Strref,gameindex::StaticString};
-pub struct NamedRows<'a> {
-	/// An enriched version of `rusqlite::Row`, retaining information about
-	/// the columns of the query, as well as current row index.
-	/// This also behaves as an `Iterator` (panicking when the underlying
-	/// `Row` iterator fails).
-	rows: rusqlite::Rows<'a>,
-	cols: Vec<String>,
+use anyhow::{Context,Result};
+pub trait ConnectionExt {
+	fn exec(&self, s: impl AsRef<str>)->Result<()>;
 }
-pub struct NamedRow<'a,'b> {
-	pub row: &'a rusqlite::Row<'b>,
-	cols: &'a Vec<String>,
-	index: usize,
+impl ConnectionExt for Connection {
+	fn exec(&self, s: impl AsRef<str>)->Result<()> {
+		self.execute(s.as_ref(), ())?; Ok(())
+	}
 }
-pub trait AsRows {
-	fn as_rows<'a,T>(&'a mut self, params: T) ->NamedRows<'a> where T: rusqlite::Params;
+pub trait StatementExt {
+	fn as_table<'a,T: Table, P: rusqlite::Params>(&'a mut self, params: P)->RowsAsTable<'a, T>;
 }
-impl<'b> AsRows for Statement<'b> {
-	fn as_rows<'a,T>(&'a mut self, params: T)->NamedRows<'a> where T: rusqlite::Params {
-		let cols = self.column_names().into_iter().map(|x| x.to_owned())
-			.collect::<Vec<_>>();
+impl<'b> StatementExt for Statement<'b> {
+	fn as_table<'a,T: Table, P: rusqlite::Params>(&'a mut self, params: P)->RowsAsTable<'a, T> {
+// 		let cols = self.column_names().into_iter().map(|x| x.to_owned())
+// 			.collect::<Vec<_>>();
 		let rows = self.query(params).unwrap();
-		NamedRows { rows, cols }
+		RowsAsTable { rows, phantom: PhantomData::<T>, index: 0 }
 	}
 }
-impl<'a> NamedRows<'a> {
-	pub fn for_each(&mut self, f: impl Fn(&mut NamedRow)->()) {
-		let mut index = 0;
-		while let Some(row) = self.rows.next().unwrap() {
-			index+= 1;
-			f(&mut NamedRow { row, cols: &self.cols, index });
-		}
-	}
+pub trait RowExt {
+	fn dump(&self);
 }
-impl<'a,'b> NamedRow<'a,'b> {
-	pub fn dump(&self) {
-		println!("Row at index {}:", self.index);
-		for (i, c) in self.cols.iter().enumerate() {
+impl<'a> RowExt for rusqlite::Row<'a> {
+	fn dump(&self) {
+		for (i, c) in self.as_ref().column_names().iter().enumerate() {
 			use rusqlite::types::ValueRef::*;
-			match self.row.get_ref(i) {
+			match self.get_ref(i) {
 				Ok(Null) => println!("  [{i:3}] {c} = \x1b[31mNull\x1b[m"),
 				Ok(Text(s)) => println!("  [{i:3}] {c} = Text(\"{}\")",
 					std::str::from_utf8(s).unwrap()),
@@ -335,6 +330,53 @@ impl<'a,'b> NamedRow<'a,'b> {
 				_ => break
 			}
 		}
+	}
+}
+
+pub struct RowsAsTable<'stmt,T: Table> {
+	/// An enriched version of `rusqlite::Rows`, retaining information about
+	/// the columns of the query, as well as current row index.
+	/// This also behaves as an `Iterator` (panicking when the underlying
+	/// `Row` iterator fails).
+	rows: rusqlite::Rows<'stmt>,
+	phantom: PhantomData<T>,
+	index: usize,
+}
+impl<'stmt,T: Table> RowsAsTable<'stmt, T> {
+	pub fn dump<'b>(&self, row: &rusqlite::Row<'b>) {
+		println!("Row at index {}:", self.index);
+		for (i, c) in self.rows.as_ref().unwrap().column_names().iter().enumerate() {
+			use rusqlite::types::ValueRef::*;
+			match row.get_ref(i) {
+				Ok(Null) => println!("  [{i:3}] {c} = \x1b[31mNull\x1b[m"),
+				Ok(Text(s)) => println!("  [{i:3}] {c} = Text(\"{}\")",
+					std::str::from_utf8(s).unwrap()),
+				Ok(x) => println!("  [{i:3}] {c} = {x:?}"),
+				_ => break
+			}
+		}
+	}
+}
+impl<'stmt,T: Table> Iterator for RowsAsTable<'stmt,T> {
+	type Item = Result<(T, T::KeyOut)>;
+	fn next(&mut self)->Option<Self::Item> {
+		loop {
+			let row = match self.rows.next() {
+				Ok(Some(row)) => row,
+				Ok(None) => break,
+				Err(e) => return Some(Err(e.into()))
+			};
+			self.index+= 1;
+			let t = T::read(&row);
+			if t.is_err() {
+				println!("cannot read a {} from row {}", std::any::type_name::<T>(),
+					self.index);
+				row.dump();
+				continue
+			}
+			return Some(Ok(t.unwrap()))
+		}
+		None
 	}
 }
 
@@ -404,8 +446,9 @@ impl<'a> Schema<'a> {
 		write!(&mut s, "\nfrom \"{name}\" ").unwrap();
 		s
 	}
-	pub fn insert<'b>(&'b self, db: &'b Connection, name: &str)->Statement {
-		db.prepare(self.insert_query(name).as_ref()).unwrap()
+	pub fn insert<'b>(&'b self, db: &'b Connection, name: &str)->Result<Statement> {
+		db.prepare(self.insert_query(name).as_ref())
+		.map_err(|e| e.into())
 	}
 	pub fn compile_query(&self, name: &str, condition: &str)->String {
 		use std::fmt::Write;
@@ -485,20 +528,8 @@ pub trait Table: Sized {
 	type KeyIn;
 	type KeyOut;
 	const SCHEMA: Schema<'static>;
-	fn execute(&self, s: &mut Statement, key: &Self::KeyIn);
+	fn execute(&self, s: &mut Statement, key: &Self::KeyIn)->rusqlite::Result<()>;
 	fn read(r: &rusqlite::Row)->rusqlite::Result<(Self, Self::KeyOut)>;
-
-	fn readn(r: &NamedRow)->Option<(Self, Self::KeyOut)> {
-		if let Ok(x) = Self::read(&r.row) { return Some(x) }
-		println!("Cannot read a {} from the following row:",
-			std::any::type_name::<Self>());
-		r.dump();
-		None
-	}
-}
-pub trait Exec { fn exec(&self, s: impl AsRef<str>); }
-impl Exec for Connection {
-	fn exec(&self, s: impl AsRef<str>) { self.execute(s.as_ref(), ()).unwrap(); }
 }
 #[derive(Debug)] pub struct ResourceView<'a> {
 	pub name: &'a str,
@@ -507,13 +538,13 @@ impl Exec for Connection {
 	pub dirtyname: &'a str,
 }
 impl<'a> ResourceView<'a> {
-	pub fn create(&self, db: &Connection) {
+	pub fn create(&self, db: &Connection)->Result<()> {
 		let ResourceView { name, schema, dirtykey, dirtyname } = self;
 		use std::fmt::Write;
-		db.exec(schema.create_query(format!("res_{name}").as_str(), ""));
+		db.exec(schema.create_query(format!("res_{name}").as_str(), ""))?;
 		db.exec(schema.create_query(format!("add_{name}").as_str(),
-			r#", "source" text"#));
-		db.exec(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str());
+			r#", "source" text"#))?;
+		db.exec(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str())?;
 		let mut cols = String::new(); schema.write_columns(&mut cols);
 		let key = schema.primary_key().unwrap_or("rowid");
 		{ // create main view
@@ -528,10 +559,10 @@ impl<'a> ResourceView<'a> {
 			}
 		}
 		write!(&mut view, r#" from "u""#).unwrap();
-		db.exec(view);
+		db.exec(view)?;
 		}
 		let dirtytable = String::from(format!("dirty_{dirtyname}"));
-		db.exec(String::from(format!(r#"create table if not exists "{dirtytable}" ("name" text primary key)"#)));
+		db.exec(String::from(format!(r#"create table if not exists "{dirtytable}" ("name" text primary key)"#)))?;
 		for (i, Column {fieldname, ..}) in schema.fields.iter().enumerate() {
 			if *fieldname == key { continue }
 			let trig = String::from(format!(
@@ -544,7 +575,7 @@ impl<'a> ResourceView<'a> {
 			((select "component" from "current"), new."{key}", '{fieldname}',
 			new."{fieldname}");
 	end"#));
-			db.exec(trig);
+			db.exec(trig)?;
 		}
 		let mut newcols = String::new();
 		schema.write_columns_pre(&mut newcols, "new.");
@@ -555,7 +586,7 @@ impl<'a> ResourceView<'a> {
 		insert into "add_{name}" ({cols}) values ({newcols});
 		insert or ignore into "{dirtytable}" values (new."{dirtykey}");
 	end"#));
-		db.exec(trig);
+		db.exec(trig)?;
 		let trig = String::from(format!(
 	r#"create trigger "delete_{name}"
 	instead of delete on "{name}"
@@ -563,26 +594,29 @@ impl<'a> ResourceView<'a> {
 		insert or ignore into "{dirtytable}" values (old."{dirtykey}");
 		delete from "add_{name}" where "{key}" = old."{key}";
 	end"#));
-		db.exec(trig);
+		db.exec(trig)?;
 		let trig = String::from(format!(
 	r#"create trigger "unedit_{name}"
 	after delete on "edit_{name}"
 	begin
 		insert or ignore into "{dirtytable}" values (old."resource");
 	end"#));
-		db.exec(trig);
+		db.exec(trig)?;
+		Ok (())
 	}
-	pub fn insert(&self, db: &'a Connection)->Statement {
+	pub fn insert(&self, db: &'a Connection)->Result<Statement> {
 		self.schema.insert(&db, &String::from(format!("res_{}", self.name)))
 	}
-	pub fn find_dirty(&self, db: &'a Connection)->Statement {
+	pub fn find_dirty(&self, db: &'a Connection)->Result<Statement> {
 		let ResourceView { name, schema, dirtykey, dirtyname } = self;
-		db.prepare(&schema.compile_query(name,
-		&String::from(format!(r#"where exists (select 1 from "dirty_{dirtyname}" where "name" = "s"."{dirtykey}")"#)))).unwrap()
+		db.prepare(&schema.compile_query(name, &String::from(format!(
+		r#"where exists (select 1 from "dirty_{dirtyname}" where "name" = "s"."{dirtykey}")"#))))
+		.map_err(|e| e.into())
 	}
-	pub fn find_linked(&self, db: &'a Connection, field: &str)->Statement {
+	pub fn find_linked(&self, db: &'a Connection, field: &str)->Result<Statement> {
 		db.prepare(&self.schema.compile_query(self.name,
-		&String::from(format!(r#"where "{field}"=?"#)))).unwrap()
+		&String::from(format!(r#"where "{field}"=?"#))))
+		.map_err(|e| e.into())
 	}
 }
 macro_rules! resources {
@@ -597,23 +631,22 @@ macro_rules! resources {
 }
 pub(crate) use resources;
 } // mod resources
-extern crate rusqlite;
+
+pub use rusqlite;
 mod gametypes;
 mod constants;
 
-use database::{Table, ResourceView, Exec, AsRows, resources};
+use database::{Table, ResourceView, ConnectionExt, StatementExt, resources};
 use gameindex::{GameIndex, Pack, Strref, Resref};
 use gametypes::*;
 
-use std::any::type_name;
-fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
+fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 use std::path::Path;
-use std::io;
-use std::io::{Seek, SeekFrom};
+use std::io::{self, Seek, SeekFrom};
 use std::fmt::{Debug};
 use macros::{Pack, Table};
 use rusqlite::{Connection};
-
+pub(crate) use anyhow::{Context, Result};
 
 resources!{
 	items: Item, "itemref", "items";
@@ -621,55 +654,56 @@ resources!{
 	item_effects: ItemEffect, "itemref", "items";
 }
 
-fn create_db(db_file: &str)->Connection {
+fn create_db(db_file: &str)->Result<Connection> {
 	if Path::new(&db_file).exists() {
-		std::fs::remove_file(&db_file).unwrap();
+		std::fs::remove_file(&db_file)
+		.with_context(|| format!("cannot remove file: {}", db_file))?;
 	}
-	let db = Connection::open(&db_file).unwrap();
+	let db = Connection::open(&db_file)?;
 	db.execute_batch(r#"
 create table "current" ("component" text);
 create table "resref_orig" ("resref" text primary key);
 create table "resref_dict" ("key" text primary key, "resref" text);
 create table "strref_dict" ("key" text primary key, "strref" integer);
-	"#).unwrap();
-	RESOURCES.items.create(&db);
-	RESOURCES.item_abilities.create(&db);
-	RESOURCES.item_effects.create(&db);
-	db
+	"#)?;
+	RESOURCES.items.create(&db)?;
+	RESOURCES.item_abilities.create(&db)?;
+	RESOURCES.item_effects.create(&db)?;
+	Ok(db)
 }
-fn populate(db: &Connection, game: &GameIndex) {
-	db.exec("begin transaction");
-	let mut items = RESOURCES.items.insert(&db);
-	let mut resref_orig = db.prepare(r#"insert or ignore into "resref_orig" values (?)"#).unwrap();
-	let mut item_abilities = RESOURCES.item_abilities.insert(&db);
-	let mut item_effects = RESOURCES.item_effects.insert(&db);
+fn populate(db: &Connection, game: &GameIndex)->Result<()> {
+	db.exec("begin transaction")?;
+	let mut items = RESOURCES.items.insert(&db)?;
+	let mut resref_orig = db.prepare(r#"insert or ignore into "resref_orig" values (?)"#)?;
+	let mut item_abilities = RESOURCES.item_abilities.insert(&db)?;
+	let mut item_effects = RESOURCES.item_effects.insert(&db)?;
 	game.for_each(|resref, restype, mut handle| {
 		match restype {
 constants::RESTYPE_ITM => {
-	let mut cursor = handle.open();
-	let item = Item::unpack(&mut cursor).unwrap();
-	item.execute(&mut items, &(resref,));
-	resref_orig.insert((&resref,)).unwrap();
+	let mut cursor = handle.open()?;
+	let item = Item::unpack(&mut cursor)?;
+	item.execute(&mut items, &(resref,))?;
+	resref_orig.insert((&resref,))?;
 
-	cursor.seek(SeekFrom::Start(item.abilities_offset as u64)).unwrap();
+	cursor.seek(SeekFrom::Start(item.abilities_offset as u64))?;
 	let mut ab_n = Vec::<u16>::with_capacity(item.abilities_count as usize);
 	let mut ab_i = Vec::<i64>::with_capacity(item.abilities_count as usize);
 	for i in 0..item.abilities_count {
-		let ab = ItemAbility::unpack(&mut cursor).unwrap();
-		ab.execute(&mut item_abilities, &(Some(resref),));
+		let ab = ItemAbility::unpack(&mut cursor)?;
+		ab.execute(&mut item_abilities, &(Some(resref),))?;
 		ab_n.push(ab.effect_count);
 		ab_i.push(db.last_insert_rowid());
 	}
 	println!("inserting item {resref}: {ab_n:?} {ab_i:?}");
-	cursor.seek(SeekFrom::Start(item.effect_offset as u64)).unwrap();
+	cursor.seek(SeekFrom::Start(item.effect_offset as u64))?;
 	for j in 0..item.effect_count { // on-equip effects
-		let eff = ItemEffect::unpack(&mut cursor).unwrap();
-		eff.execute(&mut item_effects, &(resref, -1i64));
+		let eff = ItemEffect::unpack(&mut cursor)?;
+		eff.execute(&mut item_effects, &(resref, -1i64))?;
 	}
 	for (i, n) in ab_n.iter().enumerate() {
 		for j in 0..*n {
-			let eff = ItemEffect::unpack(&mut cursor).unwrap();
-			eff.execute(&mut item_effects, &(resref, ab_i[i]));
+			let eff = ItemEffect::unpack(&mut cursor)?;
+			eff.execute(&mut item_effects, &(resref, ab_i[i]))?;
 		}
 	}
 
@@ -677,41 +711,49 @@ constants::RESTYPE_ITM => {
 		_ => {
 		},
 		};
-	}).unwrap();
-	db.exec("commit");
+	Ok(()) })?;
+	db.exec("commit")?;
+	Ok(())
 }
-fn save(db: &Connection, game: &GameIndex) {
-	RESOURCES.items.find_dirty(&db).as_rows(()).for_each(|row| {
-		if let Some((itm, (itemref,))) = Item::readn(row) {
-			println!("got an item {itemref}");
-			RESOURCES.item_abilities.find_linked(&db, "itemref").as_rows((&itemref,)).for_each(|abrow| {
-				abrow.dump();
-		});
-		}
-	});
+fn save(db: &Connection, game: &GameIndex)->Result<()> {
+	for x in RESOURCES.items.find_dirty(&db)?.as_table::<Item,_>(()) {
+		let (itm, (itemref,)) = x?;
+		println!("got an item! {itemref}");
+	}
+// 	RESOURCES.items.find_dirty(&db).as_rows(()).for_each(|row| {
+// 		if let Some((itm, (itemref,))) = Item::readn(row) {
+// 			println!("got an item {itemref}");
+// 			RESOURCES.item_abilities.find_linked(&db, "itemref").as_rows((&itemref,)).for_each(|abrow| {
+// 				abrow.dump();
+// 		});
+// 		}
+// 	});
+	Ok(())
 }
 
 const DB_FILE: &str = "game.sqlite";
 
-fn main() -> io::Result<()> {
+fn main() -> Result<()> {
 	let gamedir = "/home/jerome/jeux/bg/game";
-	let game = GameIndex::from(gamedir);
+	let game = GameIndex::open(gamedir)
+		.with_context(|| format!("could not initialize game from directory {}",
+		gamedir))?;
 // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
-// 	let db = create_db(&DB_FILE);
-// 	populate(&db, &game);
-// 	db.execute_batch(r#"
-// update "items" set price=5 where itemref='sw1h01';
-// insert into "items" ("itemref", "name", "replacement") values
-// ("New Item!", "New Item name!", "Replacement");
-// insert into "resref_dict" values
-// ("New Item!", "NEWITEM"),
-// ("Replacement", "REPLAC");
-// insert into "strref_dict" values
-// ("New Item name!", 35001);
-// insert into "resref_orig" values
-// ("isw1h01"), ("gsw1h01"), ("csw1h01");
-// 	"#).unwrap();
-	let db = Connection::open(&DB_FILE).unwrap();
-	save(&db, &game);
+	let db = create_db(&DB_FILE)?;
+	populate(&db, &game)?;
+	db.execute_batch(r#"
+update "items" set price=5 where itemref='sw1h01';
+insert into "items" ("itemref", "name", "replacement") values
+("New Item!", "New Item name!", "Replacement");
+insert into "resref_dict" values
+("New Item!", "NEWITEM"),
+("Replacement", "REPLAC");
+insert into "strref_dict" values
+("New Item name!", 35001);
+insert into "resref_orig" values
+("isw1h01"), ("gsw1h01"), ("csw1h01");
+	"#)?;
+// 	let db = Connection::open(&DB_FILE)?;
+	save(&db, &game)?;
 	Ok(())
 }

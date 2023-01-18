@@ -253,8 +253,8 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 			type KeyOut = (#key_out);
 			const SCHEMA: crate::database::Schema<'static> =
 				crate::database::Schema { fields: &[#schema] };
-				fn execute(&self, s: &mut crate::rusqlite::Statement, k: &Self::KeyIn) {
-					s.execute(rusqlite::params![#params]).unwrap();
+				fn execute(&self, s: &mut crate::rusqlite::Statement, k: &Self::KeyIn)->crate::rusqlite::Result<()> {
+					s.execute(rusqlite::params![#params])?; Ok(())
 				}
 				fn read(row: &crate::rusqlite::Row)->crate::rusqlite::Result<(Self, Self::KeyOut)> {
 					Ok((Self{ #build }, (#build2)))
