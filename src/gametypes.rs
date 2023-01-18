@@ -1,5 +1,4 @@
 use crate::{Resref,Strref,Pack,Table};
-/*
 #[derive(Debug,Pack,Table)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
 #[column(abref, i64, r#"references "item_abilities"("abref")"#)]
@@ -55,7 +54,6 @@ use crate::{Resref,Strref,Pack,Table};
 	is_bolt: u16,
 	is_bullet: u16,
 }
-*/
 #[derive(Debug,Pack,Table)] pub struct Item {
 #[header("ITM V1  ")]
 #[column(itemref, Resref, "primary key")]

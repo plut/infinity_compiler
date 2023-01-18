@@ -261,7 +261,7 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 				}
 		}
 	};
-	println!("\x1b[36m{}\x1b[m", code);
+// 	println!("\x1b[36m{}\x1b[m", code);
 	TokenStream::from(code)
 } // Table
 fn row_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut RowCurrent, args: &[AttrArg]) {

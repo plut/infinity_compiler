@@ -170,7 +170,6 @@ fn gameindex_from<'a>(gamedir: &'a str)->io::Result<GameIndex<'a>> {
 	let gameindex = Path::new(&gamedir).join("chitin.key");
 	let mut f = File::open(gameindex)?;
 	let hdr = KeyHdr::unpack(&mut f)?;
-	println!("{hdr:?}");
 	let bifentries = KeyBif::vecunpack(&mut f, hdr.nbif as usize)?;
 	let mut bifnames = Vec::<String>::new();
 	let mut bifsizes = Vec::<u32>::new();
@@ -287,9 +286,58 @@ mod database {
 ///  - `Schema` type: description of a particular SQL table;
 ///  - `ResourceView` type: data associated with a game resource.
 extern crate num;
-use rusqlite::{Connection, Statement, ToSql, Row};
+use rusqlite::{Connection, Statement, ToSql};
 use rusqlite::types::{FromSql, ValueRef};
 use crate::{Resref,Strref,gameindex::StaticString};
+pub struct NamedRows<'a> {
+	/// An enriched version of `rusqlite::Row`, retaining information about
+	/// the columns of the query, as well as current row index.
+	/// This also behaves as an `Iterator` (panicking when the underlying
+	/// `Row` iterator fails).
+	rows: rusqlite::Rows<'a>,
+	cols: Vec<String>,
+}
+pub struct NamedRow<'a,'b> {
+	pub row: &'a rusqlite::Row<'b>,
+	cols: &'a Vec<String>,
+	index: usize,
+}
+pub trait AsRows {
+	fn as_rows<'a,T>(&'a mut self, params: T) ->NamedRows<'a> where T: rusqlite::Params;
+}
+impl<'b> AsRows for Statement<'b> {
+	fn as_rows<'a,T>(&'a mut self, params: T)->NamedRows<'a> where T: rusqlite::Params {
+		let cols = self.column_names().into_iter().map(|x| x.to_owned())
+			.collect::<Vec<_>>();
+		let rows = self.query(params).unwrap();
+		NamedRows { rows, cols }
+	}
+}
+impl<'a> NamedRows<'a> {
+	pub fn for_each(&mut self, f: impl Fn(&mut NamedRow)->()) {
+		let mut index = 0;
+		while let Some(row) = self.rows.next().unwrap() {
+			index+= 1;
+			f(&mut NamedRow { row, cols: &self.cols, index });
+		}
+	}
+}
+impl<'a,'b> NamedRow<'a,'b> {
+	pub fn dump(&self) {
+		println!("Row at index {}:", self.index);
+		for (i, c) in self.cols.iter().enumerate() {
+			use rusqlite::types::ValueRef::*;
+			match self.row.get_ref(i) {
+				Ok(Null) => println!("  [{i:3}] {c} = \x1b[31mNull\x1b[m"),
+				Ok(Text(s)) => println!("  [{i:3}] {c} = Text(\"{}\")",
+					std::str::from_utf8(s).unwrap()),
+				Ok(x) => println!("  [{i:3}] {c} = {x:?}"),
+				_ => break
+			}
+		}
+	}
+}
+
 #[derive(Debug,Clone,Copy)]
 pub enum FieldType { Integer, Text, Resref, Strref, Other }
 impl FieldType {
@@ -423,7 +471,7 @@ impl FromSql for crate::gameindex::Strref {
 impl SqlType for crate::gameindex::Resref {
 	const SQL_TYPE: FieldType = FieldType::Resref;
 }
-impl rusqlite::ToSql for crate::gameindex::Resref {
+impl ToSql for crate::gameindex::Resref {
 	fn to_sql<'a>(&'a self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.name.as_ref().to_sql() }
 }
 impl FromSql for crate::gameindex::Resref {
@@ -438,7 +486,15 @@ pub trait Table: Sized {
 	type KeyOut;
 	const SCHEMA: Schema<'static>;
 	fn execute(&self, s: &mut Statement, key: &Self::KeyIn);
-	fn read(r: &Row)->rusqlite::Result<(Self, Self::KeyOut)>;
+	fn read(r: &rusqlite::Row)->rusqlite::Result<(Self, Self::KeyOut)>;
+
+	fn readn(r: &NamedRow)->Option<(Self, Self::KeyOut)> {
+		if let Ok(x) = Self::read(&r.row) { return Some(x) }
+		println!("Cannot read a {} from the following row:",
+			std::any::type_name::<Self>());
+		r.dump();
+		None
+	}
 }
 pub trait Exec { fn exec(&self, s: impl AsRef<str>); }
 impl Exec for Connection {
@@ -521,9 +577,6 @@ impl<'a> ResourceView<'a> {
 	}
 	pub fn find_dirty(&self, db: &'a Connection)->Statement {
 		let ResourceView { name, schema, dirtykey, dirtyname } = self;
-		let s = schema.compile_query(name,
-		&String::from(format!(r#"where exists (select 1 from "dirty_{dirtyname}" where "name" = "s"."{dirtykey}")"#)));
-		println!("{}", s);
 		db.prepare(&schema.compile_query(name,
 		&String::from(format!(r#"where exists (select 1 from "dirty_{dirtyname}" where "name" = "s"."{dirtykey}")"#)))).unwrap()
 	}
@@ -548,7 +601,7 @@ extern crate rusqlite;
 mod gametypes;
 mod constants;
 
-use database::{Table, ResourceView, Exec, resources};
+use database::{Table, ResourceView, Exec, AsRows, resources};
 use gameindex::{GameIndex, Pack, Strref, Resref};
 use gametypes::*;
 
@@ -560,13 +613,12 @@ use std::io::{Seek, SeekFrom};
 use std::fmt::{Debug};
 use macros::{Pack, Table};
 use rusqlite::{Connection};
-use rusqlite::types::Null;
 
 
 resources!{
 	items: Item, "itemref", "items";
-// 	item_abilities: ItemAbility, "itemref", "items";
-// 	item_effects: ItemEffect, "itemref", "items";
+	item_abilities: ItemAbility, "itemref", "items";
+	item_effects: ItemEffect, "itemref", "items";
 }
 
 fn create_db(db_file: &str)->Connection {
@@ -574,48 +626,52 @@ fn create_db(db_file: &str)->Connection {
 		std::fs::remove_file(&db_file).unwrap();
 	}
 	let db = Connection::open(&db_file).unwrap();
-	db.exec(r#"create table "current" ("component" text)"#);
-	db.exec(r#"create table "resref_orig" ("resref" text primary key)"#);
-	db.exec(r#"create table "resref_dict" ("key" text primary key, "resref" text)"#);
-	db.exec(r#"create table "strref_dict" ("key" text primary key, "strref" integer)"#);
+	db.execute_batch(r#"
+create table "current" ("component" text);
+create table "resref_orig" ("resref" text primary key);
+create table "resref_dict" ("key" text primary key, "resref" text);
+create table "strref_dict" ("key" text primary key, "strref" integer);
+	"#).unwrap();
 	RESOURCES.items.create(&db);
-// 	RESOURCES.item_abilities.create(&db);
-// 	RESOURCES.item_effects.create(&db);
+	RESOURCES.item_abilities.create(&db);
+	RESOURCES.item_effects.create(&db);
 	db
 }
 fn populate(db: &Connection, game: &GameIndex) {
 	db.exec("begin transaction");
 	let mut items = RESOURCES.items.insert(&db);
-// 	let mut item_abilities = RESOURCES.item_abilities.insert(&db);
-// 	let mut item_effects = RESOURCES.item_effects.insert(&db);
+	let mut resref_orig = db.prepare(r#"insert or ignore into "resref_orig" values (?)"#).unwrap();
+	let mut item_abilities = RESOURCES.item_abilities.insert(&db);
+	let mut item_effects = RESOURCES.item_effects.insert(&db);
 	game.for_each(|resref, restype, mut handle| {
 		match restype {
 constants::RESTYPE_ITM => {
 	let mut cursor = handle.open();
 	let item = Item::unpack(&mut cursor).unwrap();
 	item.execute(&mut items, &(resref,));
+	resref_orig.insert((&resref,)).unwrap();
 
 	cursor.seek(SeekFrom::Start(item.abilities_offset as u64)).unwrap();
-// 	let mut ab_n = Vec::<u16>::with_capacity(item.abilities_count as usize);
-// 	let mut ab_i = Vec::<i64>::with_capacity(item.abilities_count as usize);
-// 	for i in 0..item.abilities_count {
-// 		let ab = ItemAbility::unpack(&mut cursor).unwrap();
-// 		ab.execute(&mut item_abilities, &(Some(resref),));
-// 		ab_n.push(ab.effect_count);
-// 		ab_i.push(db.last_insert_rowid());
-// 	}
-// 	println!("inserting item {resref}: {ab_n:?} {ab_i:?}");
-// 	cursor.seek(SeekFrom::Start(item.effect_offset as u64)).unwrap();
-// 	for j in 0..item.effect_count { // on-equip effects
-// 		let eff = ItemEffect::unpack(&mut cursor).unwrap();
-// 		eff.execute(&mut item_effects, &(resref, -1i64));
-// 	}
-// 	for (i, n) in ab_n.iter().enumerate() {
-// 		for j in 0..*n {
-// 			let eff = ItemEffect::unpack(&mut cursor).unwrap();
-// 			eff.execute(&mut item_effects, &(resref, ab_i[i]));
-// 		}
-// 	}
+	let mut ab_n = Vec::<u16>::with_capacity(item.abilities_count as usize);
+	let mut ab_i = Vec::<i64>::with_capacity(item.abilities_count as usize);
+	for i in 0..item.abilities_count {
+		let ab = ItemAbility::unpack(&mut cursor).unwrap();
+		ab.execute(&mut item_abilities, &(Some(resref),));
+		ab_n.push(ab.effect_count);
+		ab_i.push(db.last_insert_rowid());
+	}
+	println!("inserting item {resref}: {ab_n:?} {ab_i:?}");
+	cursor.seek(SeekFrom::Start(item.effect_offset as u64)).unwrap();
+	for j in 0..item.effect_count { // on-equip effects
+		let eff = ItemEffect::unpack(&mut cursor).unwrap();
+		eff.execute(&mut item_effects, &(resref, -1i64));
+	}
+	for (i, n) in ab_n.iter().enumerate() {
+		for j in 0..*n {
+			let eff = ItemEffect::unpack(&mut cursor).unwrap();
+			eff.execute(&mut item_effects, &(resref, ab_i[i]));
+		}
+	}
 
 		},
 		_ => {
@@ -625,23 +681,14 @@ constants::RESTYPE_ITM => {
 	db.exec("commit");
 }
 fn save(db: &Connection, game: &GameIndex) {
-	// save items
-	let mut s = RESOURCES.items.find_dirty(&db);
-	let mut q = s.query(()).unwrap();
-	let mut i = 0;
-	while let Some(row) = q.next().unwrap() {
-// 		let x = Item::read(&row);
-		i+= 1;
-		println!("(i={i} field 30 is {:?}", row.get::<_,String>(30));
-		if i > 3 { break }
-// 		if x.is_err() { println!("bad item!");
-			for i in 0..31 {
-				println!("  field {i} as string: {:?}", row.get::<_,String>(i));
-			}
-// 		continue }
-// 		let (item, (itemref,)) = x.unwrap();
-// 		println!("modified item: {itemref}");
-	}
+	RESOURCES.items.find_dirty(&db).as_rows(()).for_each(|row| {
+		if let Some((itm, (itemref,))) = Item::readn(row) {
+			println!("got an item {itemref}");
+			RESOURCES.item_abilities.find_linked(&db, "itemref").as_rows((&itemref,)).for_each(|abrow| {
+				abrow.dump();
+		});
+		}
+	});
 }
 
 const DB_FILE: &str = "game.sqlite";
@@ -650,18 +697,21 @@ fn main() -> io::Result<()> {
 	let gamedir = "/home/jerome/jeux/bg/game";
 	let game = GameIndex::from(gamedir);
 // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
-	let db = create_db(&DB_FILE);
-	populate(&db, &game);
-	db.execute_batch(r#"
--- update "items" set price=5 where itemref='sw1h01';
-insert into "items" ("itemref", "name", "replacement") values
-("New Item!", "New Item name!", "Replacement");
-insert into "resref_dict" values
-("New Item!", "NEWITEM"),
-("Replacement", "REPLAC");
-insert into "strref_dict" values
-("New Item name!", 35001);
-	"#).unwrap();
+// 	let db = create_db(&DB_FILE);
+// 	populate(&db, &game);
+// 	db.execute_batch(r#"
+// update "items" set price=5 where itemref='sw1h01';
+// insert into "items" ("itemref", "name", "replacement") values
+// ("New Item!", "New Item name!", "Replacement");
+// insert into "resref_dict" values
+// ("New Item!", "NEWITEM"),
+// ("Replacement", "REPLAC");
+// insert into "strref_dict" values
+// ("New Item name!", 35001);
+// insert into "resref_orig" values
+// ("isw1h01"), ("gsw1h01"), ("csw1h01");
+// 	"#).unwrap();
+	let db = Connection::open(&DB_FILE).unwrap();
 	save(&db, &game);
 	Ok(())
 }
