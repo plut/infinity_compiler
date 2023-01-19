@@ -16,8 +16,7 @@ mod gameindex {
 ///  - `Gameindex` type and iterator.
 use macros::Pack;
 use std::cmp::min;
-use std::fmt;
-use std::fmt::{Display,Debug,Formatter};
+use std::fmt::{self,Display,Debug,Formatter};
 use std::fs::File;
 use std::io::{self, Read, Write, Seek, SeekFrom, BufReader, Cursor};
 use std::path::{Path, PathBuf};
@@ -545,13 +544,24 @@ impl<'a> ResourceView<'a> {
 		}
 		let dirtytable = format!("dirty_{dirtyname}");
 		db.exec(format!(r#"create table if not exists "{dirtytable}" ("name" text primary key)"#))?;
-		for Column {fieldname, ..} in schema.fields.iter() {
+		let mut trans_edit = String::new();
+		for Column {fieldname, fieldtype, ..} in schema.fields.iter() {
+			// populate resref_dict or strref_dict as needed:
+			let trans = match fieldtype {
+			FieldType::Resref => format!(
+	r#"insert or ignore into "resref_dict" values (new."{fieldname}", null);"#),
+			FieldType::Strref => format!(
+	r#"insert or ignore into "strref_dict" values (new."{fieldname}", null);"#),
+			_ => String::new()
+			};
+			trans_edit.push_str(&trans);
 			if *fieldname == key { continue }
 			let trig = format!(
 	r#"create trigger "update_{name}_{fieldname}"
 	instead of update on "{name}" when new."{fieldname}" is not null
 		and new."{fieldname}" <> old."{fieldname}"
 	begin
+		{trans}
 		insert or ignore into "{dirtytable}" values (new."{dirtykey}");
 		insert into "edit_{name}" ("source", "resource", "field", "value") values
 			((select "component" from "current"), new."{key}", '{fieldname}',
@@ -565,6 +575,7 @@ impl<'a> ResourceView<'a> {
 	r#"create trigger "insert_{name}"
 	instead of insert on "{name}"
 	begin
+		{trans_edit}
 		insert into "add_{name}" ({cols}) values ({newcols});
 		insert or ignore into "{dirtytable}" values (new."{dirtykey}");
 	end"#);
@@ -632,9 +643,9 @@ use gameindex::{GameIndex, Pack, Strref, Resref};
 use gametypes::*;
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
-use std::path::Path;
-use std::io::{Seek, SeekFrom};
 use std::fmt::{Debug};
+use std::io::{Seek, SeekFrom};
+use std::path::Path;
 use macros::{Pack, Table};
 use rusqlite::{Connection};
 pub(crate) use anyhow::{Context, Result};
@@ -654,8 +665,8 @@ fn create_db(db_file: &str)->Result<Connection> {
 	db.execute_batch(r#"
 create table "current" ("component" text);
 create table "resref_orig" ("resref" text primary key);
-create table "resref_dict" ("key" text primary key, "resref" text);
-create table "strref_dict" ("key" text primary key, "strref" integer);
+create table "resref_dict" ("key" text not null primary key on conflict ignore, "resref" text);
+create table "strref_dict" ("key" text not null primary key on conflict ignore, "strref" integer);
 	"#)?;
 	create_all_resources(&db)?;
 	Ok(db)
@@ -731,15 +742,21 @@ fn main() -> Result<()> {
 	populate(&db, &game)?;
 	db.execute_batch(r#"
 update "items" set price=5 where itemref='sw1h01';
-insert into "items" ("itemref", "name", "replacement") values
-("New Item!", "New Item name!", "Replacement");
+
 insert into "resref_dict" values
-("New Item!", "NEWITEM"),
-("Replacement", "REPLAC");
+('New Item!', 'NEWITEM');
+
+insert into "items" ("itemref", "name", "replacement", "ground_icon") values
+('New Item!', 'New Item name!', 'Replacement', 'new icon');
+
+update 'resref_dict'
+set "resref" = 'REPLAC' where "key" = 'Replacement';
+
 insert into "strref_dict" values
-("New Item name!", 35001);
+('New Item name!', 35001);
+
 insert into "resref_orig" values
-("isw1h01"), ("gsw1h01"), ("csw1h01");
+('isw1h01'), ('gsw1h01'), ('csw1h01');
 	"#)?;
 // 	let db = Connection::open(&DB_FILE)?;
 	save(&db, &game)?;
