@@ -295,7 +295,7 @@ use std::marker::PhantomData;
 use rusqlite::{Connection, Statement, ToSql};
 use rusqlite::types::{FromSql, ValueRef};
 use crate::{Resref,Strref,gameindex::StaticString};
-use anyhow::{Context,Result};
+use anyhow::Result;
 pub trait ConnectionExt {
 	fn exec(&self, s: impl AsRef<str>)->Result<()>;
 }
@@ -339,21 +339,6 @@ pub struct RowsAsTable<'stmt,T: Table> {
 	rows: rusqlite::Rows<'stmt>,
 	phantom: PhantomData<T>,
 	index: usize,
-}
-impl<'stmt,T: Table> RowsAsTable<'stmt, T> {
-	pub fn dump<'b>(&self, row: &rusqlite::Row<'b>) {
-		println!("Row at index {}:", self.index);
-		for (i, c) in self.rows.as_ref().unwrap().column_names().iter().enumerate() {
-			use rusqlite::types::ValueRef::*;
-			match row.get_ref(i) {
-				Ok(Null) => println!("  [{i:3}] {c} = \x1b[31mNull\x1b[m"),
-				Ok(Text(s)) => println!("  [{i:3}] {c} = Text(\"{}\")",
-					std::str::from_utf8(s).unwrap()),
-				Ok(x) => println!("  [{i:3}] {c} = {x:?}"),
-				_ => break
-			}
-		}
-	}
 }
 impl<'stmt,T: Table> Iterator for RowsAsTable<'stmt,T> {
 	type Item = Result<(T, T::KeyOut)>;
@@ -457,7 +442,7 @@ impl<'a> Schema<'a> {
 			write!(dest, r#""{f}", (select "{what}" from "{what}_dict" as "o"
 			where "o"."key" = "s"."{f}") as "trans_{f}""#).unwrap();
 		}
-		for (i, Column {fieldname: f,fieldtype,..}) in self.fields.iter().enumerate() {
+		for Column {fieldname: f,fieldtype,..} in self.fields.iter() {
 			if !isfirst {
 				write!(&mut select, ",\n  ").unwrap();
 				write!(&mut source, ",\n  ").unwrap();
@@ -475,7 +460,7 @@ impl<'a> Schema<'a> {
 			write!(&mut select, r#"
 			case when typeof("{f}") == 'integer' then "{f}" else ifnull("trans_{f}", "{f}") end as "{f}""#).unwrap();
 		},
-		x => {
+		_ => {
 			write!(&mut source, r#""{f}""#).unwrap();
 			write!(&mut select, r#""{f}""#).unwrap();
 		},
@@ -547,7 +532,7 @@ impl<'a> ResourceView<'a> {
 		{ // create main view
 		let mut view = format!(r#"create view "{name}" as
 	with "u" as (select {cols} from "res_{name}" union select {cols} from "add_{name}") select "#);
-		for (i, Column {fieldname, fieldtype,..}) in schema.fields.iter().enumerate(){
+		for (i, Column {fieldname, ..}) in schema.fields.iter().enumerate(){
 			if i > 0 { write!(&mut view, ",\n").unwrap(); }
 			if *fieldname == key {
 				write!(&mut view, r#""{fieldname}""#).unwrap();
@@ -560,7 +545,7 @@ impl<'a> ResourceView<'a> {
 		}
 		let dirtytable = format!("dirty_{dirtyname}");
 		db.exec(format!(r#"create table if not exists "{dirtytable}" ("name" text primary key)"#))?;
-		for (i, Column {fieldname, ..}) in schema.fields.iter().enumerate() {
+		for Column {fieldname, ..} in schema.fields.iter() {
 			if *fieldname == key { continue }
 			let trig = format!(
 	r#"create trigger "update_{name}_{fieldname}"
@@ -691,7 +676,7 @@ constants::RESTYPE_ITM => {
 	cursor.seek(SeekFrom::Start(item.abilities_offset as u64))?;
 	let mut ab_n = Vec::<u16>::with_capacity(item.abilities_count as usize);
 	let mut ab_i = Vec::<i64>::with_capacity(item.abilities_count as usize);
-	for i in 0..item.abilities_count {
+	for _ in 0..item.abilities_count {
 		let ab = ItemAbility::unpack(&mut cursor)?;
 		ab.execute(&mut insert.item_abilities, &(Some(resref),))?;
 		ab_n.push(ab.effect_count);
@@ -699,12 +684,12 @@ constants::RESTYPE_ITM => {
 	}
 	println!("inserting item {resref}: {ab_n:?} {ab_i:?}");
 	cursor.seek(SeekFrom::Start(item.effect_offset as u64))?;
-	for j in 0..item.effect_count { // on-equip effects
+	for _ in 0..item.effect_count { // on-equip effects
 		let eff = ItemEffect::unpack(&mut cursor)?;
 		eff.execute(&mut insert.item_effects, &(resref, -1i64))?;
 	}
 	for (i, n) in ab_n.iter().enumerate() {
-		for j in 0..*n {
+		for _ in 0..*n {
 			let eff = ItemEffect::unpack(&mut cursor)?;
 			eff.execute(&mut insert.item_effects, &(resref, ab_i[i]))?;
 		}
