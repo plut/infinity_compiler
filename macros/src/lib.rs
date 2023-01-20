@@ -1,6 +1,6 @@
 #![allow(
 // 	unreachable_code,
-	dead_code,
+// 	dead_code,
 // 	unused_variables,
 // 	unused_imports,
 // 	unused_macros,
@@ -82,8 +82,8 @@ impl From<Expr> for AttrArg {
 impl From<syn::Type> for AttrArg {
 	fn from(arg: syn::Type)->Self { Self::Type(arg) }
 }
-fn parse_attribute(Attribute{path, tokens, ..}: Attribute) -> (String, Vec<AttrArg>) {
-	(path.get_ident().unwrap().to_string(), parse_attribute_args(tokens))
+fn parse_attr(Attribute { path, tokens, .. }: Attribute)->(String, AttrParser) {
+	(path.get_ident().unwrap().to_string(), tokens.into())
 }
 
 struct AttrParser(std::vec::IntoIter<pm2::TokenStream>);
@@ -120,17 +120,6 @@ impl From<pm2::TokenStream> for AttrParser {
 	}
 }
 
-fn parse_attribute_args(tokens: TS2)->Vec<AttrArg> {
-	let mut iter = AttrParser::from(tokens);
-	let mut r = Vec::<AttrArg>::new();
-
-	match iter.get::<syn::Expr>() { None => return r, Some(b) => r.push(b) };
-	match iter.get::<syn::Type>() { None => return r, Some(b) => r.push(b) };
-	match iter.get::<syn::Expr>() { None => return r, Some(b) => r.push(b) };
-
-	return r
-}
-
 #[proc_macro_derive(Pack, attributes(header))]
 pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 	let (ident, flist, _) = read_struct_fields(parse_macro_input!(tokens));
@@ -140,9 +129,9 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 	let mut writef = TS2::new();
 
 	for Field { attrs, ident, ty, .. } in flist {
-		for (name, args) in attrs.into_iter().map(parse_attribute) {
+		for (name, mut args) in attrs.into_iter().map(parse_attr) {
 			match name.as_str() {
-				"header" => pack_attr_header(&mut readf, &mut writef, args),
+				"header" => pack_attr_header(&mut readf, &mut writef, &mut args),
 				&_ => () };
 		}
 		quote!{ let #ident = #ty::unpack(f)?; }.to_tokens(&mut readf);
@@ -163,13 +152,10 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 	TokenStream::from(code)
 } // Pack
 
-fn pack_attr_header(readf: &mut TS2, writef: &mut TS2, args: Vec<AttrArg>) {
-	match &args[..] {
-		[ AttrArg::Str(s) ] => {
-	quote!{ Self::unpack_header(f, #s)?; }.to_tokens(readf);
-	quote!{ f.write_all(#s.as_bytes())?; }.to_tokens(writef);
-		},
-		_ => ()
+fn pack_attr_header(readf: &mut TS2, writef: &mut TS2, args: &mut AttrParser) {
+	if let Some(AttrArg::Str(s)) = args.get::<syn::Expr>() {
+		quote!{ Self::unpack_header(f, #s)?; }.to_tokens(readf);
+		quote!{ f.write_all(#s.as_bytes())?; }.to_tokens(writef);
 	}
 }
 
@@ -199,9 +185,9 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 	};
 	for Field { attrs, ident, ty, .. } in flist {
 		let mut current = RowCurrent::default();
-		for (name, args) in attrs.into_iter().map(parse_attribute) {
+		for (name, mut args) in attrs.into_iter().map(parse_attr) {
 			match name.as_str() {
-				"column" => row_attr_column(&mut fields2, &mut current, &args[..]),
+				"column" => table_attr_column(&mut fields2, &mut current, &mut args),
 // 				"no_column" => no_column = true,
 				_ => () }
 		}
@@ -262,25 +248,34 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 // 	println!("\x1b[36m{}\x1b[m", code);
 	TokenStream::from(code)
 } // Table
-fn row_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut RowCurrent, args: &[AttrArg]) {
+fn table_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut RowCurrent, args: &mut AttrParser) {
 	use AttrArg::{Ident, Str, Type};
+	let a = match args.get::<syn::Expr>() { None=>return, Some(a)=> a};
+	match a {
+		Str(s) => current.extra = s.to_owned(),
+		Ident(i) => {
+		if i == "false" { current.no_column = true; return }
+		let t = match args.get::<syn::Type>() { Some(AttrArg::Type(t)) => t,
+			_ => {
+			println!("\x1b[31mdon't know what to do with lone identifier: {i}\x1b[m");
+			return } };
+		let s = match args.get::<syn::Expr>() { Some(AttrArg::Str(s)) => s,
+			_ => String::new() };
+		fields2.push((i.to_owned(), t.clone(), s.to_owned()));
+		},
+		_ => ()
+	}
 // 	println!("got column with {} fields: {args:?}", args.len());
 // 	for (i, name) in args.iter().enumerate() {
 // 		println!("  arg {i} = \x1b[32m{name:?}\x1b[m");
 // 	}
-	match args {
-		[ Ident(i), ] =>
-			if i == "false" { current.no_column = true; }
-			else {
-				println!("\x1b[31mdon't know what to do with identifier: {i}\x1b[m");
-			},
-		[ Str(s), ] => current.extra = s.to_owned(),
-		[ Ident(i), Type(t), Str(s) ] =>
-			fields2.push((i.to_owned(), t.clone(), s.to_owned())),
-		[ Ident(i), Type(t) ] =>
-			fields2.push((i.to_owned(), t.clone(), "".to_owned())),
-		_ => (),
-	}
+// 	match args {
+// 		[ Ident(i), Type(t), Str(s) ] =>
+// 			fields2.push((i.to_owned(), t.clone(), s.to_owned())),
+// 		[ Ident(i), Type(t) ] =>
+// 			fields2.push((i.to_owned(), t.clone(), "".to_owned())),
+// 		_ => (),
+// 	}
 }
 // fn ty_to_sql(s: &str)->&'static str {
 // 	match s {
