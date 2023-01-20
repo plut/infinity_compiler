@@ -1,12 +1,12 @@
 #![allow(
 	clippy::single_match,
 // 	unreachable_code,
-	dead_code,
-	unused_variables,
+// 	dead_code,
+// 	unused_variables,
 // 	unused_imports,
 // 	unused_macros,
 // 	unused_parens,
-	unused_mut,
+// 	unused_mut,
 // 	unused_attributes,
 // 	unused_assignments,
 )]
@@ -29,8 +29,8 @@ thread_local! {
 fn push_resource(rdef: ResourceDef) {
 	RESOURCES.with(|v| { v.borrow_mut().push(rdef); })
 }
-use std::any::type_name;
-fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
+// use std::any::type_name;
+// fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
 
 // macro_rules! dump {
 // 	($($x: expr),*) => {
@@ -139,7 +139,7 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 			fn unpack(f: &mut impl std::io::Read)->std::io::Result<Self> {
 				#readf; Ok(Self{ #build })
 			}
-			fn pack(self, f: &mut impl std::io::Write)->std::io::Result<()> {
+			fn pack(&self, f: &mut impl std::io::Write)->std::io::Result<()> {
 				#writef; Ok(())
 			}
 		}
@@ -256,7 +256,7 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 		}
 		ncol+= 1;
 	}
-	let field = pm2::Ident::new(&table_name, pm2::Span::call_site());
+// 	let field = pm2::Ident::new(&table_name, pm2::Span::call_site());
 	let code = quote! {
 		impl crate::database::Table for #ident {
 			type KeyIn = (#key_in);
@@ -272,8 +272,6 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 			fn sel(row: &crate::rusqlite::Row)->crate::rusqlite::Result<(Self, Self::KeyOut)> {
 				Ok((Self{ #build }, (#build2)))
 			}
-// 			fn find_field<T>(s: &AllResources<T>)->&T { &s.#field }
-// 			fn find_field_mut<T>(s: &mut AllResources<T>)->&mut T { &mut s.#field }
 		}
 	};
 	push_resource(ResourceDef(type_name, table_name));
@@ -324,11 +322,8 @@ fn table_attr_table(args: &mut AttrParser, table_name: &mut String, parent: &mut
 #[proc_macro]
 pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 	let mut fields = pm2::TokenStream::new();
-// 	let mut iter = pm2::TokenStream::new();
-// 	let mut iter_mut = pm2::TokenStream::new();
 	let mut map = pm2::TokenStream::new();
 	let mut data = pm2::TokenStream::new();
-// 	let mut n = 0;
 	RESOURCES.with(|v| {
 		use pm2::{Span,Ident};
 	for ResourceDef (type_name, table_name) in v.borrow().iter() {

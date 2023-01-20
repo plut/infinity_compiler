@@ -3,7 +3,7 @@
 // 	unreachable_code,
 // 	unused_macros,
 	unused_variables,
-// 	dead_code,
+	dead_code,
 // 	unused_must_use,
 // 	unused_mut,
 )]
@@ -17,7 +17,7 @@ mod gameindex {
 use macros::Pack;
 use std::cmp::min;
 use std::fmt::{self,Display,Debug,Formatter};
-use std::fs::{self, File};
+use std::fs::{File};
 use std::io::{self, Read, Write, Seek, SeekFrom, BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use anyhow::{Result, Context};
@@ -57,7 +57,7 @@ impl<const N: usize> AsRef<str> for StaticString<N> {
 		std::str::from_utf8(&self.bytes[..n]).unwrap()
 	}
 }
-impl<const N: usize> Display for StaticString<N> {
+impl<const N: usize> Debug for StaticString<N> {
 	fn fmt(&self, f:&mut Formatter) -> fmt::Result {
 		use std::fmt::Write;
 		f.write_char('"')?;
@@ -70,8 +70,10 @@ impl<const N: usize> Display for StaticString<N> {
 		Ok(())
 	}
 }
-impl<const N: usize> Debug for StaticString<N> {
-	fn fmt(&self, f:&mut fmt::Formatter) -> fmt::Result { Display::fmt(self, f) }
+impl<const N: usize> Display for StaticString<N> {
+	fn fmt(&self, f:&mut fmt::Formatter) -> fmt::Result {
+		Display::fmt(&self.as_ref(), f)
+	}
 }
 impl<const N: usize> Pack for StaticString<N> {
 	fn unpack(f: &mut impl io::Read)->io::Result<Self> {
@@ -79,7 +81,7 @@ impl<const N: usize> Pack for StaticString<N> {
 		f.read_exact(&mut x)?;
 		Ok(Self{ bytes: x, })
 	}
-	fn pack(self, f: &mut impl io::Write)->io::Result<()> {
+	fn pack(&self, f: &mut impl io::Write)->io::Result<()> {
 		f.write_all(&self.bytes)
 	}
 }
@@ -89,7 +91,9 @@ impl<const N: usize> Default for StaticString<N> {
 
 pub trait Pack: Sized {
 	fn unpack(f: &mut impl Read)->io::Result<Self>;
-	fn pack(self, _f: &mut impl io::Write)->io::Result<()> { unimplemented!() }
+	fn pack(&self, _f: &mut impl io::Write)->io::Result<()> {
+		println!("Pack for type: {}", crate::type_of(&self));
+		unimplemented!() }
 
 	// associated functions:
 	fn read_bytes(f: &mut impl Read, n: usize)->io::Result<Vec<u8>> {
@@ -114,7 +118,7 @@ macro_rules! unpack_int {
 				f.read_exact(&mut buf)?;
 				Ok(<$T>::from_le_bytes(buf))
 			}
-			fn pack(self, f: &mut impl Write)->io::Result<()> {
+			fn pack(&self, f: &mut impl Write)->io::Result<()> {
 				f.write_all(&self.to_le_bytes())
 			}
 	})* }
@@ -133,6 +137,7 @@ impl Pack for Resref {
 		name.bytes.make_ascii_lowercase();
 		Ok(Self { name, })
 	}
+	fn pack(&self, f: &mut impl io::Write)->io::Result<()> { self.name.pack(f) }
 }
 #[derive(Debug,Pack,Clone,Copy)] pub struct Strref { pub value: i32, }
 #[derive(Debug,Pack,Clone,Copy,PartialEq,Eq)] pub struct Restype { pub value: u16, }
@@ -171,14 +176,11 @@ impl<'a> GameIndex<'a> {
 	pub fn open(gamedir: &'a str)->Result<Self> {
 		let indexfile = Path::new(&gamedir).join("chitin.key");
 		let mut f = File::open(&indexfile)
-			.with_context(|| format!("cannot open game index: {}",
-				indexfile.to_str().unwrap()))?;
+			.with_context(|| format!("cannot open game index: {indexfile:?}"))?;
 		let hdr = KeyHdr::unpack(&mut f)
-			.with_context(|| format!("bad KEY header in file: {}",
-				indexfile.to_str().unwrap()))?;
+			.with_context(|| format!("bad KEY header in file: {indexfile:?}"))?;
 		let bifentries = KeyBif::vecunpack(&mut f, hdr.nbif as usize)
-			.with_context(|| format!("could not read {} BIF entries in file: {}",
-				hdr.nbif, indexfile.to_str().unwrap()))?;
+			.with_context(|| format!("could not read {} BIF entries in file: {indexfile:?}", hdr.nbif))?;
 		let mut bifnames = Vec::<String>::new();
 		let mut _bifsizes = Vec::<u32>::new();
 		for KeyBif{offset, namelength, filelength, ..} in bifentries {
@@ -230,7 +232,8 @@ pub struct ResHandle<'a> {
 }
 impl<'a> ResHandle<'a> {
 	pub fn open(&mut self)->Result<io::Cursor<Vec<u8>>> {
-		biffile(self.bif, self.path)?;
+		biffile(self.bif, &self.path)
+			.context("cannot open BIF file")?;
 		let biffile = self.bif.as_mut().unwrap();
 		let j = self.location.resourceindex();
 		let BifResource{ offset, size, restype, .. } = &biffile.resources[j];
@@ -269,19 +272,22 @@ impl<'a> GameIndex<'a> {
 	restype: Restype,
 	_unknown: u16,
 }
-fn bifresources(file: impl AsRef<Path>+Debug)->io::Result<Vec<BifResource>> {
-	let mut f = File::open(file)?;
-	let hdr = BifHdr::unpack(&mut f)?;
+fn bifresources(file: impl AsRef<Path>+Debug)->Result<Vec<BifResource>> {
+	let mut f = File::open(&file)
+		.with_context(|| format!("cannot open bifresources in {file:?}"))?;
+	let hdr = BifHdr::unpack(&mut f)
+		.with_context(|| format!("cannot open BIF header in {file:?}"))?;
 	f.seek(SeekFrom::Start(hdr.offset as u64))?;
 	BifResource::vecunpack(&mut f, hdr.nres as usize)
+		.map_err(|e| e.into())
 }
 struct BifFile {
 	buf: BufReader<File>,
 	resources: Vec<BifResource>,
 }
-fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->io::Result<&'a BifFile> {
+fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->Result<&'a BifFile> {
 	if o.is_none() {
-		let resources = bifresources(path)?;
+		let resources = bifresources(path).context("cannot read BIF resources")?;
 		let buf = BufReader::new(File::open(path)?);
 		*o = Some(BifFile{buf, resources});
 	}
@@ -294,13 +300,12 @@ mod database {
 ///  - `Schema` type: description of a particular SQL table;
 ///  - `Table` trait: connect a structure to a SQL row;
 use std::marker::PhantomData;
-use std::fs::{self};
-use std::path::{self,Path,PathBuf};
 use rusqlite::{Connection, Statement, Row, ToSql};
 use rusqlite::types::{FromSql, ValueRef};
-use crate::{Resref,Strref,gameindex::StaticString};
-use extend::ext;
+use crate::{Resref,Strref};
 use anyhow::{Context,Result};
+
+// I. Low-level stuff: basic types and extensions for `rusqlite` traits.
 pub trait ConnectionExt {
 	fn exec(&self, s: impl AsRef<str>)->Result<()>;
 }
@@ -367,6 +372,8 @@ impl FromSql for Resref {
 	}
 }
 
+// II. Everything connected to the table schemas (but not to Connection;
+// only as SQL strings).
 #[derive(Debug,Clone,Copy)]
 pub enum FieldType { Integer, Text, Resref, Strref, Other }
 impl FieldType {
@@ -513,7 +520,7 @@ impl<'schema> Schema<'schema> {
 			s.push('?');
 		}
 		s.push(')');
-		return s
+		s
 	}
 // 	pub fn insert<'b>(&'b self, db: &'b Connection, name: &str)->Result<Statement> {
 // 		db.prepare(self.insert_query(name).as_ref())
@@ -573,7 +580,11 @@ impl<'schema> Schema<'schema> {
 	}
 }
 
+// III. Structure accessing directly SQL data
 pub trait Table: Sized {
+	/// This is the main trait for game resources, containing the low-level
+	/// interaction with the database (`ins`, `sel`). Concrete
+	/// implementations are provided by the `Table` derive macro.
 	type KeyIn;
 	type KeyOut;
 	type Res; // always == anyhow::Result<(Self, Self::KeyOut)>;
@@ -581,8 +592,6 @@ pub trait Table: Sized {
 	const SCHEMA: Schema<'static>;
 	fn ins(&self, s: &mut Statement, key: &Self::KeyIn)->rusqlite::Result<()>;
 	fn sel(r: &Row)->rusqlite::Result<(Self, Self::KeyOut)>;
-// 	fn find_field<T>(s: &AllResources<T>)->&T;
-// 	fn find_field_mut<T>(s: &mut AllResources<T>)->&mut T;
 	fn select_statement(db: &Connection)->rusqlite::Result<TypedStatement<'_, Self>> {
 		let s = Self::SCHEMA.compile_query();
 		Ok(TypedStatement(db.prepare(&s)?, PhantomData::<Self>))
@@ -641,16 +650,13 @@ use gameindex::{GameIndex, Pack, Strref, Resref, ResHandle};
 use gametypes::*;
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
-use std::fmt::{self,Display,Debug};
 use std::io::{Seek, SeekFrom};
-use std::path::{Path, PathBuf};
-use std::fs;
+use std::path::{Path};
+use std::fs::{self, File};
 use rusqlite::{Connection,Statement};
-use extend::ext;
 pub(crate) use anyhow::{Context, Result};
 
 // I. create DB
-use crate::gametypes::*;
 pub fn create_db(db_file: &str)->Result<Connection> {
 	println!("creating file {}", db_file);
 	if Path::new(db_file).exists() {
@@ -710,7 +716,7 @@ fn populate_item(db: &mut DbInserter, handle: &mut ResHandle)->Result<()> {
 	let mut ab_i = Vec::<i64>::with_capacity(item.abilities_count as usize);
 	for _ in 0..item.abilities_count {
 		let ab = ItemAbility::unpack(&mut cursor)?;
-		ab.ins(&mut db.tables.item_abilities, &(Some(resref),))?;
+		ab.ins(&mut db.tables.item_abilities, &(resref,))?;
 		ab_n.push(ab.effect_count);
 		ab_i.push(db.db.last_insert_rowid());
 	}
@@ -719,12 +725,12 @@ fn populate_item(db: &mut DbInserter, handle: &mut ResHandle)->Result<()> {
 	for _ in 0..item.equip_effect_count { // on-equip effects
 		let eff = ItemEffect::unpack(&mut cursor)?;
 		// TODO swap with Some above!!
-		eff.ins(&mut db.tables.item_effects, &(resref, -1i64))?;
+		eff.ins(&mut db.tables.item_effects, &(resref, None))?;
 	}
 	for (i, n) in ab_n.iter().enumerate() {
 		for _ in 0..*n {
 			let eff = ItemEffect::unpack(&mut cursor)?;
-			eff.ins(&mut db.tables.item_effects, &(resref, ab_i[i]))?;
+			eff.ins(&mut db.tables.item_effects, &(resref, Some(ab_i[i])))?;
 		}
 	}
 	Ok(())
@@ -749,19 +755,26 @@ impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
 
 fn save(db: &Connection, game: &GameIndex)->Result<()> {
 	let tmpdir = Path::new(&game.gamedir).join("sim_out");
-// 	fs::create_dir(&tmpdir)
-// 		.with_context(|| format!("cannot create temp directory {:?}", tmpdir))?;
+	fs::create_dir(&tmpdir)
+		.with_context(|| format!("cannot create temp directory {:?}", tmpdir))?;
 	// TODO: generate strings & resrefs
 	//
+	let orig_dir = std::env::current_dir()?;
+	std::env::set_current_dir(tmpdir)?;
+	let res = save_current_dir(db);
+	std::env::set_current_dir(orig_dir)?;
+	res
+}
+fn save_current_dir(db: &Connection)->Result<()> {
 	let mut sel_item = Item::select_statement(db)?;
 	let mut sel_item_ab = ItemAbility::select_statement(db)?;
 	let mut sel_item_eff = ItemEffect::select_statement(db)?;
 	for x in sel_item.as_table(())? {
-		save_item(x, &mut sel_item_ab, &mut sel_item_eff, &tmpdir)?;
+		save_item(x, &mut sel_item_ab, &mut sel_item_eff)?;
 	}
 	Ok(())
 }
-fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAbility>, sel_item_eff: &mut TypedStatement<'_,ItemEffect>, tmpdir: &Path)->Result<()>{
+fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAbility>, sel_item_eff: &mut TypedStatement<'_,ItemEffect>)->Result<()>{
 	// ignore malformed db input (but report it on stdout)
 	if x.is_db_malformed() { return Ok(()) }
 	let (mut item, (itemref,)) = x?;
@@ -775,11 +788,12 @@ fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAb
 		if x.is_db_malformed() { return Ok(()) }
 		let (ab, (_, abref)) = x?;
 		abilities.push((ab, abref));
+		item.abilities_count+= 1;
 	}
 	for x in sel_item_eff.as_table((&itemref,))? {
 		if x.is_db_malformed() { return Ok(()) }
 		let (eff, (_, parent)) = x?;
-		let ab_id = match abilities.iter().position(|&(_, abref)| abref == parent) {
+		let ab_id = match abilities.iter().position(|&(_, abref)| Some(abref) == parent) {
 			Some(i) => { abilities[i].0.effect_count+= 1; i },
 			None    => { item.equip_effect_count+= 1; NO_ABILITY},
 		};
@@ -803,9 +817,24 @@ fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAb
 	}
 	item.abilities_offset = 114;
 	item.effect_offset = 114 + 56*(item.abilities_count as u32);
-// 	pack(item)
-// 	pack(item abilities)
-// 	pack(item effects grouped by associated ability)
+	println!("\x1b[34mitem is: {item:?}\x1b[m");
+
+	let mut f = File::create(format!("{itemref}.itm"))
+		.with_context(|| format!("cannot open output file: {itemref}.itm"))?;
+	item.pack(&mut f)
+		.with_context(|| format!("cannot pack item to {itemref}.itm"))?;
+	// pack abilities:
+	for (a, _) in abilities {
+		a.pack(&mut f)
+		.with_context(|| format!("cannot pack item ability to {itemref}.itm"))?;
+	}
+	// pack effects: first on-equip, then grouped by ability
+	for (e, j) in &effects {
+		if *j == NO_ABILITY { e.pack(&mut f)?; }
+	}
+	for i in 0..item.abilities_count {
+		for (e, j) in &effects { if *j == i.into() { e.pack(&mut f)?; } }
+	}
 	Ok(())
 }
 

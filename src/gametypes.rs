@@ -3,7 +3,7 @@ use macros::{Pack, Table, produce_resource_list};
 #[derive(Debug,Pack,Table)]
 #[table(item_effects,itemref,items)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
-#[column(abref, i64, r#"references "item_abilities"("abref")"#)]
+#[column(abref, Option<i64>, r#"references "item_abilities"("abref")"#)]
 	pub opcode: u16, //opcode,
 	pub target: u8, // EffectTarget,
 	pub power: u8,
@@ -23,7 +23,7 @@ use macros::{Pack, Table, produce_resource_list};
 }
 #[derive(Debug,Pack,Table)]
 #[table(item_abilities,itemref,items)] pub struct ItemAbility {
-#[column(itemref, Option<Resref>, r#"references "items"("itemref")"#)]
+#[column(itemref, Resref, r#"references "items"("itemref")"#)]
 #[column(abref, auto, "primary key")]
 	attack_type: u8, // AttackType,
 	must_identify: u8,
