@@ -2,22 +2,22 @@ use crate::{Resref,Strref,Pack,Table};
 #[derive(Debug,Pack,Table)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
 #[column(abref, i64, r#"references "item_abilities"("abref")"#)]
-	opcode: u16, //opcode,
-	target: u8, // EffectTarget,
-	power: u8,
-	parameter1: u32,
-	parameter2: u32,
-	timing_mode: u8, // TimingMode,
-	dispel_mode: u8, // DispelMode,
-	duration: u32,
-	proba1: u8,
-	proba2: u8,
-	resource: Resref,
-	dice_thrown: i32,
-	dice_sides: i32,
-	saving_throw_type: u32,
-	saving_throw_bonus: i32,
-	stacking_id: u32,
+	pub opcode: u16, //opcode,
+	pub target: u8, // EffectTarget,
+	pub power: u8,
+	pub parameter1: u32,
+	pub parameter2: u32,
+	pub timing_mode: u8, // TimingMode,
+	pub dispel_mode: u8, // DispelMode,
+	pub duration: u32,
+	pub proba1: u8,
+	pub proba2: u8,
+	pub resource: Resref,
+	pub dice_thrown: i32,
+	pub dice_sides: i32,
+	pub saving_throw_type: u32,
+	pub saving_throw_bonus: i32,
+	pub stacking_id: u32,
 }
 #[derive(Debug,Pack,Table)] pub struct ItemAbility {
 #[column(itemref, Option<Resref>, r#"references "items"("itemref")"#)]
@@ -91,5 +91,5 @@ use crate::{Resref,Strref,Pack,Table};
 #[column(false)] pub abilities_count: u16,
 #[column(false)] pub effect_offset: u32,
 #[column(false)] pub effect_index: u16,
-#[column(false)] pub effect_count: u16,
+#[column(false)] pub equip_effect_count: u16,
 }

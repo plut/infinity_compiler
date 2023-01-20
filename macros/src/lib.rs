@@ -2,41 +2,22 @@
 // 	unreachable_code,
 	dead_code,
 // 	unused_variables,
-	unused_imports,
+// 	unused_imports,
 // 	unused_macros,
 // 	unused_parens,
 // 	unused_mut,
 // 	unused_attributes,
 // 	unused_assignments,
 )]
-extern crate proc_macro;
-// extern crate proc_macro2;
 use proc_macro::TokenStream;
 use proc_macro2 as pm2;
 type TS2 = pm2::TokenStream;
-type Ident2 = pm2::Ident;
-type Type2 = pm2::Ident;
-use pm2::Span;
-use quote::quote;
-use quote::ToTokens;
-use syn;
-use syn::Attribute;
-use syn::Data;
-use syn::Data::Struct;
-use syn::DataStruct;
-use syn::DeriveInput;
-use syn::Expr;
-use syn::{ExprLit, ExprParen, ExprPath, ExprTuple};
-use syn::Field;
-use syn::Fields::{Named, Unnamed};
-use syn::Path;
-use syn::Token;
-use syn::Type;
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
-use syn::token::Comma;
-use syn::parse;
-use syn::parse_macro_input;
+use quote::{quote, ToTokens};
+use syn::{self, DeriveInput, parse_macro_input, Attribute};
+use syn::{Data::Struct, DataStruct};
+use syn::{Expr, ExprLit, ExprPath};
+use syn::{Field, Fields::Named};
+use syn::{punctuated::Punctuated, token::Comma};
 
 use std::any::type_name;
 fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
@@ -59,13 +40,6 @@ fn read_struct_fields(d: syn::DeriveInput) -> (syn::Ident, Punctuated<Field, Com
 // 		Struct(DataStruct{ fields: Unnamed(f), .. }) => f.unnamed,
 		_ => panic!("only struct with named fields!") };
 	(ident, flist)
-}
-fn to_vector(itr: &Punctuated<Expr,Comma>)->Vec<Expr> {
-	let mut v = Vec::<Expr>::new();
-	for e in itr.iter() {
-		v.push(e.clone());
-	}
-	return v
 }
 #[derive(Debug)]
 enum AttrArg {
@@ -191,7 +165,6 @@ struct RowCurrent {
 
 #[proc_macro_derive(Table, attributes(column,no_column))]
 pub fn derive_row(tokens: TokenStream) -> TokenStream {
-	use pm2::Literal;
 	let (ident, flist) = read_struct_fields(parse_macro_input!(tokens));
 	let mut fields2 = Vec::<(String, syn::Type, String)>::new();
 	let mut schema = TS2::new();
@@ -251,12 +224,13 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 		impl crate::database::Table for #ident {
 			type KeyIn = (#key_in);
 			type KeyOut = (#key_out);
+			type Res = anyhow::Result<(Self, Self::KeyOut)>;
 			const SCHEMA: crate::database::Schema<'static> =
 				crate::database::Schema { fields: &[#schema] };
-				fn execute(&self, s: &mut crate::rusqlite::Statement, k: &Self::KeyIn)->crate::rusqlite::Result<()> {
+				fn insert(&self, s: &mut crate::rusqlite::Statement, k: &Self::KeyIn)->crate::rusqlite::Result<()> {
 					s.execute(rusqlite::params![#params])?; Ok(())
 				}
-				fn read(row: &crate::rusqlite::Row)->crate::rusqlite::Result<(Self, Self::KeyOut)> {
+				fn select(row: &crate::rusqlite::Row)->crate::rusqlite::Result<(Self, Self::KeyOut)> {
 					Ok((Self{ #build }, (#build2)))
 				}
 		}
