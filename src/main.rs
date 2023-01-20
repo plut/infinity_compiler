@@ -715,16 +715,19 @@ use rusqlite::{Connection};
 use extend::ext;
 pub(crate) use anyhow::{Context, Result};
 
-// #[derive(Debug)] enum Error<'a> {
-// 	MalformedDbInput(&'a str),
-// }
-#[ext] impl<T> Result<T, anyhow::Error> {
+trait DbTypeCheck {
+	fn is_db_malformed(&self)->bool;
+}
+impl<T> DbTypeCheck for Result<T,anyhow::Error> {
 	fn is_db_malformed(&self)-> bool {
-// 		use Error::*;
+		use rusqlite::types::FromSqlError::{self,*};
 		let err = match self { Ok(_) => return false, Err(e) => e };
-// 		matches!(err.downcast_ref::<Error>(), Some(MalformedDbInput(_)))
-		matches!(err.downcast_ref::<rusqlite::types::FromSqlError>(),
-			Some(rusqlite::types::FromSqlError::InvalidType))
+		matches!(err.downcast_ref::<FromSqlError>(), Some(InvalidType))
+	}
+}
+impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
+	fn is_db_malformed(&self)-> bool {
+		matches!(self, Err(rusqlite::Error::FromSqlConversionFailure(_,_,_)))
 	}
 }
 // impl<'a> Display for Error<'a> {
