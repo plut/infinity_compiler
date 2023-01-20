@@ -19,6 +19,20 @@ use syn::{Expr, ExprLit, ExprPath};
 use syn::{Field, Fields::Named};
 use syn::{punctuated::Punctuated, token::Comma};
 
+struct ResourceDef {
+	name: String,
+	ty: String,
+	dirtykey: String,
+	dirtyparent: String,
+}
+thread_local! {
+	static RESOURCES: std::cell::RefCell<Vec<ResourceDef>> =
+		std::cell::RefCell::new(Vec::<ResourceDef>::new());
+}
+fn push_resource(rdef: ResourceDef) {
+	RESOURCES.with(|v| { v.borrow_mut().push(rdef); })
+}
+
 use std::any::type_name;
 fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
 
@@ -33,13 +47,13 @@ fn toks_to_string(a: &impl quote::ToTokens) -> String {
 	a.to_tokens(&mut ts);
 	ts.to_string()
 }
-fn read_struct_fields(d: syn::DeriveInput) -> (syn::Ident, Punctuated<Field, Comma>) {
-	let DeriveInput{ ident, data, .. } = d; // parse_macro_input!(tokens);
+fn read_struct_fields(d: syn::DeriveInput) -> (syn::Ident, Punctuated<Field, Comma>, Vec<syn::Attribute>) {
+	let DeriveInput{ ident, data, attrs, .. } = d; // parse_macro_input!(tokens);
 	let flist = match data {
 		Struct(DataStruct{ fields: Named(f), ..}) => f.named,
 // 		Struct(DataStruct{ fields: Unnamed(f), .. }) => f.unnamed,
 		_ => panic!("only struct with named fields!") };
-	(ident, flist)
+	(ident, flist, attrs)
 }
 #[derive(Debug)]
 enum AttrArg {
@@ -65,57 +79,61 @@ impl From<Expr> for AttrArg {
 		}
 	}
 }
+impl From<syn::Type> for AttrArg {
+	fn from(arg: syn::Type)->Self { Self::Type(arg) }
+}
 fn parse_attribute(Attribute{path, tokens, ..}: Attribute) -> (String, Vec<AttrArg>) {
 	(path.get_ident().unwrap().to_string(), parse_attribute_args(tokens))
 }
 
-fn split_stream(stream: pm2::TokenStream)->Vec<pm2::TokenStream> {
-	let mut v = vec![pm2::TokenStream::new()];
-	for tree in stream {
-		if match tree {
-			pm2::TokenTree::Punct(ref p) => p.as_char() == ',',
-			_ => false } {
-			v.push(pm2::TokenStream::new());
-		} else {
-			let n = v.len();
-			v[n-1].extend(std::iter::once(tree));
+struct AttrParser(std::vec::IntoIter<pm2::TokenStream>);
+
+impl AttrParser {
+	fn split(stream: pm2::TokenStream)->Vec<pm2::TokenStream> {
+		let mut v = vec![pm2::TokenStream::new()];
+		for tree in stream {
+			if match tree {
+				pm2::TokenTree::Punct(ref p) => p.as_char() == ',',
+				_ => false } {
+				v.push(pm2::TokenStream::new());
+			} else {
+				let n = v.len();
+				v[n-1].extend(std::iter::once(tree));
+			}
 		}
+		v
 	}
-	v
+	fn get<T: Into<AttrArg> + syn::parse::Parse>(&mut self)->Option<AttrArg> {
+		let a = match self.0.next() { None => return None, Some(a)=>a };
+		match syn::parse2::<T>(a) { Err(_) => return None, Ok(b)=>Some(b.into()) }
+// 	let b: T = syn::parse2(a).expect("cannot parse!");
+// 	Some(b.into())
+	}
+}
+impl From<pm2::TokenStream> for AttrParser {
+	fn from(tokens: pm2::TokenStream)->Self {
+			Self(match tokens.into_iter().next() {
+			None => { Vec::<pm2::TokenStream>::new().into_iter() },
+			Some(pm2::TokenTree::Group(g)) => Self::split(g.stream()).into_iter(),
+			_ => unimplemented!()
+		})
+	}
 }
 
 fn parse_attribute_args(tokens: TS2)->Vec<AttrArg> {
-	// TODO: make this generic, by
-	// 1. turning into an iterator,
-	// 2. making the return type into a parameter
+	let mut iter = AttrParser::from(tokens);
 	let mut r = Vec::<AttrArg>::new();
-	let stream = match tokens.into_iter().next() {
-		None => { return r },
-		Some(pm2::TokenTree::Group(g)) => g.stream(),
-		_ => unimplemented!()
-	};
-	let mut iter = split_stream(stream).into_iter();
 
-	let a = match iter.next() { None=>return r, Some(a)=>a };
-	let b: syn::Expr = syn::parse2(a).expect("an expression");
-	r.push(AttrArg::from(b));
-
-	// 2nd argument is a type:
-	let a = match iter.next() { None=>return r, Some(a)=>a };
-	let b: syn::Type = syn::parse2(a).expect("a type");
-	r.push(AttrArg::Type(b));
-
-	// 3rd argument is an expression:
-	let a = match iter.next() { None=>return r, Some(a)=>a };
-	let b: syn::Expr = syn::parse2(a).expect("an expression");
-	r.push(AttrArg::from(b));
+	match iter.get::<syn::Expr>() { None => return r, Some(b) => r.push(b) };
+	match iter.get::<syn::Type>() { None => return r, Some(b) => r.push(b) };
+	match iter.get::<syn::Expr>() { None => return r, Some(b) => r.push(b) };
 
 	return r
 }
 
 #[proc_macro_derive(Pack, attributes(header))]
 pub fn derive_pack(tokens: TokenStream) -> TokenStream {
-	let (ident, flist) = read_struct_fields(parse_macro_input!(tokens));
+	let (ident, flist, _) = read_struct_fields(parse_macro_input!(tokens));
 
 	let mut readf = TS2::new();
 	let mut build = TS2::new();
@@ -165,7 +183,7 @@ struct RowCurrent {
 
 #[proc_macro_derive(Table, attributes(column,no_column))]
 pub fn derive_row(tokens: TokenStream) -> TokenStream {
-	let (ident, flist) = read_struct_fields(parse_macro_input!(tokens));
+	let (ident, flist, attrs) = read_struct_fields(parse_macro_input!(tokens));
 	let mut fields2 = Vec::<(String, syn::Type, String)>::new();
 	let mut schema = TS2::new();
 	let mut params = TS2::new();
@@ -227,12 +245,18 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 			type Res = anyhow::Result<(Self, Self::KeyOut)>;
 			const SCHEMA: crate::database::Schema<'static> =
 				crate::database::Schema { fields: &[#schema] };
-				fn insert(&self, s: &mut crate::rusqlite::Statement, k: &Self::KeyIn)->crate::rusqlite::Result<()> {
-					s.execute(rusqlite::params![#params])?; Ok(())
-				}
-				fn select(row: &crate::rusqlite::Row)->crate::rusqlite::Result<(Self, Self::KeyOut)> {
-					Ok((Self{ #build }, (#build2)))
-				}
+			fn insert(&self, s: &mut crate::rusqlite::Statement, k: &Self::KeyIn)->crate::rusqlite::Result<()> {
+				s.execute(rusqlite::params![#params])?; Ok(())
+			}
+			fn select(row: &crate::rusqlite::Row)->crate::rusqlite::Result<(Self, Self::KeyOut)> {
+				Ok((Self{ #build }, (#build2)))
+			}
+// 			fn find_statement_mut(s: &mut TypedStatements)->&mut Statement {
+// 				s.#table_name
+// 			}
+// 			fn find_statement(s: &TypedStatements)->&Statement {
+// 				s.#table_name
+// 			}
 		}
 	};
 // 	println!("\x1b[36m{}\x1b[m", code);

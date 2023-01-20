@@ -491,6 +491,8 @@ pub trait Table: Sized {
 	const SCHEMA: Schema<'static>;
 	fn insert(&self, s: &mut Statement, key: &Self::KeyIn)->rusqlite::Result<()>;
 	fn select(r: &Row)->rusqlite::Result<(Self, Self::KeyOut)>;
+// 	fn find_statement_mut(s: &mut TypedStatements)->&mut Statement;
+// 	fn find_statement(s: &TypedStatements)->&Statement;
 }
 #[derive(Debug)] pub struct ResourceView<'a,T: Table> {
 	pub name: &'a str,
@@ -646,7 +648,9 @@ impl<'stmt,T: Table> Iterator for TypedRows<'stmt,T> {
 
 // Desired interface:
 // insertor.field.insert(T, T::KeyIn)->()
-// selector = 
+// selector.field.select_dirty() -> Result<...>
+// selector.field.select_where() -> Result<...>
+// selector must hold 2N prepared statements
 macro_rules! resources {
 	($($n:ident: $T:ty, $dk:literal, $dn:literal);*$(;)?) => {
 		#[derive(Debug)]
@@ -658,6 +662,15 @@ macro_rules! resources {
 		pub fn create_all_resources(db: &Connection)->Result<()> {
 			$(RESOURCES.$n.create(&db)?;)* Ok(())
 		}
+		pub struct TypedStatements<'a> { $(pub $n: TypedStatement<'a,$T>),* }
+// 		impl<'a> TypedStatements<'a> {
+// 			pub fn insert<U: TableExt>(&mut self, x: &U, key: &U::KeyIn)->rusqlite::Result<()> {
+// 				x.insert(U::find_statement(self), key)
+// 			}
+// 			pub fn select<U: TableExt>(&mut self)->rusqlite::Result<(U, U::KeyOut>) {
+// 				U::select(U::find_statement(self))
+// 			}
+// 		}
 		pub struct TypedInserts<'a> { $(pub $n: TypedStatement<'a,$T>,)*
 			pub resref_orig: rusqlite::Statement<'a>
 		}
