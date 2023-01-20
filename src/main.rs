@@ -1,19 +1,19 @@
 #![allow(
-	unused_imports,
+// 	unused_imports,
 // 	unreachable_code,
 // 	unused_macros,
-	unused_variables,
+// 	unused_variables,
 	dead_code,
 // 	unused_must_use,
 // 	unused_mut,
 )]
 
 mod gameindex {
-/// This mod contains code related to the KEY/BIF side of the database.
-/// Main interface:
-///  - `Pack` trait;
-///  - `Resref`, `Strref` basic types;
-///  - `Gameindex` type and iterator.
+//, This mod contains code related to the KEY/BIF side of the database.
+//, Main interface:
+//,  - `Pack` trait;
+//,  - `Resref`, `Strref` basic types;
+//,  - `Gameindex` type and iterator.
 use macros::Pack;
 use std::cmp::min;
 use std::fmt::{self,Display,Debug,Formatter};
@@ -44,7 +44,7 @@ impl<const N: usize> From<&str> for StaticString<N> {
 impl<const N: usize> From<&[u8]> for StaticString<N> {
 	fn from(s: &[u8])->Self {
 		let mut bytes = [0u8; N];
-		let n = min(s.len(), N-1);
+		let n = min(s.len(), N);
 		bytes[..n].copy_from_slice(&s[..n]);
 		Self { bytes, }
 	}
@@ -138,6 +138,35 @@ impl Pack for Resref {
 		Ok(Self { name, })
 	}
 	fn pack(&self, f: &mut impl io::Write)->io::Result<()> { self.name.pack(f) }
+}
+impl Resref {
+	pub fn fresh(source: &str)->Self {
+		let mut n = std::cmp::min(source.len(), 8)-1;
+		let mut buf = StaticString::<8>::from(source);
+		println!("=== ({source})=> initial buf '{buf}' '{:?}' ===", buf.bytes);
+		for j in 1..111_111_111 {
+			// This panics after all 111_111_111 possibilities have been
+			// exhausted. Unlikely to happen irl (and then we cannot do much
+			// useful either).
+			// The last number written at any length is always (9*);
+			// we detect this to increase the length.
+			let mut s = j+888_888_888;
+			let mut k = 9*j;
+			let mut i = n;
+			let mut is_nines = true;
+			while k > 9 {
+				let c = (s % 10) as u8;
+				k/= 10; s/= 10;
+				is_nines = is_nines && (c == 9);
+				buf.bytes[i] = 48u8 + c;
+				i-= 1;
+			}
+			println!("buf='{buf}'");
+			if is_nines && n < 7 { n+= 1; }
+			if j > 113 { return Self { name: buf} }
+		}
+		panic!("Iteration exhausted");
+	}
 }
 #[derive(Debug,Pack,Clone,Copy)] pub struct Strref { pub value: i32, }
 #[derive(Debug,Pack,Clone,Copy,PartialEq,Eq)] pub struct Restype { pub value: u16, }
@@ -295,10 +324,10 @@ fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->
 }
 } // mod gameindex
 mod database {
-/// This mod groups all code connected with the SQL side of the database.
-/// Main exports are:
-///  - `Schema` type: description of a particular SQL table;
-///  - `Table` trait: connect a structure to a SQL row;
+//, This mod groups all code connected with the SQL side of the database.
+//, Main exports are:
+//,  - `Schema` type: description of a particular SQL table;
+//,  - `Table` trait: connect a structure to a SQL row;
 use std::marker::PhantomData;
 use rusqlite::{Connection, Statement, Row, ToSql};
 use rusqlite::types::{FromSql, ValueRef};
@@ -391,11 +420,11 @@ impl FieldType {
 	pub extra: &'a str,
 }
 #[derive(Debug)] pub struct Schema<'a> {
-	/// The main struct performing per-resource SQL operations.
-	/// This contains all relevant information to fully define a resource
-	/// on the SQL side.
-	/// In practice there exists exactly one `Schema` instance per
-	/// resource, and it is compiled by the `Table` derive macro.
+	//, The main struct performing per-resource SQL operations.
+	//, This contains all relevant information to fully define a resource
+	//, on the SQL side.
+	//, In practice there exists exactly one `Schema` instance per
+	//, resource, and it is compiled by the `Table` derive macro.
 	pub table_name: &'a str,
 	pub primary_key: &'a str,
 	pub parent_key: &'a str,
@@ -582,9 +611,9 @@ impl<'schema> Schema<'schema> {
 
 // III. Structure accessing directly SQL data
 pub trait Table: Sized {
-	/// This is the main trait for game resources, containing the low-level
-	/// interaction with the database (`ins`, `sel`). Concrete
-	/// implementations are provided by the `Table` derive macro.
+	//, This is the main trait for game resources, containing the low-level
+	//, interaction with the database (`ins`, `sel`). Concrete
+	//, implementations are provided by the `Table` derive macro.
 	type KeyIn;
 	type KeyOut;
 	type Res; // always == anyhow::Result<(Self, Self::KeyOut)>;
@@ -608,10 +637,10 @@ impl<'stmt, T: Table> TypedStatement<'stmt, T> {
 	}
 }
 pub struct TypedRows<'stmt,T: Table> {
-	/// An enriched version of `rusqlite::Rows`, retaining information about
-	/// the columns of the query, as well as current row index.
-	/// This also behaves as an `Iterator` (throwing when the underlying
-	/// `Row` iterator fails).
+	//, An enriched version of `rusqlite::Rows`, retaining information about
+	//, the columns of the query, as well as current row index.
+	//, This also behaves as an `Iterator` (throwing when the underlying
+	//, `Row` iterator fails).
 	rows: rusqlite::Rows<'stmt>,
 	_marker: PhantomData<T>,
 	index: usize,
@@ -645,7 +674,7 @@ pub use rusqlite;
 mod gametypes;
 mod constants;
 
-use database::{Table, ConnectionExt, TypedStatement};
+use database::{Table, ConnectionExt, RowExt, TypedStatement};
 use gameindex::{GameIndex, Pack, Strref, Resref, ResHandle};
 use gametypes::*;
 
@@ -667,7 +696,7 @@ pub fn create_db(db_file: &str)->Result<Connection> {
 	println!("creating global tables.. ");
 	db.execute_batch(r#"
 create table "current" ("component" text);
-create table "resref_orig" ("resref" text primary key);
+create table "resref_orig" ("resref" text primary key on conflict ignore);
 create table "resref_dict" ("key" text not null primary key on conflict ignore, "resref" text);
 create table "strref_dict" ("key" text not null primary key on conflict ignore, "strref" integer);
 	"#)?;
@@ -692,8 +721,8 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_query()) )?,
 		add_resref: db.prepare(r#"insert or ignore into "resref_orig" values (?)"#)?
 	};
-// 	let mut insert = TypedInserts::from(db)?;
 	game.for_each(|restype, mut handle| {
+		base.add_resref.execute((&handle.resref,))?;
 		match restype {
 		constants::RESTYPE_ITM =>
 			populate_item(&mut base, &mut handle),
@@ -708,7 +737,6 @@ fn populate_item(db: &mut DbInserter, handle: &mut ResHandle)->Result<()> {
 	let resref = handle.resref;
 	let item = Item::unpack(&mut cursor)?;
 	item.ins(&mut db.tables.items, &(resref,))?;
-	db.add_resref.execute((&resref,))?;
 
 	cursor.seek(SeekFrom::Start(item.abilities_offset as u64))?;
 	// TODO zip those vectors
@@ -753,19 +781,33 @@ impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
 	}
 }
 
+
+fn translate_resrefs(db: &Connection)->Result<()> {
+	let mut enum_st = db.prepare(r#"select key from "resref_dict" where "resref" is null"#)?;
+	let mut enum_rows = enum_st.query(())?;
+	let mut find = db.prepare(r#"select 1 from "resref_orig" where "resref"=?1 union select 1 from "resref_dict" where "resref"=?1"#)?;
+	while let Some(row) = enum_rows.next()? {
+		row.dump();
+		let longref = row.get::<_,String>(0)?;
+		println!("untranslated resref: '{longref}'");
+	}
+	Ok(())
+}
 fn save(db: &Connection, game: &GameIndex)->Result<()> {
+	//, All this function does is wrap up `save_in_current_dir` so that any
+	//, exception throws do not prevent changing back to the previous
+	//, directory:
 	let tmpdir = Path::new(&game.gamedir).join("sim_out");
 	fs::create_dir(&tmpdir)
 		.with_context(|| format!("cannot create temp directory {:?}", tmpdir))?;
-	// TODO: generate strings & resrefs
-	//
 	let orig_dir = std::env::current_dir()?;
 	std::env::set_current_dir(tmpdir)?;
-	let res = save_current_dir(db);
+	let res = save_in_current_dir(db);
 	std::env::set_current_dir(orig_dir)?;
 	res
 }
-fn save_current_dir(db: &Connection)->Result<()> {
+fn save_in_current_dir(db: &Connection)->Result<()> {
+	// TODO: generate strings & resrefs
 	let mut sel_item = Item::select_statement(db)?;
 	let mut sel_item_ab = ItemAbility::select_statement(db)?;
 	let mut sel_item_eff = ItemEffect::select_statement(db)?;
@@ -846,27 +888,28 @@ fn main() -> Result<()> {
 		.with_context(|| format!("could not initialize game from directory {}",
 		gamedir))?;
 // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
-	let db = create_db(DB_FILE)?;
-	populate(&db, &game)?;
-	db.execute_batch(r#"
-update "items" set price=5 where itemref='sw1h34';
-
-insert into "resref_dict" values
-('New Item!', 'NEWITEM');
-
-insert into "items" ("itemref", "name", "replacement", "ground_icon") values
-('New Item!', 'New Item name!', 'Replacement', 'new icon');
-
-update 'resref_dict'
-set "resref" = 'REPLAC' where "key" = 'Replacement';
-
-insert into "strref_dict" values
-('New Item name!', 35001);
-
-insert into "resref_orig" values
-('isw1h01'), ('gsw1h01'), ('csw1h01');
-	"#)?;
-// 	let db = Connection::open(DB_FILE)?;
-	save(&db, &game)?;
+// 	let db = create_db(DB_FILE)?;
+// 	populate(&db, &game)?;
+// 	db.execute_batch(r#"
+// update "items" set price=5 where itemref='sw1h34';
+// 
+// insert into "resref_dict" values
+// ('New Item!', 'NEWITEM');
+// 
+// insert into "items" ("itemref", "name", "replacement", "ground_icon") values
+// ('New Item!', 'New Item name!', 'Replacement', 'new icon');
+// 
+// update 'resref_dict'
+// set "resref" = 'REPLAC' where "key" = 'Replacement';
+// 
+// insert into "strref_dict" values
+// ('New Item name!', 35001);
+// 
+// insert into "resref_orig" values
+// ('isw1h01'), ('gsw1h01'), ('csw1h01');
+// 	"#)?;
+	let db = Connection::open(DB_FILE)?;
+	translate_resrefs(&db)?;
+// 	save(&db, &game)?;
 	Ok(())
 }
