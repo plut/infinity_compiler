@@ -1,5 +1,7 @@
-use crate::{Resref,Strref,Pack,Table};
-#[derive(Debug,Pack,Table)] pub struct ItemEffect {
+use crate::{Resref,Strref};
+use macros::{Pack, Table, produce_resource_list};
+#[derive(Debug,Pack,Table)]
+#[table(item_effects,itemref,items)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
 #[column(abref, i64, r#"references "item_abilities"("abref")"#)]
 	pub opcode: u16, //opcode,
@@ -19,7 +21,8 @@ use crate::{Resref,Strref,Pack,Table};
 	pub saving_throw_bonus: i32,
 	pub stacking_id: u32,
 }
-#[derive(Debug,Pack,Table)] pub struct ItemAbility {
+#[derive(Debug,Pack,Table)]
+#[table(item_abilities,itemref,items)] pub struct ItemAbility {
 #[column(itemref, Option<Resref>, r#"references "items"("itemref")"#)]
 #[column(abref, auto, "primary key")]
 	attack_type: u8, // AttackType,
@@ -54,7 +57,8 @@ use crate::{Resref,Strref,Pack,Table};
 	is_bolt: u16,
 	is_bullet: u16,
 }
-#[derive(Debug,Pack,Table)] pub struct Item {
+#[derive(Debug,Pack,Table)]
+#[table(items,itemref,items)] pub struct Item {
 #[header("ITM V1  ")]
 #[column(itemref, Resref, "primary key")]
 	unidentified_name: Strref,
@@ -93,3 +97,9 @@ use crate::{Resref,Strref,Pack,Table};
 #[column(false)] pub effect_index: u16,
 #[column(false)] pub equip_effect_count: u16,
 }
+
+// This last invocation closes the list of resources above, generating:
+//  - the `ByResource<T>` type constructor,
+//  - its implementation of `iter()` and an iterator
+//  - and the constant holding the parent resources.
+produce_resource_list!();
