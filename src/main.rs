@@ -142,6 +142,7 @@ impl Pack for Resref {
 impl Resref {
 	pub fn fresh(source: &str)->Self {
 		let mut n = std::cmp::min(source.len(), 8)-1;
+		let mut l = 0;
 		let mut buf = StaticString::<8>::from(source);
 		println!("=== ({source})=> initial buf '{buf}' '{:?}' ===", buf.bytes);
 		for j in 1..111_111_111 {
@@ -151,18 +152,17 @@ impl Resref {
 			// The last number written at any length is always (9*);
 			// we detect this to increase the length.
 			let mut s = j+888_888_888;
-			let mut k = 9*j;
 			let mut i = n;
 			let mut is_nines = true;
-			while k > 9 {
+			for _ in 0..l {
 				let c = (s % 10) as u8;
-				k/= 10; s/= 10;
+				s/= 10;
 				is_nines = is_nines && (c == 9);
 				buf.bytes[i] = 48u8 + c;
 				i-= 1;
 			}
-			println!("buf='{buf}'");
-			if is_nines && n < 7 { n+= 1; }
+			println!("buf='{buf}' j={j}, l={l}, is_nines");
+			if is_nines { if n < 7 { n+= 1; } l+= 1; }
 			if j > 113 { return Self { name: buf} }
 		}
 		panic!("Iteration exhausted");
@@ -908,8 +908,9 @@ fn main() -> Result<()> {
 // insert into "resref_orig" values
 // ('isw1h01'), ('gsw1h01'), ('csw1h01');
 // 	"#)?;
-	let db = Connection::open(DB_FILE)?;
-	translate_resrefs(&db)?;
+// 	let db = Connection::open(DB_FILE)?;
+// 	translate_resrefs(&db)?;
+	Resref::fresh("ABCDEFGHIJ");
 // 	save(&db, &game)?;
 	Ok(())
 }
