@@ -1080,8 +1080,8 @@ fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAb
 #[command(version,about=r#"
 Exposes Infinity Engine game data as a SQLite database."#)]
 struct RuntimeOptions {
-	#[arg(short,long,help="creates and populates the database")]
-	populate: bool,
+	#[arg(short,long,help="generates the initial database")]
+	generate: bool,
 	#[arg(short,long,help="compile changes from database to override")]
 	compile: bool,
 	#[arg(short='G',long,help="sets the game directory (containing chitin.key)", default_value=".")]
@@ -1092,7 +1092,7 @@ struct RuntimeOptions {
 
 fn main() -> Result<()> {
 	let mut options = RuntimeOptions::parse();
-	options.compile = options.compile || !options.populate;
+	options.compile = options.compile || !options.generate;
 	if options.database.is_none() {
 		options.database = Some(Path::new("game.sqlite").into());
 	}
@@ -1100,7 +1100,7 @@ fn main() -> Result<()> {
 		.with_context(|| format!("could not initialize game from directory {:?}",
 		options.gamedir))?;
 // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
-	if options.populate {
+	if options.generate {
 		let db = create_db(&options.database.as_ref().unwrap())?;
 		populate(&db, &game)?;
 		db.execute_batch(r#"

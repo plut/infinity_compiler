@@ -4,7 +4,7 @@ all: run
 r: run
 run:
 	rm -rf $(BG)/sim_out
-	cargo r -- -p -G $(BG)
+	cargo r -- -g -G $(BG)
 
 c: check
 check:
