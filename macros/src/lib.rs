@@ -319,8 +319,10 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 	let mut fields = pm2::TokenStream::new();
 	let mut map = pm2::TokenStream::new();
 	let mut data = pm2::TokenStream::new();
+	let mut n = 0usize;
 	RESOURCES.with(|v| {
 		use pm2::{Span,Ident};
+		n = v.borrow().len();
 	for ResourceDef (type_name, table_name) in v.borrow().iter() {
 
 		let ty = Ident::new(type_name, Span::call_site());
@@ -336,6 +338,7 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 		pub struct AllResources<T> { #fields }
 		pub const RESOURCES: AllResources<()> = AllResources { #data };
 		impl<T> AllResources<T> {
+			pub fn len(&self)->usize { #n }
 			pub fn map<U,E,F:Fn(&crate::database::Schema,&T)->Result<U,E>>(&self, f: F)->Result<AllResources<U>,E> {
 				Ok(AllResources { #map })
 			}

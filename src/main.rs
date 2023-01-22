@@ -22,8 +22,9 @@ use std::fmt::{self,Display,Debug,Formatter};
 use std::fs::{self, File};
 use std::io::{self, Read, Write, Seek, SeekFrom, BufReader, Cursor};
 use std::path::{Path, PathBuf};
-use crate::gametypes::{GameString};
 use anyhow::{Result, Context};
+use crate::progress::{Progress};
+use crate::gametypes::{GameString};
 
 // I. Basic types: StaticString, Resref, Strref etc.
 #[derive(Clone,Copy)]
@@ -301,6 +302,9 @@ impl<'a> Iterator for GameStringsIterator<'a> {
 		Some(Ok(GameString{ flags, sound, volume, pitch, string }))
 	}
 }
+impl<'a> ExactSizeIterator for GameStringsIterator<'a> {
+	fn len(&self) -> usize { self.nstr }
+}
 
 // IV. Game index main structure:
 #[derive(Debug)] pub struct GameIndex<'a> {
@@ -334,6 +338,7 @@ impl<'a> GameIndex<'a> {
 	}
 	pub fn for_each<F>(&self, mut f: F)->Result<()>
 	where F: (FnMut(Restype, ResHandle)->Result<()>) {
+		let pb = Progress::new(self.resources.len(), "resources");
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
 			let path = Path::new(self.gamedir).join(filename);
 			let mut bif = Option::<BifFile>::default();
@@ -341,6 +346,7 @@ impl<'a> GameIndex<'a> {
 				let rread = ResHandle{ bif: &mut bif, path: &path,
 					location: res.location, restype: res.restype, resref: res.resref, };
 				if res.location.sourcefile() != sourcefile { continue }
+				pb.inc(1);
 				f(res.restype, rread)?
 			}
 		}
@@ -767,6 +773,41 @@ impl<'stmt,T: Table> Iterator for TypedRows<'stmt,T> {
 // IV. Game strings
 use crate::gametypes::GameString;
 } // mod resources
+mod progress {
+
+use std::fmt::{Display,Debug};
+use std::cell::{RefCell};
+use indicatif::{ProgressBar,ProgressStyle,MultiProgress};
+
+thread_local! {
+	static MULTI: RefCell<MultiProgress> =
+		RefCell::new(MultiProgress::new());
+}
+pub struct Progress { pb: ProgressBar, }
+impl AsRef<ProgressBar> for Progress {
+	fn as_ref(&self)->&ProgressBar { &self.pb }
+}
+impl Drop for Progress {
+	fn drop(&mut self) {
+		MULTI.with(|c| c.borrow_mut().remove(&self.pb));
+	}
+// 	fn drop(&mut self) {
+// 		STACK.with(|c| c.borrow_mut().pop()); }
+}
+
+impl Progress {
+	pub fn new(n: impl num::ToPrimitive, text: impl Display)->Self {
+		let s = format!("{text} {{wide_bar:.blue}}{{pos:>5}}/{{len:>5}}");
+		let mut pb0 = ProgressBar::new(<u64 as num::NumCast>::from(n).unwrap());
+		pb0.set_style(ProgressStyle::with_template(&s).unwrap());
+		let pb = MULTI.with(|c| c.borrow_mut().add(pb0));
+		Self { pb }
+	}
+	pub fn inc(&self, n: u64) { self.as_ref().inc(n) }
+}
+}
+pub trait ProgressIterator {
+}
 
 pub use rusqlite;
 mod gametypes;
@@ -774,6 +815,7 @@ mod constants;
 
 use database::{Table, ConnectionExt, RowExt, TypedStatement};
 use gameindex::{GameIndex, Pack, Strref, Resref, ResHandle};
+use progress::{Progress};
 use gametypes::*;
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
@@ -800,9 +842,10 @@ create table "resref_orig" ("resref" text primary key on conflict ignore);
 create table "resref_dict" ("key" text not null primary key on conflict ignore, "resref" text);
 create table "strref_dict" ("key" text not null primary key on conflict ignore, "strref" integer);
 	"#)?;
-	println!("creating per-resource tables.. ");
+	let pb = Progress::new(RESOURCES.len(), "create tables");
 	RESOURCES.map(|schema,_| {
-		println!("  creating for resource {}", schema.table_name);
+		pb.inc(1);
+// 		println!("  creating for resource {}", schema.table_name);
 		schema.create_tables_and_views(&db)?; Result::<()>::Ok(())
 	})?;
 	db.exec("commit")?;
@@ -830,7 +873,7 @@ struct DbInserter<'a> {
 
 fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 	populate_strings(db, &game.gamedir)
-		.with_context(|| format!("cannot read game strings from {:?}", game.gamedir))?;
+		.with_context(|| format!("cannot read game strings from game directory {:?}", game.gamedir))?;
 	db.exec("begin transaction")?;
 	let mut base = DbInserter { db,
 		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_query()) )?,
@@ -847,10 +890,12 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 	db.exec("commit")?; Ok(())
 }
 fn populate_strings(db: &Connection, path: &impl AsRef<Path>)->Result<()> {
+	use gameindex::LANGUAGES;
 	db.exec("begin transaction")?;
-	for (langname, langsubdir, has_f) in gameindex::LANGUAGES {
+	let pb = Progress::new(LANGUAGES.len(), "languages");
+	for (langname, langsubdir, has_f) in LANGUAGES {
+		pb.inc(1);
 		let langdir = path.as_ref().join("lang").join(langsubdir);
-		println!("Populating strings: {langname}");
 		populate_language(db, &langname, &langdir.join("dialog.tlk"))
 			.with_context(|| format!("cannot populate language '{langname}' from '{langdir:?}'"))?;
 		if *has_f {
@@ -864,8 +909,11 @@ fn populate_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> +
 	let bytes = fs::read(path)
 		.with_context(|| format!("cannot open strings file: {path:?}"))?;
 	let mut q = db.prepare(&format!(r#"insert into "strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
-	for (strref, x) in GameStringsIterator::new(bytes.as_ref())?.enumerate() {
+	let itr = GameStringsIterator::new(bytes.as_ref())?;
+	let pb = Progress::new(itr.len(), "strings");
+	for (strref, x) in itr.enumerate() {
 		let s = x?;
+		pb.inc(1);
 		q.execute((strref, s.flags, s.sound, s.volume, s.pitch, s.string))?;
 	}
 	Ok(())
@@ -886,7 +934,7 @@ fn populate_item(db: &mut DbInserter, handle: &mut ResHandle)->Result<()> {
 		ab_n.push(ab.effect_count);
 		ab_i.push(db.db.last_insert_rowid());
 	}
-	println!("inserting item {resref}: {ab_n:?} {ab_i:?}");
+// 	println!("inserting item {resref}: {ab_n:?} {ab_i:?}");
 	cursor.seek(SeekFrom::Start(item.effect_offset as u64))?;
 	for _ in 0..item.equip_effect_count { // on-equip effects
 		let eff = ItemEffect::unpack(&mut cursor)?;
