@@ -307,14 +307,15 @@ impl<'a> ExactSizeIterator for GameStringsIterator<'a> {
 }
 
 // IV. Game index main structure:
-#[derive(Debug)] pub struct GameIndex<'a> {
-	pub gamedir: &'a str,
+#[derive(Debug)] pub struct GameIndex {
+	pub gamedir: PathBuf,
 	pub bifnames: Vec<String>,
 	_bifsizes: Vec<u32>,
 	pub resources: Vec<KeyRes>,
 }
-impl<'a> GameIndex<'a> {
-	pub fn open(gamedir: &'a str)->Result<Self> {
+impl GameIndex {
+	pub fn open(gamedir: impl AsRef<Path>)->Result<Self> {
+		let gamedir = gamedir.as_ref().to_path_buf();
 		let indexfile = Path::new(&gamedir).join("chitin.key");
 		let mut f = File::open(&indexfile)
 			.with_context(|| format!("cannot open game index: {indexfile:?}"))?;
@@ -340,7 +341,7 @@ impl<'a> GameIndex<'a> {
 	where F: (FnMut(Restype, ResHandle)->Result<()>) {
 		let pb = Progress::new(self.resources.len(), "resources");
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
-			let path = Path::new(self.gamedir).join(filename);
+			let path = self.gamedir.join(filename);
 			let mut bif = Option::<BifFile>::default();
 			for res in self.resources.iter() {
 				let rread = ResHandle{ bif: &mut bif, path: &path,
@@ -353,13 +354,13 @@ impl<'a> GameIndex<'a> {
 		Ok(())
 	}
 }
-impl<'a> IntoIterator for &'a GameIndex<'a> {
+impl<'a> IntoIterator for &'a GameIndex {
 	type Item = BifView<'a>;
 	type IntoIter = GameIndexItr<'a>;
 	fn into_iter(self)->Self::IntoIter { GameIndexItr{ index: self, state: 0, } }
 }
 #[derive(Debug)] pub struct GameIndexItr<'a> {
-	index: &'a GameIndex<'a>,
+	index: &'a GameIndex,
 	state: usize,
 }
 #[derive(Debug)] pub struct BifView<'a> { // element of GameIndex
@@ -373,7 +374,7 @@ impl<'a> Iterator for GameIndexItr<'a> {
 	fn next(&mut self)->Option<Self::Item> {
 		if self.state >= self.index.bifnames.len() { return None }
 		let filename = &self.index.bifnames[self.state];
-		let r = BifView{ path: Path::new(self.index.gamedir).join(filename),
+		let r = BifView{ path: self.index.gamedir.join(filename),
 			sourcefile: self.state, resources: &self.index.resources, file: None };
 		self.state+= 1;
 		Some(r)
@@ -798,7 +799,7 @@ impl Drop for Progress {
 impl Progress {
 	pub fn new(n: impl num::ToPrimitive, text: impl Display)->Self {
 		let s = format!("{text} {{wide_bar:.blue}}{{pos:>5}}/{{len:>5}}");
-		let mut pb0 = ProgressBar::new(<u64 as num::NumCast>::from(n).unwrap());
+		let pb0 = ProgressBar::new(<u64 as num::NumCast>::from(n).unwrap());
 		pb0.set_style(ProgressStyle::with_template(&s).unwrap());
 		let pb = MULTI.with(|c| c.borrow_mut().add(pb0));
 		Self { pb }
@@ -820,20 +821,23 @@ use gametypes::*;
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 use std::io::{Seek, SeekFrom};
-use std::path::{Path};
+use std::path::{Path,PathBuf};
 use std::fs::{self, File};
 use std::fmt::{self,Debug};
 use rusqlite::{Connection,Statement};
+use clap::Parser;
 pub(crate) use anyhow::{Context, Result};
 
+
 // I. create DB
-pub fn create_db(db_file: &str)->Result<Connection> {
-	println!("creating file {}", db_file);
-	if Path::new(db_file).exists() {
-		fs::remove_file(db_file)
-		.with_context(|| format!("cannot remove file: {}", db_file))?;
+pub fn create_db(db_file: impl AsRef<Path>)->Result<Connection> {
+	let path = db_file.as_ref();
+	println!("creating file {path:?}");
+	if Path::new(&path).exists() {
+		fs::remove_file(&path)
+		.with_context(|| format!("cannot remove file: {path:?}"))?;
 	}
-	let db = Connection::open(db_file)?;
+	let db = Connection::open(path)?;
 	db.exec("begin transaction")?;
 	println!("creating global tables.. ");
 	db.execute_batch(r#"
@@ -1072,17 +1076,34 @@ fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAb
 	Ok(())
 }
 
-const DB_FILE: &str = "game.sqlite";
+#[derive(Parser,Debug)]
+#[command(version,about=r#"
+Exposes Infinity Engine game data as a SQLite database."#)]
+struct RuntimeOptions {
+	#[arg(short,long,help="creates and populates the database")]
+	populate: bool,
+	#[arg(short,long,help="compile changes from database to override")]
+	compile: bool,
+	#[arg(short='G',long,help="sets the game directory (containing chitin.key)", default_value=".")]
+	gamedir: PathBuf,
+	#[arg(short='F',long,help="sets the sqlite file")]
+	database: Option<PathBuf>,
+}
 
 fn main() -> Result<()> {
-	let gamedir = "/home/jerome/jeux/bg/game";
-	let game = GameIndex::open(gamedir)
-		.with_context(|| format!("could not initialize game from directory {}",
-		gamedir))?;
+	let mut options = RuntimeOptions::parse();
+	options.compile = options.compile || !options.populate;
+	if options.database.is_none() {
+		options.database = Some(Path::new("game.sqlite").into());
+	}
+	let game = GameIndex::open(&options.gamedir)
+		.with_context(|| format!("could not initialize game from directory {:?}",
+		options.gamedir))?;
 // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
-	let db = create_db(DB_FILE)?;
-	populate(&db, &game)?;
-	db.execute_batch(r#"
+	if options.populate {
+		let db = create_db(&options.database.as_ref().unwrap())?;
+		populate(&db, &game)?;
+		db.execute_batch(r#"
 update "items" set price=5 where itemref='sw1h34';
 
 insert into "resref_dict" values
@@ -1100,7 +1121,10 @@ insert into "strref_dict" values
 insert into "resref_orig" values
 ('isw1h01'), ('gsw1h01'), ('csw1h01');
 	"#)?;
-// 	let db = Connection::open(DB_FILE)?;
-// 	save(&db, &game)?;
+	}
+	if options.compile {
+		let db = Connection::open(options.database.as_ref().unwrap())?;
+		save(&db, &game)?;
+	}
 	Ok(())
 }
