@@ -22,8 +22,8 @@ use std::fmt::{self,Display,Debug,Formatter};
 use std::fs::{self, File};
 use std::io::{self, Read, Write, Seek, SeekFrom, BufReader, Cursor};
 use std::path::{Path, PathBuf};
-use anyhow::{Result, Context};
 use crate::gametypes::{GameString};
+use anyhow::{Result, Context};
 
 // I. Basic types: StaticString, Resref, Strref etc.
 #[derive(Clone,Copy)]
@@ -780,6 +780,7 @@ fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 use std::io::{Seek, SeekFrom};
 use std::path::{Path};
 use std::fs::{self, File};
+use std::fmt::{self,Debug};
 use rusqlite::{Connection,Statement};
 pub(crate) use anyhow::{Context, Result};
 
@@ -805,15 +806,16 @@ create table "strref_dict" ("key" text not null primary key on conflict ignore, 
 		schema.create_tables_and_views(&db)?; Result::<()>::Ok(())
 	})?;
 	db.exec("commit")?;
-	create_strings(&db);
+	create_strings(&db)?;
 	Ok(db)
 }
 pub fn create_strings(db: &Connection)->Result<()> {
 	db.exec("begin transaction")?;
-	for (langname, langsubdir, has_f) in gameindex::LANGUAGES {
-		db.exec(&format!(r#"create table "strings_{langname}"("strref" integer primary key, "sound" text, "volume" integer, "pitch" integer, "string" text)"#)?;
-		if has_f {
-		db.exec(&format!(r#"create table "strings_{langname}F"("strref" integer primary key, "sound" text, "volume" integer, "pitch" integer, "string" text)"#)?;
+	const SCHEMA: &str = r#"("strref" integer primary key, "flags" integer, "sound" text, "volume" integer, "pitch" integer, "string" text)"#;
+	for (langname, _, has_f) in gameindex::LANGUAGES {
+		db.exec(&format!(r#"create table "strings_{langname}"{SCHEMA}"#))?;
+		if *has_f {
+		db.exec(&format!(r#"create table "strings_{langname}F"{SCHEMA}"#))?;
 		}
 	}
 	db.exec("commit")?; Ok(())
@@ -827,6 +829,8 @@ struct DbInserter<'a> {
 }
 
 fn populate(db: &Connection, game: &GameIndex)->Result<()> {
+	populate_strings(db, &game.gamedir)
+		.with_context(|| format!("cannot read game strings from {:?}", game.gamedir))?;
 	db.exec("begin transaction")?;
 	let mut base = DbInserter { db,
 		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_query()) )?,
@@ -842,21 +846,24 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 	})?;
 	db.exec("commit")?; Ok(())
 }
-fn populate_strings(db: &mut Connection, path: &impl AsRef<Path>)->Result<()> {
+fn populate_strings(db: &Connection, path: &impl AsRef<Path>)->Result<()> {
 	db.exec("begin transaction")?;
 	for (langname, langsubdir, has_f) in gameindex::LANGUAGES {
-		let langdir = path.as_ref().join(langsubdir);
-		populate_language(db, &langname, &langdir.join("dialog.tlk"))?;
+		let langdir = path.as_ref().join("lang").join(langsubdir);
+		println!("Populating strings: {langname}");
+		populate_language(db, &langname, &langdir.join("dialog.tlk"))
+			.with_context(|| format!("cannot populate language '{langname}' from '{langdir:?}'"))?;
 		if *has_f {
 			populate_language(db, &format!("{}F", langname), &langdir.join("dialog.tlk"))?;
 		}
 	}
 	db.exec("commit")?; Ok(())
 }
-fn populate_language(db: &mut Connection, langname: &str, path: &impl AsRef<Path>)->Result<()> {
+fn populate_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> + Debug))->Result<()> {
 	use gameindex::{GameStringsIterator};
-	let bytes = fs::read(path)?;
-	let mut q = db.prepare(&format!(r#"insert into "strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?)"#))?;
+	let bytes = fs::read(path)
+		.with_context(|| format!("cannot open strings file: {path:?}"))?;
+	let mut q = db.prepare(&format!(r#"insert into "strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
 	for (strref, x) in GameStringsIterator::new(bytes.as_ref())?.enumerate() {
 		let s = x?;
 		q.execute((strref, s.flags, s.sound, s.volume, s.pitch, s.string))?;
@@ -1025,32 +1032,27 @@ fn main() -> Result<()> {
 		.with_context(|| format!("could not initialize game from directory {}",
 		gamedir))?;
 // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
-// 	let db = create_db(DB_FILE)?;
-// 	populate(&db, &game)?;
-// 	db.execute_batch(r#"
-// update "items" set price=5 where itemref='sw1h34';
-// 
-// insert into "resref_dict" values
-// ('New Item!', 'NEWITEM');
-// 
-// insert into "items" ("itemref", "name", "replacement", "ground_icon") values
-// ('New Item!', 'New Item name!', 'Replacement', 'new icon');
-// 
-// update 'resref_dict'
-// set "resref" = 'REPLAC' where "key" = 'Replacement';
-// 
-// insert into "strref_dict" values
-// ('New Item name!', 35001);
-// 
-// insert into "resref_orig" values
-// ('isw1h01'), ('gsw1h01'), ('csw1h01');
-// 	"#)?;
-	let bytes = std::fs::read("/home/jerome/jeux/bg/game/lang/fr_FR/dialog.tlk")?;
-	for (i,s) in gameindex::GameStringsIterator::new(bytes.as_ref())?.enumerate() {
-		println!("{i}={s:?}");
-		if i >= 10 { break }
-	}
-	let db = Connection::open(DB_FILE)?;
+	let db = create_db(DB_FILE)?;
+	populate(&db, &game)?;
+	db.execute_batch(r#"
+update "items" set price=5 where itemref='sw1h34';
+
+insert into "resref_dict" values
+('New Item!', 'NEWITEM');
+
+insert into "items" ("itemref", "name", "replacement", "ground_icon") values
+('New Item!', 'New Item name!', 'Replacement', 'new icon');
+
+update 'resref_dict'
+set "resref" = 'REPLAC' where "key" = 'Replacement';
+
+insert into "strref_dict" values
+('New Item name!', 35001);
+
+insert into "resref_orig" values
+('isw1h01'), ('gsw1h01'), ('csw1h01');
+	"#)?;
+// 	let db = Connection::open(DB_FILE)?;
 // 	save(&db, &game)?;
 	Ok(())
 }
