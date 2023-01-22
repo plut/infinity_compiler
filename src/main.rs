@@ -1,5 +1,5 @@
 #![allow(
-// 	unused_imports,
+	unused_imports,
 // 	unreachable_code,
 // 	unused_macros,
 // 	unused_variables,
@@ -7,6 +7,8 @@
 // 	unused_must_use,
 // 	unused_mut,
 )]
+// #![feature(trace_macros)]
+// trace_macros!(false);
 
 mod gameindex {
 //, This mod contains code related to the KEY/BIF side of the database.
@@ -17,11 +19,12 @@ mod gameindex {
 use macros::Pack;
 use std::cmp::min;
 use std::fmt::{self,Display,Debug,Formatter};
-use std::fs::{File};
+use std::fs::{self, File};
 use std::io::{self, Read, Write, Seek, SeekFrom, BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use anyhow::{Result, Context};
 
+// I. Basic types: StaticString, Resref, Strref etc.
 #[derive(Clone,Copy)]
 pub struct StaticString<const N: usize>{ bytes: [u8; N], }
 impl<const N: usize> PartialEq<&str> for StaticString<N> {
@@ -111,7 +114,27 @@ pub trait Pack: Sized {
 		(0..n).map(|_| { Self::unpack(&mut f) }).collect()
 	}
 }
+
+macro_rules! pack_tuple {
+	( )=> { };
+	($A:ident$(,$B:ident)*$(,)?) => {
+		impl<A: Pack,$($B: Pack),*> Pack for (A,$($B,)*) {
+			fn unpack(f: &mut impl Read)->io::Result<Self> {
+				Ok((A::unpack(f)?, $($B::unpack(f)?,)*))
+			}
+			fn pack(&self, f: &mut impl io::Write)->io::Result<()> {
+				#[allow(non_snake_case)]
+				let (A, $($B,)*) = self;
+				A.pack(f)?; $($B.pack(f)?;)* Ok(())
+			}
+		}
+		pack_tuple!{$($B),*} // recursive call for tail of tuple
+	};
+}
+pack_tuple!(A,B,C,D,E,F);
 macro_rules! unpack_int {
+	// this would be better with a trait, but to_le_bytes (etc.) is not
+	// part of a trait (even in crate `num`).
 	($($T:ty),*) => { $(impl Pack for $T {
 			fn unpack(f: &mut impl Read)->io::Result<Self> {
 				let mut buf = [0u8; std::mem::size_of::<$T>()];
@@ -123,7 +146,8 @@ macro_rules! unpack_int {
 			}
 	})* }
 }
-unpack_int!{i8,i16,i32,i64,u8,u16,u32,u64}
+unpack_int!(i8,i16,i32,i64,u8,u16,u32,u64);
+
 #[derive(Clone,Copy)] pub struct Resref { pub name: StaticString::<8>, }
 impl Debug for Resref {
 	fn fmt(&self, f:&mut Formatter)->fmt::Result { Debug::fmt(&self.name, f) }
@@ -140,11 +164,11 @@ impl Pack for Resref {
 	fn pack(&self, f: &mut impl io::Write)->io::Result<()> { self.name.pack(f) }
 }
 impl Resref {
-	pub fn fresh(source: &str)->Self {
+	// iterates until `test` returns FALSE
+	pub fn fresh(source: &str, mut is_used: impl FnMut(&Resref)->rusqlite::Result<bool> )->rusqlite::Result<Self> {
 		let mut n = std::cmp::min(source.len(), 8)-1;
 		let mut l = 0;
-		let mut buf = StaticString::<8>::from(source);
-		println!("=== ({source})=> initial buf '{buf}' '{:?}' ===", buf.bytes);
+		let mut buf = Self { name: StaticString::<8>::from(source) };
 		for j in 1..111_111_111 {
 			// This panics after all 111_111_111 possibilities have been
 			// exhausted. Unlikely to happen irl (and then we cannot do much
@@ -158,12 +182,11 @@ impl Resref {
 				let c = (s % 10) as u8;
 				s/= 10;
 				is_nines = is_nines && (c == 9);
-				buf.bytes[i] = 48u8 + c;
+				buf.name.bytes[i] = 48u8 + c;
 				i-= 1;
 			}
-			println!("buf='{buf}' j={j}, l={l}, is_nines");
+			if !is_used(&buf)? { return Ok(buf) }
 			if is_nines { if n < 7 { n+= 1; } l+= 1; }
-			if j > 113 { return Self { name: buf} }
 		}
 		panic!("Iteration exhausted");
 	}
@@ -176,6 +199,8 @@ impl BifIndex {
 	fn resourceindex(&self)->usize { (self.data & 0x3fff) as usize }
 	fn tilesetindex(&self)->usize { ((self.data >> 14) & 0x3f) as usize }
 }
+
+// II. Key/Bif indexing:
 #[derive(Debug,Pack)] struct KeyHdr {
 	#[header("KEY V1  ")]
 	nbif: i32,
@@ -194,13 +219,95 @@ impl BifIndex {
 	restype: Restype,
 	location: BifIndex,
 }
+#[derive(Debug,Pack)] struct TlkHeader {
+	#[header("TLK V1  ")]
+	lang: u16,
+	nstr: i32,
+	offset: i32,
+}
+#[derive(Debug,Pack)] pub struct BifHdr {
+	#[header("BIFFV1  ")]
+	nres: u32,
+	ntilesets: u32,
+	offset: u32,
+}
+#[derive(Debug,Pack)] pub struct BifResource {
+	locator: BifIndex,
+	offset: u32,
+	size: u32,
+	restype: Restype,
+	_unknown: u16,
+}
+
+// III. Game strings:
+#[derive(Debug)] pub struct GameString<'a> {
+	pub flags: u16,
+	pub sound: Resref,
+	pub volume: i32,
+	pub pitch: i32,
+	pub string: &'a str,
+}
+impl<'a> GameString<'a> {
+	fn unpack(f: &mut impl Read, buf: &'a[u8], offset: usize)->Result<Self> {
+		let (flags, sound, volume, pitch, delta, strlen) =
+			<(u16, Resref, i32, i32, i32, i32) as Pack>::unpack(f)?;
+		// substring0(buf, offset + delta, strlen)
+		// start is offset + delta
+		// string *might* be zero-terminated
+		let start = offset + (delta as usize);
+		let end = start + (strlen as usize);
+		let c = buf[end];
+		let string = std::str::from_utf8(&buf[start..end-((c==0) as usize)])?;
+		Ok(Self{ flags, sound, volume, pitch, string })
+	}
+// 	fn pack(&self, _f: &mut impl io::Write)->io::Result<()> {
+// 		println!("Pack for type: {}", crate::type_of(&self));
+// 		unimplemented!() }
+}
+#[derive(Debug)]
+pub struct GameStringsIterator<'a> {
+	cursor: Cursor<&'a[u8]>,
+	index: usize,
+	nstr: usize,
+	offset: usize,
+}
+impl<'a> /* From<T> for */ GameStringsIterator<'a> {
+	pub fn new(bytes: &'a[u8])->io::Result<Self> {
+		let mut cursor = Cursor::new(bytes);
+		let header = TlkHeader::unpack(&mut cursor)?;
+		Ok(Self { cursor, index: 0, nstr: header.nstr as usize,
+			offset: header.offset as usize })
+	}
+}
+impl<'a> Iterator for GameStringsIterator<'a> {
+	type Item = Result<GameString<'a>>;
+	fn next(&mut self)->Option<Self::Item> {
+		if self.index >= self.nstr { return None }
+		let tlk_info =
+			<(u16, Resref, i32, i32, i32, i32) as Pack>::unpack(&mut self.cursor);
+		// propagate error to the calling loop (not the same Err types here):
+		if let Err(e) = tlk_info { return Some(Err(e.into())) }
+		let (flags, sound, volume, pitch, delta, strlen) = tlk_info.unwrap();
+
+		let start = self.offset + (delta as usize);
+		let end = start + (strlen as usize);
+		let buf = self.cursor.get_ref();
+		// string *might* be zero-terminated, in which case we discard:
+		let c = buf[end-1];
+		let end2 = std::cmp::max(start, end-((c==0) as usize));
+		let string = std::str::from_utf8(&buf[start..end2]).ok()?;
+		self.index+= 1;
+		Some(Ok(GameString{ flags, sound, volume, pitch, string }))
+	}
+}
+
+// IV. Game index main structure:
 #[derive(Debug)] pub struct GameIndex<'a> {
 	pub gamedir: &'a str,
 	pub bifnames: Vec<String>,
 	_bifsizes: Vec<u32>,
 	pub resources: Vec<KeyRes>,
 }
-
 impl<'a> GameIndex<'a> {
 	pub fn open(gamedir: &'a str)->Result<Self> {
 		let indexfile = Path::new(&gamedir).join("chitin.key");
@@ -224,6 +331,25 @@ impl<'a> GameIndex<'a> {
 				hdr.nres, indexfile.to_str().unwrap()))?;
 		Ok(GameIndex{ gamedir, bifnames, resources, _bifsizes })
 	}
+	pub fn for_each<F>(&self, mut f: F)->Result<()>
+	where F: (FnMut(Restype, ResHandle)->Result<()>) {
+		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
+			let path = Path::new(self.gamedir).join(filename);
+			let mut bif = Option::<BifFile>::default();
+			for res in self.resources.iter() {
+				let rread = ResHandle{ bif: &mut bif, path: &path,
+					location: res.location, restype: res.restype, resref: res.resref, };
+				if res.location.sourcefile() != sourcefile { continue }
+				f(res.restype, rread)?
+			}
+		}
+		Ok(())
+	}
+}
+impl<'a> IntoIterator for &'a GameIndex<'a> {
+	type Item = BifView<'a>;
+	type IntoIter = GameIndexItr<'a>;
+	fn into_iter(self)->Self::IntoIter { GameIndexItr{ index: self, state: 0, } }
 }
 #[derive(Debug)] pub struct GameIndexItr<'a> {
 	index: &'a GameIndex<'a>,
@@ -234,11 +360,6 @@ impl<'a> GameIndex<'a> {
 	pub sourcefile: usize,
 	pub resources: &'a Vec<KeyRes>,
 	pub file: Option::<BufReader<File>>,
-}
-impl<'a> IntoIterator for &'a GameIndex<'a> {
-	type Item = BifView<'a>;
-	type IntoIter = GameIndexItr<'a>;
-	fn into_iter(self)->Self::IntoIter { GameIndexItr{ index: self, state: 0, } }
 }
 impl<'a> Iterator for GameIndexItr<'a> {
 	type Item = BifView<'a>;
@@ -272,35 +393,6 @@ impl<'a> ResHandle<'a> {
 	}
 }
 
-impl<'a> GameIndex<'a> {
-	pub fn for_each<F>(&self, mut f: F)->Result<()>
-	where F: (FnMut(Restype, ResHandle)->Result<()>) {
-		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
-			let path = Path::new(self.gamedir).join(filename);
-			let mut bif = Option::<BifFile>::default();
-			for res in self.resources.iter() {
-				let rread = ResHandle{ bif: &mut bif, path: &path,
-					location: res.location, restype: res.restype, resref: res.resref, };
-				if res.location.sourcefile() != sourcefile { continue }
-				f(res.restype, rread)?
-			}
-		}
-		Ok(())
-	}
-}
-#[derive(Debug,Pack)] pub struct BifHdr {
-	#[header("BIFFV1  ")]
-	nres: u32,
-	ntilesets: u32,
-	offset: u32,
-}
-#[derive(Debug,Pack)] pub struct BifResource {
-	locator: BifIndex,
-	offset: u32,
-	size: u32,
-	restype: Restype,
-	_unknown: u16,
-}
 fn bifresources(file: impl AsRef<Path>+Debug)->Result<Vec<BifResource>> {
 	let mut f = File::open(&file)
 		.with_context(|| format!("cannot open bifresources in {file:?}"))?;
@@ -668,6 +760,24 @@ impl<'stmt,T: Table> Iterator for TypedRows<'stmt,T> {
 	}
 }
 
+// IV. Game strings
+use crate::gameindex::GameString;
+impl<'a> Table for GameString<'a> {
+	type KeyIn = usize;
+	type KeyOut = usize;
+	type Res = anyhow::Result<(Self, Self::KeyOut)>;
+	const SCHEMA: Schema<'static> = Schema {
+		table_name: "", primary_key: "strref",
+		parent_key: "", parent_table: "", fields: &[
+		Column{ fieldname: "strref", fieldtype: Strref::SQL_TYPE, extra: "primary key" },
+		] };
+	fn ins(&self, s: &mut Statement, key: &usize)->rusqlite::Result<()> {
+		todo!()
+	}
+	fn sel(r: &Row)->rusqlite::Result<(Self, usize)> {
+		todo!()
+	}
+}
 } // mod resources
 
 pub use rusqlite;
@@ -781,19 +891,25 @@ impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
 	}
 }
 
-
 fn translate_resrefs(db: &Connection)->Result<()> {
+	//!
+	db.exec("begin transaction")?;
 	let mut enum_st = db.prepare(r#"select key from "resref_dict" where "resref" is null"#)?;
 	let mut enum_rows = enum_st.query(())?;
 	let mut find = db.prepare(r#"select 1 from "resref_orig" where "resref"=?1 union select 1 from "resref_dict" where "resref"=?1"#)?;
+	let mut update = db.prepare(r#"update "resref_dict" set "resref"=?2 where "key"=?1"#)?;
 	while let Some(row) = enum_rows.next()? {
 		row.dump();
 		let longref = row.get::<_,String>(0)?;
-		println!("untranslated resref: '{longref}'");
+		// TODO: remove spaces etc.
+		let resref = Resref::fresh(&longref, |r| find.exists((r,)))?;
+		update.execute((&longref, &resref))?;
+		println!("untranslated resref: '{longref}'->'{resref}'");
 	}
-	Ok(())
+	db.exec("commit")?; Ok(())
 }
 fn save(db: &Connection, game: &GameIndex)->Result<()> {
+	translate_resrefs(&db)?;
 	//, All this function does is wrap up `save_in_current_dir` so that any
 	//, exception throws do not prevent changing back to the previous
 	//, directory:
@@ -908,9 +1024,12 @@ fn main() -> Result<()> {
 // insert into "resref_orig" values
 // ('isw1h01'), ('gsw1h01'), ('csw1h01');
 // 	"#)?;
-// 	let db = Connection::open(DB_FILE)?;
-// 	translate_resrefs(&db)?;
-	Resref::fresh("ABCDEFGHIJ");
+	let bytes = std::fs::read("/home/jerome/jeux/bg/game/lang/fr_FR/dialog.tlk")?;
+	for (i,s) in gameindex::GameStringsIterator::new(bytes.as_ref())?.enumerate() {
+		println!("{i}={s:?}");
+		if i >= 10 { break }
+	}
+	let db = Connection::open(DB_FILE)?;
 // 	save(&db, &game)?;
 	Ok(())
 }
