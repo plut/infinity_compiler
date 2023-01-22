@@ -1,5 +1,14 @@
 use crate::{Resref,Strref};
 use macros::{Pack, Table, produce_resource_list};
+#[derive(Debug)] pub struct GameString<'a> {
+	// Note: since &str is not FromSql, we cannot use Table for this;
+	// we must instead code the equivalent by hand
+	pub flags: u16,
+	pub sound: Resref,
+	pub volume: i32,
+	pub pitch: i32,
+	pub string: &'a str,
+}
 #[derive(Debug,Pack,Table)]
 #[table(item_effects,itemref,items)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]

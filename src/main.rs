@@ -23,6 +23,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write, Seek, SeekFrom, BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use anyhow::{Result, Context};
+use crate::gametypes::{GameString};
 
 // I. Basic types: StaticString, Resref, Strref etc.
 #[derive(Clone,Copy)]
@@ -240,13 +241,13 @@ impl BifIndex {
 }
 
 // III. Game strings:
-#[derive(Debug)] pub struct GameString<'a> {
-	pub flags: u16,
-	pub sound: Resref,
-	pub volume: i32,
-	pub pitch: i32,
-	pub string: &'a str,
-}
+pub const LANGUAGES: &[(&str, &str, bool)] = &[
+	("en", "en_US", false),
+	("cs", "cs_CZ", false),
+	("de", "de_DE", true),
+	("es", "es_ES", true),
+	("fr", "fr_FR", true),
+];
 impl<'a> GameString<'a> {
 	fn unpack(f: &mut impl Read, buf: &'a[u8], offset: usize)->Result<Self> {
 		let (flags, sound, volume, pitch, delta, strlen) =
@@ -264,14 +265,14 @@ impl<'a> GameString<'a> {
 // 		println!("Pack for type: {}", crate::type_of(&self));
 // 		unimplemented!() }
 }
-#[derive(Debug)]
-pub struct GameStringsIterator<'a> {
+#[derive(Debug)] pub struct GameStringsIterator<'a> {
 	cursor: Cursor<&'a[u8]>,
 	index: usize,
 	nstr: usize,
 	offset: usize,
 }
 impl<'a> /* From<T> for */ GameStringsIterator<'a> {
+	// not a From since we return a Result<>
 	pub fn new(bytes: &'a[u8])->io::Result<Self> {
 		let mut cursor = Cursor::new(bytes);
 		let header = TlkHeader::unpack(&mut cursor)?;
@@ -456,6 +457,9 @@ impl<'a> RowExt for Row<'a> {
 pub trait SqlType { const SQL_TYPE: FieldType; }
 impl<T> SqlType for Option<T> where T: SqlType {
 	const SQL_TYPE: FieldType = T::SQL_TYPE;
+}
+impl<'a> SqlType for &'a str {
+	const SQL_TYPE: FieldType = FieldType::Text;
 }
 macro_rules! sqltype_int {
 	($($T:ty),*) => { $(impl SqlType for $T {
@@ -761,23 +765,7 @@ impl<'stmt,T: Table> Iterator for TypedRows<'stmt,T> {
 }
 
 // IV. Game strings
-use crate::gameindex::GameString;
-impl<'a> Table for GameString<'a> {
-	type KeyIn = usize;
-	type KeyOut = usize;
-	type Res = anyhow::Result<(Self, Self::KeyOut)>;
-	const SCHEMA: Schema<'static> = Schema {
-		table_name: "", primary_key: "strref",
-		parent_key: "", parent_table: "", fields: &[
-		Column{ fieldname: "strref", fieldtype: Strref::SQL_TYPE, extra: "primary key" },
-		] };
-	fn ins(&self, s: &mut Statement, key: &usize)->rusqlite::Result<()> {
-		todo!()
-	}
-	fn sel(r: &Row)->rusqlite::Result<(Self, usize)> {
-		todo!()
-	}
-}
+use crate::gametypes::GameString;
 } // mod resources
 
 pub use rusqlite;
@@ -803,6 +791,7 @@ pub fn create_db(db_file: &str)->Result<Connection> {
 		.with_context(|| format!("cannot remove file: {}", db_file))?;
 	}
 	let db = Connection::open(db_file)?;
+	db.exec("begin transaction")?;
 	println!("creating global tables.. ");
 	db.execute_batch(r#"
 create table "current" ("component" text);
@@ -815,7 +804,19 @@ create table "strref_dict" ("key" text not null primary key on conflict ignore, 
 		println!("  creating for resource {}", schema.table_name);
 		schema.create_tables_and_views(&db)?; Result::<()>::Ok(())
 	})?;
+	db.exec("commit")?;
+	create_strings(&db);
 	Ok(db)
+}
+pub fn create_strings(db: &Connection)->Result<()> {
+	db.exec("begin transaction")?;
+	for (langname, langsubdir, has_f) in gameindex::LANGUAGES {
+		db.exec(&format!(r#"create table "strings_{langname}"("strref" integer primary key, "sound" text, "volume" integer, "pitch" integer, "string" text)"#)?;
+		if has_f {
+		db.exec(&format!(r#"create table "strings_{langname}F"("strref" integer primary key, "sound" text, "volume" integer, "pitch" integer, "string" text)"#)?;
+		}
+	}
+	db.exec("commit")?; Ok(())
 }
 
 // II. Game -> SQL
@@ -839,7 +840,27 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 		_ => Ok(())
 		}
 	})?;
-	db.exec("commit")?;
+	db.exec("commit")?; Ok(())
+}
+fn populate_strings(db: &mut Connection, path: &impl AsRef<Path>)->Result<()> {
+	db.exec("begin transaction")?;
+	for (langname, langsubdir, has_f) in gameindex::LANGUAGES {
+		let langdir = path.as_ref().join(langsubdir);
+		populate_language(db, &langname, &langdir.join("dialog.tlk"))?;
+		if *has_f {
+			populate_language(db, &format!("{}F", langname), &langdir.join("dialog.tlk"))?;
+		}
+	}
+	db.exec("commit")?; Ok(())
+}
+fn populate_language(db: &mut Connection, langname: &str, path: &impl AsRef<Path>)->Result<()> {
+	use gameindex::{GameStringsIterator};
+	let bytes = fs::read(path)?;
+	let mut q = db.prepare(&format!(r#"insert into "strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?)"#))?;
+	for (strref, x) in GameStringsIterator::new(bytes.as_ref())?.enumerate() {
+		let s = x?;
+		q.execute((strref, s.flags, s.sound, s.volume, s.pitch, s.string))?;
+	}
 	Ok(())
 }
 fn populate_item(db: &mut DbInserter, handle: &mut ResHandle)->Result<()> {
@@ -909,7 +930,7 @@ fn translate_resrefs(db: &Connection)->Result<()> {
 	db.exec("commit")?; Ok(())
 }
 fn save(db: &Connection, game: &GameIndex)->Result<()> {
-	translate_resrefs(&db)?;
+	translate_resrefs(db)?;
 	//, All this function does is wrap up `save_in_current_dir` so that any
 	//, exception throws do not prevent changing back to the previous
 	//, directory:

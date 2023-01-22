@@ -3,7 +3,7 @@
 // 	unreachable_code,
 // 	dead_code,
 // 	unused_variables,
-// 	unused_imports,
+	unused_imports,
 // 	unused_macros,
 // 	unused_parens,
 // 	unused_mut,
@@ -43,13 +43,11 @@ fn toks_to_string(a: &impl quote::ToTokens) -> String {
 	a.to_tokens(&mut ts);
 	ts.to_string()
 }
-fn read_struct_fields(d: syn::DeriveInput) -> (syn::Ident, Punctuated<Field, Comma>, Vec<syn::Attribute>) {
-	let DeriveInput{ ident, data, attrs, .. } = d; // parse_macro_input!(tokens);
-	let flist = match data {
+fn struct_fields(data: syn::Data) -> Punctuated<Field, Comma> {
+	match data {
 		Struct(DataStruct{ fields: Named(f), ..}) => f.named,
 // 		Struct(DataStruct{ fields: Unnamed(f), .. }) => f.unnamed,
-		_ => panic!("only struct with named fields!") };
-	(ident, flist, attrs)
+		_ => panic!("only struct with named fields!") }
 }
 #[derive(Debug)]
 enum AttrArg {
@@ -118,7 +116,8 @@ impl From<pm2::TokenStream> for AttrParser {
 
 #[proc_macro_derive(Pack, attributes(header))]
 pub fn derive_pack(tokens: TokenStream) -> TokenStream {
-	let (ident, flist, _) = read_struct_fields(parse_macro_input!(tokens));
+	let DeriveInput{ ident, data, .. } = parse_macro_input!(tokens);
+	let flist = struct_fields(data);
 
 	let mut readf = TS2::new();
 	let mut build = TS2::new();
@@ -154,8 +153,6 @@ fn pack_attr_header(readf: &mut TS2, writef: &mut TS2, args: &mut AttrParser) {
 	}
 }
 
-// [column(itemref, i32, "references items", etc.)] pushes on key
-// [column(false)] suppresses next column
 #[derive(Default,Debug)]
 struct RowCurrent {
 	extra: String,
@@ -163,7 +160,7 @@ struct RowCurrent {
 }
 
 #[proc_macro_derive(Table, attributes(column,table))]
-pub fn derive_row(tokens: TokenStream) -> TokenStream {
+pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	let mut fields2 = Vec::<(String, syn::Type, String)>::new();
 	let mut schema = TS2::new();
 	let mut params = TS2::new();
@@ -178,7 +175,8 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 			extra: #extra},
 		}.to_tokens(&mut schema);
 	};
-	let (ident, flist, attrs) = read_struct_fields(parse_macro_input!(tokens));
+	let DeriveInput{ ident, data, attrs, generics, .. } = parse_macro_input!(tokens);
+	let flist = struct_fields(data);
 	let mut table_name = String::new();
 	let type_name = toks_to_string(&ident);
 	let mut parent_key = String::new();
@@ -207,15 +205,6 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 		quote!{ #ident: row.get::<_,#ty>(#ncol)?, }.to_tokens(&mut build);
 		ncol+= 1;
 	}
-	// if needed, make table name as snake_case from TypeName:
-	if table_name.is_empty() {
-		for c in type_name.chars() {
-			if c.is_lowercase() { table_name.push(c); continue }
-			if !table_name.is_empty() { table_name.push('_'); }
-			table_name.push(c.to_ascii_lowercase());
-		}
-	}
-	// try to find parent name (and key) from inserted fields
 	for (fieldname, _, attr) in &fields2 {
 		if attr.contains("primary key") {
 			primary_key = fieldname.to_owned(); break
@@ -258,7 +247,7 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 	}
 // 	let field = pm2::Ident::new(&table_name, pm2::Span::call_site());
 	let code = quote! {
-		impl crate::database::Table for #ident {
+		impl#generics crate::database::Table for #ident#generics {
 			type KeyIn = (#key_in);
 			type KeyOut = (#key_out);
 			type Res = anyhow::Result<(Self, Self::KeyOut)>;
@@ -274,11 +263,18 @@ pub fn derive_row(tokens: TokenStream) -> TokenStream {
 			}
 		}
 	};
-	push_resource(ResourceDef(type_name, table_name));
-// 	println!("\x1b[36m{}\x1b[m", code);
+	if table_name.is_empty() {
+		println!("\x1b[36m{}\x1b[m", code);
+	}
+	if !table_name.is_empty() {
+		push_resource(ResourceDef(type_name, table_name));
+	}
 	code.into()
 } // Table
 fn table_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut RowCurrent, args: &mut AttrParser) {
+	//! Column attribute:
+	//! `[column(itemref, i32, "references items", etc.)]` pushes on table
+	//! `[column(false)]~ suppresses next column
 	use AttrArg::{Ident, Str};
 	let a = match args.get::<syn::Expr>() { None=>return, Some(a)=> a};
 	match a {
@@ -295,28 +291,27 @@ fn table_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut
 		},
 		_ => ()
 	}
-// 	println!("got column with {} fields: {args:?}", args.len());
-// 	for (i, name) in args.iter().enumerate() {
-// 		println!("  arg {i} = \x1b[32m{name:?}\x1b[m");
-// 	}
-// 	match args {
-// 		[ Ident(i), Type(t), Str(s) ] =>
-// 			fields2.push((i.to_owned(), t.clone(), s.to_owned())),
-// 		[ Ident(i), Type(t) ] =>
-// 			fields2.push((i.to_owned(), t.clone(), "".to_owned())),
-// 		_ => (),
-// 	}
 }
 fn table_attr_table(args: &mut AttrParser, table_name: &mut String, parent: &mut String, parent_key: &mut String) {
+	//! `[table]` attribute:
+	//! - `[table("")]` prevents storing this table in the global [default]
+	//! RESOURCES constant,
+	//! - `[table(item_abilities, "itemref", "items")]` stores with a
+	//! relation to the parent resource,
+	//! - `[table(items, "itemref")]` stores as a parent table (using given
+	//! primary key);
+	//! - `[table(items)]` tries to guess the link to parent resource
+	//! (either use a key reference if there is one, or take this table as
+	//! a root resource if not).
 	let i = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
-			_ => return };
+		Some(AttrArg::Str(s)) => s, _ => return };
 	*table_name = i;
 	let pk = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
 		Some(AttrArg::Str(s)) => s, _ => return };
-	let pn = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
-		Some(AttrArg::Str(s)) => s, _ => return };
-	*parent = pn;
 	*parent_key = pk;
+	let pn = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
+		Some(AttrArg::Str(s)) => s, _ => { *parent = table_name.clone(); return }};
+	*parent = pn;
 }
 
 #[proc_macro]
