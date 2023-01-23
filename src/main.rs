@@ -254,23 +254,6 @@ impl BifIndex {
 }
 
 // III. Game strings:
-pub fn languages(gamedir: &impl AsRef<Path>)->Result<Vec<(String,PathBuf)>> {
-	let langdir = gamedir.as_ref().join("lang");
-	let mut r = Vec::<(String,PathBuf)>::new();
-	for x in fs::read_dir(&langdir)
-		.with_context(|| format!("read lang directory: {langdir:?}"))? {
-		let entry = x?;
-		let lang = &entry.file_name().into_string().unwrap()[0..2];
-		// TMP: this is to speed up execution (a bit) during test runs.
-		if lang != "en" && lang != "fr" && lang != "frF" { continue }
-		let dir = entry.path();
-		let dialog = dir.join("dialog.tlk");
-		if dialog.is_file() { r.push((lang.to_owned(), dialog)); }
-		let dialog_f = dir.join("dialogF.tlk");
-		if dialog_f.is_file() { r.push((format!("{lang}F"), dialog_f)); }
-	}
-	Ok(r)
-}
 #[derive(Debug)] pub struct GameStringsIterator<'a> {
 	cursor: Cursor<&'a[u8]>,
 	index: usize,
@@ -317,6 +300,7 @@ impl<'a> ExactSizeIterator for GameStringsIterator<'a> {
 	pub bifnames: Vec<String>,
 	_bifsizes: Vec<u32>,
 	pub resources: Vec<KeyRes>,
+	pub languages: Vec<(String,PathBuf)>,
 }
 impl GameIndex {
 	pub fn open(gamedir: impl AsRef<Path>)->Result<Self> {
@@ -340,13 +324,13 @@ impl GameIndex {
 		let resources = <KeyRes>::vecunpack(&mut f, hdr.nres as usize)
 			.with_context(|| format!("could not read {} BIF resources in file: {}",
 				hdr.nres, indexfile.to_str().unwrap()))?;
-		Ok(GameIndex{ gamedir, bifnames, resources, _bifsizes })
+		let languages = Self::languages(&gamedir)?;
+		Ok(GameIndex{ gamedir, bifnames, resources, _bifsizes, languages })
 	}
 	// We cannot be a true `Iterator` because of the “streaming iterator”
 	// problem (aka cannot return references to iterator-owned data),
 	// so we perform internal iteration by this `for_each` method:
-	pub fn for_each<F>(&self, mut f: F)->Result<()>
-	where F: (FnMut(Restype, ResHandle)->Result<()>) {
+	pub fn for_each<F>(&self, mut f: F)->Result<()> where F: (FnMut(Restype, ResHandle)->Result<()>) {
 		let pb = Progress::new(self.resources.len(), "resources");
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
 			let path = self.gamedir.join(filename);
@@ -362,6 +346,23 @@ impl GameIndex {
 			}
 		}
 		Ok(())
+	}
+	fn languages(gamedir: &impl AsRef<Path>)->Result<Vec<(String,PathBuf)>> {
+		let langdir = gamedir.as_ref().join("lang");
+		let mut r = Vec::<(String,PathBuf)>::new();
+		for x in fs::read_dir(&langdir)
+			.with_context(|| format!("read lang directory: {langdir:?}"))? {
+			let entry = x?;
+			let lang = &entry.file_name().into_string().unwrap()[0..2];
+			// TMP: this is to speed up execution (a bit) during test runs.
+			if lang != "en" && lang != "fr" && lang != "frF" { continue }
+			let dir = entry.path();
+			let dialog = dir.join("dialog.tlk");
+			if dialog.is_file() { r.push((lang.to_owned(), dialog)); }
+			let dialog_f = dir.join("dialogF.tlk");
+			if dialog_f.is_file() { r.push((format!("{lang}F"), dialog_f)); }
+		}
+		Ok(r)
 	}
 }
 pub struct ResHandle<'a> {
@@ -826,7 +827,7 @@ pub(crate) use anyhow::{Context, Result};
 
 
 // I. create DB
-pub fn create_db(db_file: impl AsRef<Path>, gamedir: &impl AsRef<Path>)->Result<Connection> {
+pub fn create_db(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Connection> {
 	use std::fmt::Write;
 	let path = db_file.as_ref();
 	println!("creating file {path:?}");
@@ -851,23 +852,28 @@ pub fn create_db(db_file: impl AsRef<Path>, gamedir: &impl AsRef<Path>)->Result<
 	// `new_strings`: (built in loop below) a view of all strref currently
 	//  introduced by mods. This gets compiled into `string_keys` as part
 	//  of the string translation process.
+	//
+	// `translations_XX`: user-filled table containing string translations
+	// `strings_XX`: output to fill game strings
+	// (last column is a bit indicating whether this is untranslated, in
+	// which case we need to remove all {?..} marks)
 	db.execute_batch(r#"
 create table "global" ("component" text, "strref_count" integer);
 insert into "global"("component") values (null);
 create table "resref_orig" ("resref" text primary key on conflict ignore);
 create table "resref_dict" ("key" text not null primary key on conflict ignore, "resref" text);
-create table "strref_dict" ("key" text not null primary key on conflict ignore, "strref" integer unique);
+create table "strref_dict" ("key" text not null primary key on conflict ignore, "strref" integer unique, "flags" integer);
 create index "strref_dict_reverse" on "strref_dict" ("strref");
 
-create view "string_keys" as select "key" from "strref_dict";
+create view "string_keys" as select "key", "flags" from "strref_dict";
 create trigger "strref_auto" instead of insert on "string_keys"
 begin
-	insert into "strref_dict"("key", "strref") values
-	(new."key", ifnull((select min("strref")+1 from "strref_dict" where "strref"+1 not in (select "strref" from "strref_dict")), (select "strref_count" from "global")));
+	insert into "strref_dict"("key", "strref","flags") values
+	(new."key", ifnull((select min("strref")+1 from "strref_dict" where "strref"+1 not in (select "strref" from "strref_dict")), (select "strref_count" from "global")), new."flags");
 end;
-	"#)?;
+	"#).context("create strings tables")?;
 	let pb = Progress::new(RESOURCES.len(), "create tables");
-	let mut new_strings = String::from(r#"create view "new_strings"("key") as "#);
+	let mut new_strings = String::from(r#"create view "new_strings"("key","flags") as "#);
 	let mut new_strings_is_first = true;
 	RESOURCES.map_mut(|schema,_| {
 		pb.inc(1);
@@ -876,7 +882,7 @@ end;
 				let name = &schema.table_name;
 				if new_strings_is_first { new_strings_is_first = false; }
 				else { write!(&mut new_strings, "\nunion\n")?; }
-				write!(&mut new_strings, r#"select "{fieldname}" from "add_{name}" union select "value" from "edit_{name}" where "field" = '{fieldname}'"#,
+				write!(&mut new_strings, r#"select "{fieldname}", 1 from "add_{name}" union select "value", 1 from "edit_{name}" where "field" = '{fieldname}'"#,
 					)?;
 			}
 		}
@@ -885,14 +891,23 @@ end;
 	})?;
 	db.exec(new_strings)?; Ok(())
 	}).context("creating global tables")?;
-	create_strings(&mut db, gamedir)?;
+	create_strings(&mut db, &game)?;
 	Ok(db)
 }
-pub fn create_strings(db: &mut Connection, gamedir: &impl AsRef<Path>)->Result<()> {
+pub fn create_strings(db: &mut Connection, game: &GameIndex)->Result<()> {
 	crate::progress::transaction(db, |db| {
-	const SCHEMA: &str = r#"("strref" integer primary key, "flags" integer, "sound" text, "volume" integer, "pitch" integer, "string" text)"#;
-	for (langname, _) in gameindex::languages(gamedir)?.iter() {
-		db.exec(format!(r#"create table "strings_{langname}"{SCHEMA}"#))?;
+	const SCHEMA: &str = r#"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer)"#;
+	const SCHEMA1: &str = r#"("key" string primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer)"#;
+	for (langname, _) in game.languages.iter() {
+		db.execute_batch(&format!(r#"
+create table "res_strings_{langname}"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer);
+create table "translations_{langname}"("key" string primary key, "string" text, "sound" text, "volume" integer, "pitch" integer);
+create view "strings_{langname}" as
+select "strref", "string",  "flags", "sound", "volume", "pitch",0 from "res_strings_{langname}" union
+select "strref", ifnull("string", "key"), "flags", ifnull("sound",''), ifnull("volume",0), ifnull("pitch",0), ("string" is null)
+from "strref_dict" as "d"
+left join "translations_{langname}" as "t" using ("key");
+"#))?;
 	}
 	Ok(())
 	}).context("read game strings")
@@ -907,7 +922,7 @@ struct DbInserter<'a> {
 
 fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(3, "Generate database"); pb.inc(1);
-	populate_strings(db, &game.gamedir)
+	populate_strings(db, game)
 		.with_context(|| format!("cannot read game strings from game directory {:?}", game.gamedir))?;
 	pb.inc(1);
 	db.exec("begin transaction")?;
@@ -927,11 +942,10 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 	db.exec("commit")?;
 	Ok(())
 }
-fn populate_strings(db: &Connection, path: &impl AsRef<Path>)->Result<()> {
+fn populate_strings(db: &Connection, game: &GameIndex)->Result<()> {
 	db.exec("begin transaction")?;
-	let languages = gameindex::languages(path)?;
-	let pb = Progress::new(languages.len(), "languages");
-	for (langname, dialog) in languages {
+	let pb = Progress::new(game.languages.len(), "languages");
+	for (langname, dialog) in game.languages.iter() {
 		pb.inc(1);
 		populate_language(db, &langname, &dialog)
 			.with_context(|| format!("cannot populate language '{langname}' from '{dialog:?}'"))?;
@@ -942,7 +956,7 @@ fn populate_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> +
 	use gameindex::{GameStringsIterator};
 	let bytes = fs::read(path)
 		.with_context(|| format!("cannot open strings file: {path:?}"))?;
-	let mut q = db.prepare(&format!(r#"insert into "strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
+	let mut q = db.prepare(&format!(r#"insert into "res_strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
 	let itr = GameStringsIterator::new(bytes.as_ref())?;
 	let pb = Progress::new(itr.len(), "strings");
 	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
@@ -1021,8 +1035,10 @@ fn translate_resrefs(db: &mut Connection)->Result<()> {
 }
 fn translate_strrefs(db: &mut Connection)->Result<()> {
 	crate::progress::transaction(db,|db| {
-	db.exec(r#"delete from "strref_dict" where "key" not in (select "key" from "new_strings" where "key" is not null)"#)?;
-	db.exec(r#"insert into "string_keys" select "key" from "new_strings" where "key" is not null"#)?;
+	db.exec(r#"delete from "strref_dict" where "key" not in (select "key" from "new_strings" where "key" is not null)"#)
+		.context("cannot purge stale string keys")?;
+	db.exec(r#"insert into "string_keys" select "key", "flags" from "new_strings" where "key" is not null"#)
+		.context("cannot generate new string keys")?;
 	Ok(())
 	})?; Ok(())
 }
@@ -1040,6 +1056,9 @@ fn save(db: &mut Connection, game: &GameIndex)->Result<()> {
 	let res = save_in_current_dir(db);
 	std::env::set_current_dir(orig_dir)?;
 	res
+}
+fn save_strings(db: &mut Connection, game: &GameIndex)->Result<()> {
+	Ok(())
 }
 fn save_in_current_dir(db: &Connection)->Result<()> {
 	// TODO: generate strings & resrefs
@@ -1140,7 +1159,7 @@ fn main() -> Result<()> {
 		options.gamedir))?;
 // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
 	if options.generate {
-		let db = create_db(options.database.as_ref().unwrap(), &options.gamedir)?;
+		let db = create_db(options.database.as_ref().unwrap(), &game)?;
 		populate(&db, &game)?;
 		db.execute_batch(r#"
 update "items" set price=5 where itemref='sw1h34';

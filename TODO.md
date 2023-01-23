@@ -1,5 +1,5 @@
-
 # Game strings
+ - leave the possibility to directly use a strref as a key
 3. ... with a trigger that picks the *smallest* available strref:
     create view string_keys as select "key" from strref_dict;
     create trigger "strref_auto" instead of insert on "string_keys"
@@ -12,6 +12,9 @@
  **modify the above code so that selection is done from `orig_stref` ∪
  new strref**
 # Todo:
+ - clarify views:
+  - human-readable vs. compiled
+  - this might be useful when displaying e.g. an Item
  - a global option to limit languages
  + fill `strref_dict` table
  + use default value ("" for Resref, 0 for strref)
