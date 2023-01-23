@@ -10,6 +10,8 @@
 // #![feature(trace_macros)]
 // trace_macros!(false);
 
+const BACKUP_DIR: &str = "backup";
+
 mod gameindex {
 //, This mod contains code related to the KEY/BIF side of the database.
 //, Main interface:
@@ -116,7 +118,6 @@ pub trait Pack: Sized {
 		(0..n).map(|_| { Self::unpack(&mut f) }).collect()
 	}
 }
-
 macro_rules! pack_tuple {
 	( )=> { };
 	($A:ident$(,$B:ident)*$(,)?) => {
@@ -150,7 +151,7 @@ macro_rules! unpack_int {
 }
 unpack_int!(i8,i16,i32,i64,u8,u16,u32,u64);
 
-#[derive(Clone,Copy)] pub struct Resref { pub name: StaticString::<8>, }
+#[derive(Clone,Copy,Default)] pub struct Resref { pub name: StaticString::<8>, }
 impl Debug for Resref {
 	fn fmt(&self, f:&mut Formatter)->fmt::Result { Debug::fmt(&self.name, f) }
 }
@@ -236,8 +237,8 @@ impl BifIndex {
 #[derive(Debug,Pack)] struct TlkHeader {
 	#[header("TLK V1  ")]
 	lang: u16,
-	nstr: i32,
-	offset: i32,
+	nstr: u32,
+	offset: u32,
 }
 #[derive(Debug,Pack)] pub struct BifHdr {
 	#[header("BIFFV1  ")]
@@ -270,7 +271,7 @@ impl<'a> /* From<T> for */ GameStringsIterator<'a> {
 	}
 }
 impl<'a> Iterator for GameStringsIterator<'a> {
-	type Item = Result<GameString<'a>>;
+	type Item = Result<GameString<&'a str>>;
 	fn next(&mut self)->Option<Self::Item> {
 		if self.index >= self.nstr { return None }
 		let tlk_info =
@@ -292,6 +293,30 @@ impl<'a> Iterator for GameStringsIterator<'a> {
 }
 impl<'a> ExactSizeIterator for GameStringsIterator<'a> {
 	fn len(&self) -> usize { self.nstr }
+}
+impl<'a> GameStringsIterator<'a> {
+// we put this function in an `impl` block for convenience:
+pub fn save<T: AsRef<str>>(vec: &[GameString<T>], path: &impl AsRef<Path>)->io::Result<()> {
+	// FIXME: this could be done with a prepared statement and iterator
+	// (saving the (rather big) memory for the whole vector of strings),
+	// but rusqlite does not export `reset`...
+	let mut file = fs::File::create(path)?;
+	TlkHeader { lang: 0, nstr: vec.len() as u32,
+		offset: (26*vec.len() + 18) as u32 }.pack(&mut file)?;
+	// first string in en.tlk has: (flags: u16=5, offset=0, strlen=9)
+	// second string has (flags: u16=1, offset=9, strlen=63) etc.
+	// (offset=72) etc.
+	let mut delta = 0;
+	for s in vec.iter() {
+		let l = s.string.as_ref().len() as u32;
+		(s.flags, s.sound, s.volume, s.pitch, delta, l).pack(&mut file)?;
+		delta+= l;
+	}
+	for s in vec {
+		file.write_all(s.string.as_ref().as_bytes())?;
+	}
+	Ok(())
+}
 }
 
 // IV. Game index main structure:
@@ -363,6 +388,19 @@ impl GameIndex {
 			if dialog_f.is_file() { r.push((format!("{lang}F"), dialog_f)); }
 		}
 		Ok(r)
+	}
+	pub fn backup(&self)->Result<()> {
+		// create backup of all language files
+		let backup_dir = self.gamedir.join(crate::BACKUP_DIR);
+		let pb = Progress::new(self.languages.len(), "Strings backup");
+		fs::create_dir(&backup_dir)
+			.with_context(||format!("cannot create backup directory: {backup_dir:?}"))?;
+		for (lang, path) in self.languages.iter() {
+			pb.inc(1);
+			let back = backup_dir.join(&format!("{lang}.tlk"));
+			fs::copy(path, back)?;
+		}
+		Ok(())
 	}
 }
 pub struct ResHandle<'a> {
@@ -833,7 +871,7 @@ pub fn create_db(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Connection
 	println!("creating file {path:?}");
 	if Path::new(&path).exists() {
 		fs::remove_file(path)
-		.with_context(|| format!("cannot remove file: {path:?}"))?;
+		.with_context(|| format!("cannot remove DB file: {path:?}"))?;
 	}
 	let mut db = Connection::open(path)?;
 	progress::transaction(&mut db, |db| {
@@ -903,7 +941,7 @@ pub fn create_strings(db: &mut Connection, game: &GameIndex)->Result<()> {
 create table "res_strings_{langname}"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer);
 create table "translations_{langname}"("key" string primary key, "string" text, "sound" text, "volume" integer, "pitch" integer);
 create view "strings_{langname}" as
-select "strref", "string",  "flags", "sound", "volume", "pitch",0 from "res_strings_{langname}" union
+select "strref", "string",  "flags", "sound", "volume", "pitch", 0 as "raw" from "res_strings_{langname}" union
 select "strref", ifnull("string", "key"), "flags", ifnull("sound",''), ifnull("volume",0), ifnull("pitch",0), ("string" is null)
 from "strref_dict" as "d"
 left join "translations_{langname}" as "t" using ("key");
@@ -1023,12 +1061,10 @@ fn translate_resrefs(db: &mut Connection)->Result<()> {
 	let mut find = db.prepare(r#"select 1 from "resref_orig" where "resref"=?1 union select 1 from "resref_dict" where "resref"=?1"#)?;
 	let mut update = db.prepare(r#"update "resref_dict" set "resref"=?2 where "key"=?1"#)?;
 	while let Some(row) = enum_rows.next()? {
-		row.dump();
 		let longref = row.get::<_,String>(0)?;
 		// TODO: remove spaces etc.
 		let resref = Resref::fresh(&longref, |r| find.exists((r,)))?;
 		update.execute((&longref, &resref))?;
-		println!("untranslated resref: '{longref}'->'{resref}'");
 	}
 	Ok(())
 	})?; Ok(())
@@ -1043,8 +1079,13 @@ fn translate_strrefs(db: &mut Connection)->Result<()> {
 	})?; Ok(())
 }
 fn save(db: &mut Connection, game: &GameIndex)->Result<()> {
+	let pb = Progress::new(4, "saving"); pb.as_ref().tick();
 	translate_resrefs(db)?;
+	pb.inc(1);
 	translate_strrefs(db)?;
+	pb.inc(1);
+	save_strings(db, game)?;
+	pb.inc(1);
 	//, All this function does is wrap up `save_in_current_dir` so that any
 	//, exception throws do not prevent changing back to the previous
 	//, directory:
@@ -1055,9 +1096,31 @@ fn save(db: &mut Connection, game: &GameIndex)->Result<()> {
 	std::env::set_current_dir(tmpdir)?;
 	let res = save_in_current_dir(db);
 	std::env::set_current_dir(orig_dir)?;
+	pb.inc(1);
 	res
 }
 fn save_strings(db: &mut Connection, game: &GameIndex)->Result<()> {
+	let pb = Progress::new(game.languages.len(), "save translations");
+	for (lang, path) in game.languages.iter() {
+		pb.inc(1);
+		if lang != "en" { continue }
+		let count = db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
+			(), |row| row.get::<_,usize>(0))?;
+		let mut vec = vec![GameString::<String>::default(); count+1];
+		let mut stmt = db.prepare(&format!(r#"select "strref", "string", "flags", "sound", "volume", "pitch", "raw" from "strings_{lang}""#))?;
+		let mut rows = stmt.query(())?;
+		let mut strings = vec![String::new(); count+1];
+		while let Some(row) = rows.next()? {
+			let strref = row.get::<_,usize>(0)?;
+			let string = row.get::<_,String>(1)?;
+			let flags = row.get::<_,u16>(2)?;
+			let sound = row.get::<_,Resref>(3)?;
+			let volume = row.get::<_,i32>(4)?;
+			let pitch = row.get::<_,i32>(5)?;
+			vec[strref] = GameString { flags, sound, volume, pitch, string };
+		}
+		gameindex::GameStringsIterator::save(&vec, &"./test.tlk");
+	}
 	Ok(())
 }
 fn save_in_current_dir(db: &Connection)->Result<()> {
@@ -1160,6 +1223,7 @@ fn main() -> Result<()> {
 // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
 	if options.generate {
 		let db = create_db(options.database.as_ref().unwrap(), &game)?;
+		game.backup()?;
 		populate(&db, &game)?;
 		db.execute_batch(r#"
 update "items" set price=5 where itemref='sw1h34';

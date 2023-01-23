@@ -3,7 +3,6 @@ all: run
 
 r: run
 run:
-	rm -rf $(BG)/sim_out
 	cargo b
 	$(MAKE) test
 
@@ -17,4 +16,6 @@ watch:
 
 t: test
 test:
+	rm -rf $(BG)/sim_out
+	rm -rf $(BG)/backup
 	RUST_BACKTRACE=1 ./infinity_compiler -G $(BG) -g -c
