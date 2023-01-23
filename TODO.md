@@ -15,6 +15,16 @@
  + fill `strref_dict` table
  - use default value ("" for Resref, 0 for strref)
  - fill language strings tables
+  - decide how to convert `.po` to sql
+	- lua to `.po` using Python seems to work
+	- for simplicity, running lua file should insert everything needed in sql
+  - also strings should be marked with component to be easily uninstallable
+  - so lua init should do the translation; i.e. we assume that the
+		strings are already inserted in standardized translation tables
+  => do just like with game resources: expose a view with strings as keys
+  and a set of triggers to manipulate this
+	- default values (untranslated) are best left to global select instead
+		of 20 triggers...
  + simplify interaction between Table and ResourceInsert (etc.)
  - for binaries: have a special variant of Resref which does interact with
 	 the db in a different way

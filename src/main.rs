@@ -1,9 +1,9 @@
 #![allow(
-	unused_imports,
+// 	unused_imports,
 // 	unreachable_code,
 // 	unused_macros,
 // 	unused_variables,
-	dead_code,
+// 	dead_code,
 // 	unused_must_use,
 // 	unused_mut,
 )]
@@ -261,23 +261,6 @@ pub const LANGUAGES: &[(&str, &str, bool)] = &[
 // 	("es", "es_ES", true),
 // 	("fr", "fr_FR", true),
 ];
-impl<'a> GameString<'a> {
-	fn unpack(f: &mut impl Read, buf: &'a[u8], offset: usize)->Result<Self> {
-		let (flags, sound, volume, pitch, delta, strlen) =
-			<(u16, Resref, i32, i32, i32, i32) as Pack>::unpack(f)?;
-		// substring0(buf, offset + delta, strlen)
-		// start is offset + delta
-		// string *might* be zero-terminated
-		let start = offset + (delta as usize);
-		let end = start + (strlen as usize);
-		let c = buf[end];
-		let string = std::str::from_utf8(&buf[start..end-((c==0) as usize)])?;
-		Ok(Self{ flags, sound, volume, pitch, string })
-	}
-// 	fn pack(&self, _f: &mut impl io::Write)->io::Result<()> {
-// 		println!("Pack for type: {}", crate::type_of(&self));
-// 		unimplemented!() }
-}
 #[derive(Debug)] pub struct GameStringsIterator<'a> {
 	cursor: Cursor<&'a[u8]>,
 	index: usize,
@@ -786,17 +769,17 @@ impl<'stmt,T: Table> Iterator for TypedRows<'stmt,T> {
 		None
 	}
 }
-
-// IV. Game strings
-use crate::gametypes::GameString;
 } // mod resources
 mod progress {
 
 use std::fmt::{Display,Debug};
 use std::cell::{RefCell};
 use indicatif::{ProgressBar,ProgressStyle,MultiProgress};
+use anyhow::{Result,Context};
+use rusqlite::{Connection};
 
 thread_local! {
+	static COUNT: RefCell<usize> = RefCell::new(0);
 	static MULTI: RefCell<MultiProgress> =
 		RefCell::new(MultiProgress::new());
 }
@@ -807,9 +790,8 @@ impl AsRef<ProgressBar> for Progress {
 impl Drop for Progress {
 	fn drop(&mut self) {
 		MULTI.with(|c| c.borrow_mut().remove(&self.pb));
+		COUNT.with(|c| *c.borrow_mut()+= 1)
 	}
-// 	fn drop(&mut self) {
-// 		STACK.with(|c| c.borrow_mut().pop()); }
 }
 
 impl Progress {
@@ -823,10 +805,10 @@ impl Progress {
 	pub fn inc(&self, n: u64) { self.as_ref().inc(n) }
 }
 
-pub fn transaction<T,E>(db: &mut rusqlite::Connection, mut f: impl FnMut(&rusqlite::Transaction)->Result<T,E>)->Result<T,E> {
-	let t = db.transaction().unwrap();
+pub fn transaction<T>(db: &mut Connection, mut f: impl FnMut(&rusqlite::Transaction)->Result<T>)->anyhow::Result<T> {
+	let t = db.transaction().context("create new transaction")?;
 	let r = f(&t)?; // automatic rollback if Err
-	t.commit().unwrap();
+	t.commit()?;
 	Ok(r)
 }
 
@@ -857,7 +839,7 @@ pub fn create_db(db_file: impl AsRef<Path>)->Result<Connection> {
 	let path = db_file.as_ref();
 	println!("creating file {path:?}");
 	if Path::new(&path).exists() {
-		fs::remove_file(&path)
+		fs::remove_file(path)
 		.with_context(|| format!("cannot remove file: {path:?}"))?;
 	}
 	let mut db = Connection::open(path)?;
@@ -907,9 +889,9 @@ end;
 			}
 		}
 // 		println!("  creating for resource {}", schema.table_name);
-		schema.create_tables_and_views(&db)?; Result::<()>::Ok(())
+		schema.create_tables_and_views(db)?; Result::<()>::Ok(())
 	})?;
-	db.exec(new_strings)?; Ok::<_,anyhow::Error>(())
+	db.exec(new_strings)?; Ok(())
 	}).context("creating global tables")?;
 	create_strings(&mut db)?;
 	Ok(db)
@@ -918,12 +900,12 @@ pub fn create_strings(db: &mut Connection)->Result<()> {
 	crate::progress::transaction(db, |db| {
 	const SCHEMA: &str = r#"("strref" integer primary key, "flags" integer, "sound" text, "volume" integer, "pitch" integer, "string" text)"#;
 	for (langname, _, has_f) in gameindex::LANGUAGES {
-		db.exec(&format!(r#"create table "strings_{langname}"{SCHEMA}"#))?;
+		db.exec(format!(r#"create table "strings_{langname}"{SCHEMA}"#))?;
 		if *has_f {
-		db.exec(&format!(r#"create table "strings_{langname}F"{SCHEMA}"#))?;
+		db.exec(format!(r#"create table "strings_{langname}F"{SCHEMA}"#))?;
 		}
 	}
-	Ok::<_,anyhow::Error>(())
+	Ok(())
 	}).context("read game strings")
 }
 
@@ -960,7 +942,7 @@ fn populate_strings(db: &Connection, path: &impl AsRef<Path>)->Result<()> {
 	for (langname, langsubdir, has_f) in LANGUAGES {
 		pb.inc(1);
 		let langdir = path.as_ref().join("lang").join(langsubdir);
-		populate_language(db, &langname, &langdir.join("dialog.tlk"))
+		populate_language(db, langname, &langdir.join("dialog.tlk"))
 			.with_context(|| format!("cannot populate language '{langname}' from '{langdir:?}'"))?;
 		if *has_f {
 			populate_language(db, &format!("{}F", langname), &langdir.join("dialog.tlk"))?;
@@ -1046,14 +1028,14 @@ fn translate_resrefs(db: &mut Connection)->Result<()> {
 		update.execute((&longref, &resref))?;
 		println!("untranslated resref: '{longref}'->'{resref}'");
 	}
-	Ok::<_,anyhow::Error>(())
+	Ok(())
 	})?; Ok(())
 }
 fn translate_strrefs(db: &mut Connection)->Result<()> {
 	crate::progress::transaction(db,|db| {
 	db.exec(r#"delete from "strref_dict" where "key" not in (select "key" from "new_strings" where "key" is not null)"#)?;
 	db.exec(r#"insert into "string_keys" select "key" from "new_strings" where "key" is not null"#)?;
-	Ok::<_,anyhow::Error>(())
+	Ok(())
 	})?; Ok(())
 }
 fn save(db: &mut Connection, game: &GameIndex)->Result<()> {
@@ -1170,14 +1152,13 @@ fn main() -> Result<()> {
 		options.gamedir))?;
 // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
 	if options.generate {
-		let db = create_db(&options.database.as_ref().unwrap())?;
+		let db = create_db(options.database.as_ref().unwrap())?;
 		populate(&db, &game)?;
 		db.execute_batch(r#"
 update "items" set price=5 where itemref='sw1h34';
 
 insert into "items" ("itemref", "name", "unidentified_name", "replacement", "ground_icon") values
 ('New Item!', 'New Item name!', 'Mysterious Item', 'Replacement', 'new icon');
-
 	"#)?;
 	}
 	if options.compile {
