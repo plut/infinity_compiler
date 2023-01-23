@@ -338,11 +338,13 @@ impl GameIndex {
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
 			let path = self.gamedir.join(filename);
 			let mut bif = Option::<BifFile>::default();
+			let pb1 = Progress::new(self.resources.len(), filename);
 			for res in self.resources.iter() {
 				let rread = ResHandle{ bif: &mut bif, path: &path,
 					location: res.location, restype: res.restype, resref: res.resref, };
 				if res.location.sourcefile() != sourcefile { continue }
 				pb.inc(1);
+				pb1.inc(1);
 				f(res.restype, rread)?
 			}
 		}
@@ -790,16 +792,20 @@ impl AsRef<ProgressBar> for Progress {
 impl Drop for Progress {
 	fn drop(&mut self) {
 		MULTI.with(|c| c.borrow_mut().remove(&self.pb));
-		COUNT.with(|c| *c.borrow_mut()+= 1)
+		COUNT.with(|c| *c.borrow_mut()-= 1)
 	}
 }
 
+const COLORS: &[&str] = &["red", "yellow", "green", "cyan", "blue", "magenta" ];
+
 impl Progress {
 	pub fn new(n: impl num::ToPrimitive, text: impl Display)->Self {
-		let s = format!("{text} {{wide_bar:.blue}}{{pos:>5}}/{{len:>5}}");
+		let s = format!("{text} {{wide_bar:.{}}}{{pos:>5}}/{{len:>5}}",
+			COLORS[COUNT.with(|c| *c.borrow()) % COLORS.len()]);
 		let pb0 = ProgressBar::new(<u64 as num::NumCast>::from(n).unwrap());
 		pb0.set_style(ProgressStyle::with_template(&s).unwrap());
 		let pb = MULTI.with(|c| c.borrow_mut().add(pb0));
+		COUNT.with(|c| *c.borrow_mut()+= 1);
 		Self { pb }
 	}
 	pub fn inc(&self, n: u64) { self.as_ref().inc(n) }
@@ -917,8 +923,10 @@ struct DbInserter<'a> {
 }
 
 fn populate(db: &Connection, game: &GameIndex)->Result<()> {
+	let pb = Progress::new(3, "Generate database"); pb.inc(1);
 	populate_strings(db, &game.gamedir)
 		.with_context(|| format!("cannot read game strings from game directory {:?}", game.gamedir))?;
+	pb.inc(1);
 	db.exec("begin transaction")?;
 	let mut base = DbInserter { db,
 		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_query()) )?,
@@ -932,6 +940,7 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 		_ => Ok(())
 		}
 	})?;
+	pb.inc(1);
 	db.exec("commit")?;
 	Ok(())
 }
