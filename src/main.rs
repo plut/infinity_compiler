@@ -172,7 +172,7 @@ impl Resref {
 		let mut l = 0;
 		let mut buf = Self { name: StaticString { bytes: [0u8; 8] } };
 		let mut n = 0;
-		// pack string into 8 bytes, keeping only allowed characters
+		// truncate to 8 bytes, keeping only allowed characters, and lowercase
 		// (note: this might be slightly too restrictive — e.g. parentheses
 		// are likely allowed)
 		for c in source.as_bytes() {
@@ -700,14 +700,16 @@ impl<'schema> Schema<'schema> {
 		FieldType::Resref => {
 			trans(&mut source, "resref", f);
 // 			"{f}" as "a_{f}", "trans_{f}",
+			// for non-existent resrefs, we use "" as a replacement:
 			write!(&mut select, r#"
-			case when "t"."{f}" in (select "resref" from "resref_orig") then "{f}" else "trans_{f}" end as "{f}""#).unwrap();
+			case when "t"."{f}" in (select "resref" from "resref_orig") then "{f}" else ifnull("trans_{f}",'') end as "{f}""#).unwrap();
 		},
 		FieldType::Strref => {
 			trans(&mut source, "strref", f);
  //"{f}" as "a_{f}", "trans_{f}",
+			// for non-existent strref, we use 0 ("<NO TEXT>") as a replacement:
 			write!(&mut select, r#"
-			case when typeof("{f}") == 'integer' then "{f}" else ifnull("trans_{f}", "{f}") end as "{f}""#).unwrap();
+			case when typeof("{f}") == 'integer' then "{f}" else ifnull("trans_{f}", 0) end as "{f}""#).unwrap();
 		},
 		_ => {
 			write!(&mut source, r#""{f}""#).unwrap();
@@ -881,6 +883,7 @@ insert into "global"("component") values (null);
 create table "resref_orig" ("resref" text primary key on conflict ignore);
 create table "resref_dict" ("key" text not null primary key on conflict ignore, "resref" text);
 create table "strref_dict" ("key" text not null primary key on conflict ignore, "strref" integer unique);
+create index "strref_dict_reverse" on "strref_dict" ("strref");
 
 create view "string_keys" as select "key" from "strref_dict";
 create trigger "strref_auto" instead of insert on "string_keys"
@@ -1172,22 +1175,10 @@ fn main() -> Result<()> {
 		db.execute_batch(r#"
 update "items" set price=5 where itemref='sw1h34';
 
-insert into "resref_dict" values
-('New Item!', 'NEWITEM');
-
 insert into "items" ("itemref", "name", "unidentified_name", "replacement", "ground_icon") values
 ('New Item!', 'New Item name!', 'Mysterious Item', 'Replacement', 'new icon');
 
-update 'resref_dict'
-set "resref" = 'REPLAC' where "key" = 'Replacement';
-
-insert into "resref_orig" values
-('isw1h01'), ('gsw1h01'), ('csw1h01');
 	"#)?;
-// insert into "strref_dict" values
-// ('New Item name!', 35001),
-// ('Mysterious Item', 35002);
-
 	}
 	if options.compile {
 		let mut db = Connection::open(options.database.as_ref().unwrap())?;
