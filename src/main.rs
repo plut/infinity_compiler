@@ -1,9 +1,9 @@
 #![allow(
-// 	unused_imports,
+	unused_imports,
 // 	unreachable_code,
 // 	unused_macros,
 // 	unused_variables,
-// 	dead_code,
+	dead_code,
 // 	unused_must_use,
 // 	unused_mut,
 )]
@@ -254,13 +254,23 @@ impl BifIndex {
 }
 
 // III. Game strings:
-pub const LANGUAGES: &[(&str, &str, bool)] = &[
-	("en", "en_US", false),
-// 	("cs", "cs_CZ", false),
-// 	("de", "de_DE", true),
-// 	("es", "es_ES", true),
-// 	("fr", "fr_FR", true),
-];
+pub fn languages(gamedir: impl AsRef<Path>)->Result<Vec<(String,PathBuf)>> {
+	let langdir = gamedir.as_ref().join("lang");
+	let mut r = Vec::<(String,PathBuf)>::new();
+	for x in fs::read_dir(&langdir)
+		.with_context(|| format!("read lang directory: {langdir:?}"))? {
+		let entry = x?;
+		let lang = &entry.file_name().into_string().unwrap()[0..2];
+		// TMP: this is to speed up execution (a bit) during test runs.
+		if lang != "en" && lang != "fr" && lang != "frF" { continue }
+		let dir = entry.path();
+		let dialog = dir.join("dialog.tlk");
+		if dialog.is_file() { r.push((lang.to_owned(), dialog)); }
+		let dialog_f = dir.join("dialogF.tlk");
+		if dialog_f.is_file() { r.push((format!("{lang}F"), dialog_f)); }
+	}
+	Ok(r)
+}
 #[derive(Debug)] pub struct GameStringsIterator<'a> {
 	cursor: Cursor<&'a[u8]>,
 	index: usize,
@@ -840,7 +850,7 @@ pub(crate) use anyhow::{Context, Result};
 
 
 // I. create DB
-pub fn create_db(db_file: impl AsRef<Path>)->Result<Connection> {
+pub fn create_db(db_file: impl AsRef<Path>, gamedir: impl AsRef<Path>)->Result<Connection> {
 	use std::fmt::Write;
 	let path = db_file.as_ref();
 	println!("creating file {path:?}");
@@ -899,17 +909,14 @@ end;
 	})?;
 	db.exec(new_strings)?; Ok(())
 	}).context("creating global tables")?;
-	create_strings(&mut db)?;
+	create_strings(&mut db, gamedir)?;
 	Ok(db)
 }
-pub fn create_strings(db: &mut Connection)->Result<()> {
+pub fn create_strings(db: &mut Connection, gamedir: impl AsRef<Path>)->Result<()> {
 	crate::progress::transaction(db, |db| {
 	const SCHEMA: &str = r#"("strref" integer primary key, "flags" integer, "sound" text, "volume" integer, "pitch" integer, "string" text)"#;
-	for (langname, _, has_f) in gameindex::LANGUAGES {
+	for (langname, _) in gameindex::languages(&gamedir)?.iter() {
 		db.exec(format!(r#"create table "strings_{langname}"{SCHEMA}"#))?;
-		if *has_f {
-		db.exec(format!(r#"create table "strings_{langname}F"{SCHEMA}"#))?;
-		}
 	}
 	Ok(())
 	}).context("read game strings")
@@ -945,17 +952,13 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 	Ok(())
 }
 fn populate_strings(db: &Connection, path: &impl AsRef<Path>)->Result<()> {
-	use gameindex::LANGUAGES;
 	db.exec("begin transaction")?;
-	let pb = Progress::new(LANGUAGES.len(), "languages");
-	for (langname, langsubdir, has_f) in LANGUAGES {
+	let languages = gameindex::languages(&path)?;
+	let pb = Progress::new(languages.len(), "languages");
+	for (langname, dialog) in languages {
 		pb.inc(1);
-		let langdir = path.as_ref().join("lang").join(langsubdir);
-		populate_language(db, langname, &langdir.join("dialog.tlk"))
-			.with_context(|| format!("cannot populate language '{langname}' from '{langdir:?}'"))?;
-		if *has_f {
-			populate_language(db, &format!("{}F", langname), &langdir.join("dialog.tlk"))?;
-		}
+		populate_language(db, &langname, &dialog)
+			.with_context(|| format!("cannot populate language '{langname}' from '{dialog:?}'"))?;
 	}
 	db.exec("commit")?; Ok(())
 }
@@ -1161,7 +1164,7 @@ fn main() -> Result<()> {
 		options.gamedir))?;
 // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
 	if options.generate {
-		let db = create_db(options.database.as_ref().unwrap())?;
+		let db = create_db(options.database.as_ref().unwrap(), &options.gamedir)?;
 		populate(&db, &game)?;
 		db.execute_batch(r#"
 update "items" set price=5 where itemref='sw1h34';

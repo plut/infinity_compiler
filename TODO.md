@@ -12,10 +12,13 @@
  **modify the above code so that selection is done from `orig_stref` ∪
  new strref**
 # Todo:
+ - a global option to limit languages
  + fill `strref_dict` table
  - use default value ("" for Resref, 0 for strref)
  - fill language strings tables
   - decide how to convert `.po` to sql
+	- the {M} and {F} markers work in this conversion (sql treats all
+		languages as separate)
 	- lua to `.po` using Python seems to work
 	- for simplicity, running lua file should insert everything needed in sql
   - also strings should be marked with component to be easily uninstallable
