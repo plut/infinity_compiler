@@ -168,9 +168,21 @@ impl Pack for Resref {
 impl Resref {
 	// iterates until `test` returns FALSE
 	pub fn fresh(source: &str, mut is_used: impl FnMut(&Resref)->rusqlite::Result<bool> )->rusqlite::Result<Self> {
-		let mut n = std::cmp::min(source.len(), 8)-1;
+// 		let mut n = std::cmp::min(source.len(), 8)-1;
 		let mut l = 0;
-		let mut buf = Self { name: StaticString::<8>::from(source) };
+		let mut buf = Self { name: StaticString { bytes: [0u8; 8] } };
+		let mut n = 0;
+		// pack string into 8 bytes, keeping only allowed characters
+		// (note: this might be slightly too restrictive — e.g. parentheses
+		// are likely allowed)
+		for c in source.as_bytes() {
+			if c.is_ascii_alphanumeric() || "!#@-_".as_bytes().contains(c) {
+				buf.name.bytes[n] = c.to_ascii_lowercase();
+				n+= 1;
+				if n >= 8 { break }
+			}
+		}
+		n-= 1;
 		for j in 1..111_111_111 {
 			// This panics after all 111_111_111 possibilities have been
 			// exhausted. Unlikely to happen irl (and then we cannot do much
@@ -244,10 +256,10 @@ impl BifIndex {
 // III. Game strings:
 pub const LANGUAGES: &[(&str, &str, bool)] = &[
 	("en", "en_US", false),
-	("cs", "cs_CZ", false),
-	("de", "de_DE", true),
-	("es", "es_ES", true),
-	("fr", "fr_FR", true),
+// 	("cs", "cs_CZ", false),
+// 	("de", "de_DE", true),
+// 	("es", "es_ES", true),
+// 	("fr", "fr_FR", true),
 ];
 impl<'a> GameString<'a> {
 	fn unpack(f: &mut impl Read, buf: &'a[u8], offset: usize)->Result<Self> {
@@ -461,6 +473,17 @@ impl<'a> RowExt for Row<'a> {
 	}
 }
 
+#[derive(Debug,Clone,Copy,PartialEq)]
+pub enum FieldType { Integer, Text, Resref, Strref, Other }
+impl FieldType {
+	pub const fn affinity(self)->&'static str {
+		match self {
+			FieldType::Integer | FieldType::Strref => "integer",
+			FieldType::Text | FieldType::Resref => "text",
+			FieldType::Other => "null",
+		}
+	}
+}
 pub trait SqlType { const SQL_TYPE: FieldType; }
 impl<T> SqlType for Option<T> where T: SqlType {
 	const SQL_TYPE: FieldType = T::SQL_TYPE;
@@ -506,17 +529,6 @@ impl FromSql for Resref {
 
 // II. Everything connected to the table schemas (but not to Connection;
 // only as SQL strings).
-#[derive(Debug,Clone,Copy)]
-pub enum FieldType { Integer, Text, Resref, Strref, Other }
-impl FieldType {
-	pub const fn affinity(self)->&'static str {
-		match self {
-			FieldType::Integer | FieldType::Strref => "integer",
-			FieldType::Text | FieldType::Resref => "text",
-			FieldType::Other => "null",
-		}
-	}
-}
 #[derive(Debug)] pub struct Column<'a> {
 	pub fieldname: &'a str,
 	pub fieldtype: FieldType,
@@ -594,8 +606,8 @@ impl<'schema> Schema<'schema> {
 			let trans = match fieldtype {
 			FieldType::Resref => format!(
 	r#"insert or ignore into "resref_dict" values (new."{fieldname}", null);"#),
-			FieldType::Strref => format!(
-	r#"insert or ignore into "strref_dict" values (new."{fieldname}", null);"#),
+// 			FieldType::Strref => format!(
+// 	r#"insert or ignore into "strref_dict" values (new."{fieldname}", null);"#),
 			_ => String::new()
 			};
 			trans_edit.push_str(&trans);
@@ -608,10 +620,12 @@ impl<'schema> Schema<'schema> {
 		{trans}
 		insert or ignore into "{dirtytable}" values (new."{parent_key}");
 		insert into "edit_{name}" ("source", "resource", "field", "value") values
-			((select "component" from "current"), new."{key}", '{fieldname}',
+			((select "component" from "global"), new."{key}", '{fieldname}',
 			new."{fieldname}");
 	end"#);
 			db.exec(trig)?;
+			if *fieldtype == FieldType::Strref {
+			}
 		}
 		let mut newcols = String::new();
 		self.write_columns_pre(&mut newcols, "new.");
@@ -687,7 +701,7 @@ impl<'schema> Schema<'schema> {
 			trans(&mut source, "resref", f);
 // 			"{f}" as "a_{f}", "trans_{f}",
 			write!(&mut select, r#"
-			case when exists (select 1 from "resref_orig" as "o" where "o"."resref" = "t"."{f}") then "{f}" else "trans_{f}" end as "{f}""#).unwrap();
+			case when "t"."{f}" in (select "resref" from "resref_orig") then "{f}" else "trans_{f}" end as "{f}""#).unwrap();
 		},
 		FieldType::Strref => {
 			trans(&mut source, "strref", f);
@@ -703,7 +717,7 @@ impl<'schema> Schema<'schema> {
 		}
 		let mut condition = String::new();
 		if parent_table == name {
-			write!(&mut condition, r#"where exists (select 1 from "dirty_{parent_table}" where "name" = "s"."{parent_key}")"#).unwrap();
+			write!(&mut condition, r#"where "s"."{parent_key}" in (select "name" from "dirty_{parent_table}")"#).unwrap();
 		} else {
 			write!(&mut condition, r#"where "{parent_key}"=?"#).unwrap();
 		}
@@ -806,9 +820,15 @@ impl Progress {
 	}
 	pub fn inc(&self, n: u64) { self.as_ref().inc(n) }
 }
+
+pub fn transaction<T,E>(db: &mut rusqlite::Connection, mut f: impl FnMut(&rusqlite::Transaction)->Result<T,E>)->Result<T,E> {
+	let t = db.transaction().unwrap();
+	let r = f(&t)?; // automatic rollback if Err
+	t.commit().unwrap();
+	Ok(r)
 }
-pub trait ProgressIterator {
-}
+
+} // mod progress
 
 pub use rusqlite;
 mod gametypes;
@@ -831,33 +851,68 @@ pub(crate) use anyhow::{Context, Result};
 
 // I. create DB
 pub fn create_db(db_file: impl AsRef<Path>)->Result<Connection> {
+	use std::fmt::Write;
 	let path = db_file.as_ref();
 	println!("creating file {path:?}");
 	if Path::new(&path).exists() {
 		fs::remove_file(&path)
 		.with_context(|| format!("cannot remove file: {path:?}"))?;
 	}
-	let db = Connection::open(path)?;
-	db.exec("begin transaction")?;
-	println!("creating global tables.. ");
+	let mut db = Connection::open(path)?;
+	progress::transaction(&mut db, |db| {
+	// Table description:
+	// `global`: global variables; ony a single row:
+	//  - component: current mod component being installed;
+	//  - strref_count: number of strings in dialog.tlk (34000);
+	// `resref_orig`: list of all original game resrefs — this is used for
+	//    de-namespacing (all resrefs in this list translate to themselves);
+	// `resref_dict`: translations of resrefs (from namespaced to 8 bytes);
+	// `strref_dict`: translations of strrefs (from string key to 4-bytes int);
+	//
+	// `string_keys`: view of `strref_dict` primarily used for automatic
+	//  strref assignment — inserting into this view calls the appropriate
+	//  trigger selecting the next available strref.
+	// `new_strings`: (built in loop below) a view of all strref currently
+	//  introduced by mods. This gets compiled into `string_keys` as part
+	//  of the string translation process.
 	db.execute_batch(r#"
-create table "current" ("component" text);
+create table "global" ("component" text, "strref_count" integer);
+insert into "global"("component") values (null);
 create table "resref_orig" ("resref" text primary key on conflict ignore);
 create table "resref_dict" ("key" text not null primary key on conflict ignore, "resref" text);
-create table "strref_dict" ("key" text not null primary key on conflict ignore, "strref" integer);
+create table "strref_dict" ("key" text not null primary key on conflict ignore, "strref" integer unique);
+
+create view "string_keys" as select "key" from "strref_dict";
+create trigger "strref_auto" instead of insert on "string_keys"
+begin
+	insert into "strref_dict"("key", "strref") values
+	(new."key", ifnull((select min("strref")+1 from "strref_dict" where "strref"+1 not in (select "strref" from "strref_dict")), (select "strref_count" from "global")));
+end;
 	"#)?;
 	let pb = Progress::new(RESOURCES.len(), "create tables");
-	RESOURCES.map(|schema,_| {
+	let mut new_strings = String::from(r#"create view "new_strings"("key") as "#);
+	let mut new_strings_is_first = true;
+	RESOURCES.map_mut(|schema,_| {
 		pb.inc(1);
+		for database::Column { fieldname, fieldtype, .. } in schema.fields.iter() {
+			if *fieldtype == database::FieldType::Strref {
+				let name = &schema.table_name;
+				if new_strings_is_first { new_strings_is_first = false; }
+				else { write!(&mut new_strings, "\nunion\n")?; }
+				write!(&mut new_strings, r#"select "{fieldname}" from "add_{name}" union select "value" from "edit_{name}" where "field" = '{fieldname}'"#,
+					)?;
+			}
+		}
 // 		println!("  creating for resource {}", schema.table_name);
 		schema.create_tables_and_views(&db)?; Result::<()>::Ok(())
 	})?;
-	db.exec("commit")?;
-	create_strings(&db)?;
+	db.exec(new_strings)?; Ok::<_,anyhow::Error>(())
+	}).context("creating global tables")?;
+	create_strings(&mut db)?;
 	Ok(db)
 }
-pub fn create_strings(db: &Connection)->Result<()> {
-	db.exec("begin transaction")?;
+pub fn create_strings(db: &mut Connection)->Result<()> {
+	crate::progress::transaction(db, |db| {
 	const SCHEMA: &str = r#"("strref" integer primary key, "flags" integer, "sound" text, "volume" integer, "pitch" integer, "string" text)"#;
 	for (langname, _, has_f) in gameindex::LANGUAGES {
 		db.exec(&format!(r#"create table "strings_{langname}"{SCHEMA}"#))?;
@@ -865,7 +920,8 @@ pub fn create_strings(db: &Connection)->Result<()> {
 		db.exec(&format!(r#"create table "strings_{langname}F"{SCHEMA}"#))?;
 		}
 	}
-	db.exec("commit")?; Ok(())
+	Ok::<_,anyhow::Error>(())
+	}).context("read game strings")
 }
 
 // II. Game -> SQL
@@ -891,7 +947,8 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 		_ => Ok(())
 		}
 	})?;
-	db.exec("commit")?; Ok(())
+	db.exec("commit")?;
+	Ok(())
 }
 fn populate_strings(db: &Connection, path: &impl AsRef<Path>)->Result<()> {
 	use gameindex::LANGUAGES;
@@ -915,6 +972,7 @@ fn populate_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> +
 	let mut q = db.prepare(&format!(r#"insert into "strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
 	let itr = GameStringsIterator::new(bytes.as_ref())?;
 	let pb = Progress::new(itr.len(), "strings");
+	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
 	for (strref, x) in itr.enumerate() {
 		let s = x?;
 		pb.inc(1);
@@ -971,9 +1029,8 @@ impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
 	}
 }
 
-fn translate_resrefs(db: &Connection)->Result<()> {
-	//!
-	db.exec("begin transaction")?;
+fn translate_resrefs(db: &mut Connection)->Result<()> {
+	crate::progress::transaction(db, |db|{
 	let mut enum_st = db.prepare(r#"select key from "resref_dict" where "resref" is null"#)?;
 	let mut enum_rows = enum_st.query(())?;
 	let mut find = db.prepare(r#"select 1 from "resref_orig" where "resref"=?1 union select 1 from "resref_dict" where "resref"=?1"#)?;
@@ -986,10 +1043,19 @@ fn translate_resrefs(db: &Connection)->Result<()> {
 		update.execute((&longref, &resref))?;
 		println!("untranslated resref: '{longref}'->'{resref}'");
 	}
-	db.exec("commit")?; Ok(())
+	Ok::<_,anyhow::Error>(())
+	})?; Ok(())
 }
-fn save(db: &Connection, game: &GameIndex)->Result<()> {
+fn translate_strrefs(db: &mut Connection)->Result<()> {
+	crate::progress::transaction(db,|db| {
+	db.exec(r#"delete from "strref_dict" where "key" not in (select "key" from "new_strings" where "key" is not null)"#)?;
+	db.exec(r#"insert into "string_keys" select "key" from "new_strings" where "key" is not null"#)?;
+	Ok::<_,anyhow::Error>(())
+	})?; Ok(())
+}
+fn save(db: &mut Connection, game: &GameIndex)->Result<()> {
 	translate_resrefs(db)?;
+	translate_strrefs(db)?;
 	//, All this function does is wrap up `save_in_current_dir` so that any
 	//, exception throws do not prevent changing back to the previous
 	//, directory:
@@ -1077,8 +1143,8 @@ fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAb
 }
 
 #[derive(Parser,Debug)]
-#[command(version,about=r#"
-Exposes Infinity Engine game data as a SQLite database."#)]
+#[command(version,about=
+r#"Exposes Infinity Engine game data as a SQLite database."#)]
 struct RuntimeOptions {
 	#[arg(short,long,help="generates the initial database")]
 	generate: bool,
@@ -1109,22 +1175,23 @@ update "items" set price=5 where itemref='sw1h34';
 insert into "resref_dict" values
 ('New Item!', 'NEWITEM');
 
-insert into "items" ("itemref", "name", "replacement", "ground_icon") values
-('New Item!', 'New Item name!', 'Replacement', 'new icon');
+insert into "items" ("itemref", "name", "unidentified_name", "replacement", "ground_icon") values
+('New Item!', 'New Item name!', 'Mysterious Item', 'Replacement', 'new icon');
 
 update 'resref_dict'
 set "resref" = 'REPLAC' where "key" = 'Replacement';
 
-insert into "strref_dict" values
-('New Item name!', 35001);
-
 insert into "resref_orig" values
 ('isw1h01'), ('gsw1h01'), ('csw1h01');
 	"#)?;
+// insert into "strref_dict" values
+// ('New Item name!', 35001),
+// ('Mysterious Item', 35002);
+
 	}
 	if options.compile {
-		let db = Connection::open(options.database.as_ref().unwrap())?;
-		save(&db, &game)?;
+		let mut db = Connection::open(options.database.as_ref().unwrap())?;
+		save(&mut db, &game)?;
 	}
 	Ok(())
 }

@@ -318,6 +318,7 @@ fn table_attr_table(args: &mut AttrParser, table_name: &mut String, parent: &mut
 pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 	let mut fields = pm2::TokenStream::new();
 	let mut map = pm2::TokenStream::new();
+	let mut map_mut = pm2::TokenStream::new();
 	let mut data = pm2::TokenStream::new();
 	let mut n = 0usize;
 	RESOURCES.with(|v| {
@@ -330,6 +331,8 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 		quote!{ pub #field: T, }.to_tokens(&mut fields);
 		quote!{ #field: f(&<#ty as crate::database::Table>::SCHEMA,&self.#field)?, }
 			.to_tokens(&mut map);
+		quote!{ #field: f(&<#ty as crate::database::Table>::SCHEMA,&self.#field)?, }
+			.to_tokens(&mut map_mut);
 		quote!{ #field: (), }.to_tokens(&mut data);
 	}
 	});
@@ -341,6 +344,9 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 			pub fn len(&self)->usize { #n }
 			pub fn map<U,E,F:Fn(&crate::database::Schema,&T)->Result<U,E>>(&self, f: F)->Result<AllResources<U>,E> {
 				Ok(AllResources { #map })
+			}
+			pub fn map_mut<U,E,F:FnMut(&crate::database::Schema,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources<U>,E> {
+				Ok(AllResources { #map_mut })
 			}
 		}
 	};

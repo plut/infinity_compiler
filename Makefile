@@ -4,7 +4,8 @@ all: run
 r: run
 run:
 	rm -rf $(BG)/sim_out
-	cargo r -- -g -G $(BG)
+	cargo b
+	$(MAKE) test
 
 c: check
 check:
@@ -13,3 +14,7 @@ check:
 w: watch
 watch:
 	cargo watch -s 'clear;cargo c --color=always 2>&1 | head -30'
+
+t: test
+test:
+	RUST_BACKTRACE=1 ./infinity_compiler -G $(BG) -g -c

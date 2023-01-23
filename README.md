@@ -3,9 +3,16 @@
 A compiler between [Infinity Engine's files](https://gibberlings3.github.io/iesdp/file_formats/index.htm)
 and a SQLite database designed with modding in view.
 
+## Usage
+
+ - `sim -g` generates and populates the initial database.
+ - `sim -c` compiles changes to the `override` directory.
+
+See `sim --help` for (slightly) more details.
+
 ## Database structure
 
-The recommended interface for accessing game objects is through a number of
+The exposed interface for accessing game objects is through a number of
 views:
 
  - `items`, `item_abilities`, `item_effects` for game items,
