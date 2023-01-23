@@ -254,7 +254,7 @@ impl BifIndex {
 }
 
 // III. Game strings:
-pub fn languages(gamedir: impl AsRef<Path>)->Result<Vec<(String,PathBuf)>> {
+pub fn languages(gamedir: &impl AsRef<Path>)->Result<Vec<(String,PathBuf)>> {
 	let langdir = gamedir.as_ref().join("lang");
 	let mut r = Vec::<(String,PathBuf)>::new();
 	for x in fs::read_dir(&langdir)
@@ -342,6 +342,9 @@ impl GameIndex {
 				hdr.nres, indexfile.to_str().unwrap()))?;
 		Ok(GameIndex{ gamedir, bifnames, resources, _bifsizes })
 	}
+	// We cannot be a true `Iterator` because of the “streaming iterator”
+	// problem (aka cannot return references to iterator-owned data),
+	// so we perform internal iteration by this `for_each` method:
 	pub fn for_each<F>(&self, mut f: F)->Result<()>
 	where F: (FnMut(Restype, ResHandle)->Result<()>) {
 		let pb = Progress::new(self.resources.len(), "resources");
@@ -361,33 +364,6 @@ impl GameIndex {
 		Ok(())
 	}
 }
-impl<'a> IntoIterator for &'a GameIndex {
-	type Item = BifView<'a>;
-	type IntoIter = GameIndexItr<'a>;
-	fn into_iter(self)->Self::IntoIter { GameIndexItr{ index: self, state: 0, } }
-}
-#[derive(Debug)] pub struct GameIndexItr<'a> {
-	index: &'a GameIndex,
-	state: usize,
-}
-#[derive(Debug)] pub struct BifView<'a> { // element of GameIndex
-	pub path: PathBuf,
-	pub sourcefile: usize,
-	pub resources: &'a Vec<KeyRes>,
-	pub file: Option::<BufReader<File>>,
-}
-impl<'a> Iterator for GameIndexItr<'a> {
-	type Item = BifView<'a>;
-	fn next(&mut self)->Option<Self::Item> {
-		if self.state >= self.index.bifnames.len() { return None }
-		let filename = &self.index.bifnames[self.state];
-		let r = BifView{ path: self.index.gamedir.join(filename),
-			sourcefile: self.state, resources: &self.index.resources, file: None };
-		self.state+= 1;
-		Some(r)
-	}
-}
-
 pub struct ResHandle<'a> {
 	bif: &'a mut Option<BifFile>,
 	path: &'a PathBuf,
@@ -850,7 +826,7 @@ pub(crate) use anyhow::{Context, Result};
 
 
 // I. create DB
-pub fn create_db(db_file: impl AsRef<Path>, gamedir: impl AsRef<Path>)->Result<Connection> {
+pub fn create_db(db_file: impl AsRef<Path>, gamedir: &impl AsRef<Path>)->Result<Connection> {
 	use std::fmt::Write;
 	let path = db_file.as_ref();
 	println!("creating file {path:?}");
@@ -912,10 +888,10 @@ end;
 	create_strings(&mut db, gamedir)?;
 	Ok(db)
 }
-pub fn create_strings(db: &mut Connection, gamedir: impl AsRef<Path>)->Result<()> {
+pub fn create_strings(db: &mut Connection, gamedir: &impl AsRef<Path>)->Result<()> {
 	crate::progress::transaction(db, |db| {
 	const SCHEMA: &str = r#"("strref" integer primary key, "flags" integer, "sound" text, "volume" integer, "pitch" integer, "string" text)"#;
-	for (langname, _) in gameindex::languages(&gamedir)?.iter() {
+	for (langname, _) in gameindex::languages(gamedir)?.iter() {
 		db.exec(format!(r#"create table "strings_{langname}"{SCHEMA}"#))?;
 	}
 	Ok(())
@@ -953,7 +929,7 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 }
 fn populate_strings(db: &Connection, path: &impl AsRef<Path>)->Result<()> {
 	db.exec("begin transaction")?;
-	let languages = gameindex::languages(&path)?;
+	let languages = gameindex::languages(path)?;
 	let pb = Progress::new(languages.len(), "languages");
 	for (langname, dialog) in languages {
 		pb.inc(1);

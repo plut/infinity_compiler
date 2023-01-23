@@ -14,7 +14,7 @@
 # Todo:
  - a global option to limit languages
  + fill `strref_dict` table
- - use default value ("" for Resref, 0 for strref)
+ + use default value ("" for Resref, 0 for strref)
  - fill language strings tables
   - decide how to convert `.po` to sql
 	- the {M} and {F} markers work in this conversion (sql treats all
