@@ -1,6 +1,6 @@
 use crate::{Resref,Strref};
 use macros::{Pack, Table, produce_resource_list};
-#[derive(Debug,Default)] pub struct GameString<T: AsRef<str>> {
+#[derive(Debug,Default,Clone)] pub struct GameString<T: AsRef<str>> {
 	// Note: since &str is not FromSql, we cannot use Table for this;
 	// we must instead code the equivalent by hand
 	pub flags: u16,
@@ -10,7 +10,7 @@ use macros::{Pack, Table, produce_resource_list};
 	pub string: T
 }
 #[derive(Debug,Pack,Table)]
-#[table(item_effects,itemref,items)] pub struct ItemEffect {
+#[resource(item_effects,itemref,items)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
 #[column(abref, Option<i64>, r#"references "item_abilities"("abref")"#)]
 	pub opcode: u16, //opcode,
@@ -31,7 +31,7 @@ use macros::{Pack, Table, produce_resource_list};
 	pub stacking_id: u32,
 }
 #[derive(Debug,Pack,Table)]
-#[table(item_abilities,itemref,items)] pub struct ItemAbility {
+#[resource(item_abilities,itemref,items)] pub struct ItemAbility {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
 #[column(abref, auto, "primary key")]
 	attack_type: u8, // AttackType,
@@ -67,7 +67,7 @@ use macros::{Pack, Table, produce_resource_list};
 	is_bullet: u16,
 }
 #[derive(Debug,Pack,Table)]
-#[table(items,itemref,items)] pub struct Item {
+#[resource(items,itemref,items)] pub struct Item {
 #[header("ITM V1  ")]
 #[column(itemref, Resref, "primary key")]
 	unidentified_name: Strref,

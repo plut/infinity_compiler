@@ -17,5 +17,4 @@ watch:
 t: test
 test:
 	rm -rf $(BG)/sim_out
-	rm -rf $(BG)/backup
 	RUST_BACKTRACE=1 ./infinity_compiler -G $(BG) -g -c

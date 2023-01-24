@@ -159,7 +159,7 @@ struct RowCurrent {
 	no_column: bool,
 }
 
-#[proc_macro_derive(Table, attributes(column,table))]
+#[proc_macro_derive(Table, attributes(column,resource))]
 pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	let mut fields2 = Vec::<(String, syn::Type, String)>::new();
 	let mut schema = TS2::new();
@@ -183,7 +183,7 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	let mut parent = String::new();
 	for (name, mut args) in attrs.into_iter().map(parse_attr) {
 		match &name[..] {
-			"table" => table_attr_table(&mut args, &mut table_name, &mut parent,
+			"resource" => table_attr_resource(&mut args, &mut table_name, &mut parent,
 				&mut parent_key),
 			_ => () };
 	}
@@ -292,7 +292,7 @@ fn table_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut
 		_ => ()
 	}
 }
-fn table_attr_table(args: &mut AttrParser, table_name: &mut String, parent: &mut String, parent_key: &mut String) {
+fn table_attr_resource(args: &mut AttrParser, table_name: &mut String, parent: &mut String, parent_key: &mut String) {
 	//! `[table]` attribute:
 	//! - `[table("")]` prevents storing this table in the global [default]
 	//! RESOURCES constant,
@@ -338,15 +338,16 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 	});
 
 	let code = quote!{
-		pub struct AllResources<T> { #fields }
-		pub const RESOURCES: AllResources<()> = AllResources { #data };
+		pub struct AllResources<T> { _marker: std::marker::PhantomData<T>, #fields }
+		pub const RESOURCES: AllResources<()> = AllResources {
+			_marker: std::marker::PhantomData::<()>, #data };
 		impl<T> AllResources<T> {
 			pub fn len(&self)->usize { #n }
 			pub fn map<U,E,F:Fn(&crate::database::Schema,&T)->Result<U,E>>(&self, f: F)->Result<AllResources<U>,E> {
-				Ok(AllResources { #map })
+				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map })
 			}
 			pub fn map_mut<U,E,F:FnMut(&crate::database::Schema,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources<U>,E> {
-				Ok(AllResources { #map_mut })
+				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map_mut })
 			}
 		}
 	};
