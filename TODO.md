@@ -1,20 +1,20 @@
-# Game strings
- - leave the possibility to directly use a strref as a key
-3. ... with a trigger that picks the *smallest* available strref:
-    create view string_keys as select "key" from strref_dict;
-    create trigger "strref_auto" instead of insert on "string_keys"
-    begin
-      insert into "strref_dict" ("key", "strref") values
-      (new."key", (select min("strref")+1 from "strref_dict" where
-			"strref"+1 not in (select "strref" from "strref_dict")));
-		end;
-
- **modify the above code so that selection is done from `orig_stref` ∪
- new strref**
-# Todo:
+# Lua side:
+ - type-check (based on schema) for updates
+  - e.g. Strref accepts int or string,
+ - implement sql stuff
+ - sub-resources: accessing this field returns a sub-resource vector
+  - pushing on the sub-resource vector writes sql
+	 - see if `table.insert` is an actual function or an export
+   - we probably need a method here: item.abilities:push(...)
+  - schema for this field must include both the type (constructor) and
+    the sql table name
+# Rust side:
+ + replace `write_columns` by a `display` method for `Schema`
  - clarify views:
   - human-readable vs. compiled
-  - this might be useful when displaying e.g. an Item
+  + include the views in database file
+  + this will **heavily** simplify the rust select query
+  + with extra fields for (*untranslated*) parent and dirty bit
  - a global option to limit languages
  + fill `strref_dict` table
  + use default value ("" for Resref, 0 for strref)
@@ -45,3 +45,12 @@
 	  need to add dirty bit as an extra column
  - expand `current` to add file+line reference to Lua code
  - see if need to split bitfields
+# Rust resources
+	 itertools? paste? bitflags
+	 lexopt/clap/pico-args for argument parsing
+	 termcolor
+	https://github.com/brson/rust-anthology/blob/master/master-list.md
+	https://github.com/mre/idiomatic-rust
+	cargo watch -s 'clear; cargo check --tests --color=always 2>&1 | head -40'
+
+vim: et:

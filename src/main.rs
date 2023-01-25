@@ -456,6 +456,7 @@ mod database {
 //,  - `Schema` type: description of a particular SQL table;
 //,  - `Table` trait: connect a structure to a SQL row;
 use std::marker::PhantomData;
+use std::fmt::{Display,Debug,Formatter};
 use rusqlite::{Connection, Statement, Row, ToSql};
 use rusqlite::types::{FromSql, ValueRef};
 use crate::{Resref,Strref};
@@ -562,16 +563,8 @@ impl FromSql for Resref {
 }
 impl<'schema> Schema<'schema> {
 	// Step 0: a few useful functions
-	fn write_columns_pre(&self, s: &mut String, prefix: &str) {
-		let mut isfirst = true;
-		use std::fmt::Write;
-		for Column { fieldname, .. } in self.fields.iter() {
-			if isfirst { isfirst = false; } else { s.push(','); }
-			write!(s, r#" {prefix}"{fieldname}" "#).unwrap();
-		}
-	}
-	fn write_columns(&self, s: &mut String) {
-		self.write_columns_pre(s, "")
+	fn columns<T: Display>(&'schema self, s: T)->ColumnWriter<'schema, T> {
+		ColumnWriter { schema: self, prefix: s }
 	}
 	// Step 1: creating tables
 	fn create_table(&self, name: &str, more: &str)->String {
@@ -597,10 +590,9 @@ impl<'schema> Schema<'schema> {
 		db.exec(self.create_table(format!("add_{name}").as_str(),
 			r#", "source" text"#))?;
 		db.exec(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str())?;
-		let mut cols = String::new(); self.write_columns(&mut cols);
 		{ // create main view
 		let mut view = format!(r#"create view "{name}" as
-	with "u" as (select {cols} from "res_{name}" union select {cols} from "add_{name}") select "#);
+	with "u" as (select {0} from "res_{name}" union select {0} from "add_{name}") select "#, self.columns(""));
 		for (i, Column {fieldname, ..}) in self.fields.iter().enumerate(){
 			if i > 0 { writeln!(&mut view, ",").unwrap(); }
 			if fieldname == key {
@@ -641,16 +633,14 @@ impl<'schema> Schema<'schema> {
 			if *fieldtype == FieldType::Strref {
 			}
 		}
-		let mut newcols = String::new();
-		self.write_columns_pre(&mut newcols, "new.");
 		let trig = format!(
 	r#"create trigger "insert_{name}"
 	instead of insert on "{name}"
 	begin
 		{trans_edit}
-		insert into "add_{name}" ({cols}) values ({newcols});
+		insert into "add_{name}" ({0}) values ({1});
 		insert or ignore into "{dirtytable}" values (new."{parent_key}");
-	end"#);
+	end"#, self.columns(""), self.columns("new."));
 		db.exec(trig)?;
 		let trig = format!(
 	r#"create trigger "delete_{name}"
@@ -667,14 +657,41 @@ impl<'schema> Schema<'schema> {
 		insert or ignore into "{dirtytable}" values (old."resource");
 	end"#);
 		db.exec(trig)?;
+		db.exec(self.compile_query())?;
 		Ok (())
+	}
+	pub fn compile_query(&self)->String {
+		let n = '\n';
+		use std::fmt::Write;
+		let name = &self.table_name;
+		let Self { parent_table, parent_key, .. } = self;
+		let mut select = format!(r#"create view "out_{name}" as select{n}  "#);
+		let mut source = format!(r#"{n}from "{name}" as "a"{n}"#);
+		for Column { fieldname: f, fieldtype, .. } in self.fields.iter() {
+			match fieldtype {
+				FieldType::Resref => {
+					let a = format!(r#""a"."{f}""#);
+					let b = format!(r#""b_{f}""#);
+					write!(&mut select, r#"case when {a} in (select "resref" from "resref_orig") then {a} else ifnull({b}."resref", '') end as "{f}",{n}  "#).unwrap();
+					write!(&mut source, r#"left join "resref_dict" as {b} on {a} = {b}."key"{n}"#).unwrap();
+				},
+				FieldType::Strref => {
+					let a = format!(r#""a"."{f}""#);
+					let b = format!(r#""b_{f}""#);
+					write!(&mut select, r#"case when typeof({a}) == 'integer' then {a} else ifnull({b}."strref", 0) end as "{f}",{n}  "#).unwrap();
+					write!(&mut source, r#"left join "strref_dict" as {b} on {a} = {b}."key"{n}"#).unwrap();
+				},
+				_ => write!(&mut select, r#""a"."{f}",{n}  "#).unwrap()
+			}
+		}
+		write!(&mut select, r#""a"."{parent_key}" as "key"{source}"#).unwrap();
+		select
 	}
 	// Step 2: populating tables
 	pub fn insert_query(&self)->String {
 		let table_name = &self.table_name;
-		let mut s = format!("insert into \"res_{table_name}\" (");
-		self.write_columns(&mut s);
-		s.push_str(") values (");
+		let mut s = format!("insert into \"res_{table_name}\" ({}) values (",
+			self.columns(""));
 		for c in 0..self.fields.len() {
 			if c > 0 { s.push(','); }
 			s.push('?');
@@ -682,42 +699,20 @@ impl<'schema> Schema<'schema> {
 		s.push(')');
 		s
 	}
-	pub fn compile_query(&self)->String {
-		let n = '\n';
+}
+struct ColumnWriter<'a,T: Display> {
+	prefix: T,
+	schema: &'a Schema<'a>,
+}
+impl<'a, T: Display> Display for ColumnWriter<'a,T> {
+	fn fmt(&self, mut f: &mut Formatter<'_>)->std::result::Result<(),std::fmt::Error>{
 		use std::fmt::Write;
-		let name = &self.table_name;
-		let Self { parent_table, parent_key, .. } = self;
-		let mut select = String::from("select\n  ");
-		let mut source = format!(r#"{n}from "{name}" as "a"{n}"#);
 		let mut isfirst = true;
-		for Column { fieldname: f, fieldtype, .. } in self.fields.iter() {
-			if !isfirst {
-				write!(&mut select, ",\n  ").unwrap();
-			} else { isfirst = false; }
-			match fieldtype {
-				FieldType::Resref => {
-					let a = format!(r#""a"."{f}""#);
-					let b = format!(r#""b_{f}""#);
-					write!(&mut select, r#"case when {a} in (select "resref" from "resref_orig") then {a} else ifnull({b}."resref", '') end as "{f}""#).unwrap();
-					write!(&mut source, r#"left join "resref_dict" as {b} on {a} = {b}."key"{n}"#).unwrap();
-				},
-				FieldType::Strref => {
-					let a = format!(r#""a"."{f}""#);
-					let b = format!(r#""b_{f}""#);
-					write!(&mut select, r#"case when typeof({a}) == 'integer' then {a} else ifnull({b}."strref", 0) end as "{f}""#).unwrap();
-					write!(&mut source, r#"left join "strref_dict" as {b} on {a} = {b}."key"{n}"#).unwrap();
-				},
-				_ => write!(&mut select, r#""a"."{f}""#).unwrap()
-			}
+		for Column { fieldname, .. } in self.schema.fields.iter() {
+			if isfirst { isfirst = false; } else { write!(f, ",")?; }
+			write!(&mut f, r#" {}"{fieldname}" "#, self.prefix)?;
 		}
-		let mut condition = String::new();
-		if parent_table == name {
-			write!(&mut condition, r#"where "a"."{parent_key}" in (select "name" from "dirty_{parent_table}")"#).unwrap();
-		} else {
-			write!(&mut condition, r#"where "{parent_key}"=?"#).unwrap();
-		}
-		write!(&mut select, r#"{source} {condition}"#).unwrap();
-		select
+		Ok(())
 	}
 }
 
@@ -733,8 +728,9 @@ pub trait Table: Sized {
 	const SCHEMA: Schema<'static>;
 	fn ins(&self, s: &mut Statement, key: &Self::KeyIn)->rusqlite::Result<()>;
 	fn sel(r: &Row)->rusqlite::Result<(Self, Self::KeyOut)>;
-	fn select_statement(db: &Connection)->rusqlite::Result<TypedStatement<'_, Self>> {
-		let s = Self::SCHEMA.compile_query();
+	fn select_statement(db: &Connection, s: impl Display)->rusqlite::Result<TypedStatement<'_, Self>> {
+		let s = format!(r#"select {0} from "out_{1}" {s}"#,
+			Self::SCHEMA.columns(""), Self::SCHEMA.table_name);
 		Ok(TypedStatement(db.prepare(&s)?, PhantomData::<Self>))
 	}
 }
@@ -1108,10 +1104,9 @@ fn save_strings(db: &mut Connection, game: &GameIndex)->Result<()> {
 	Ok(())
 }
 fn save_in_current_dir(db: &Connection)->Result<()> {
-	// TODO: generate strings & resrefs
-	let mut sel_item = Item::select_statement(db)?;
-	let mut sel_item_ab = ItemAbility::select_statement(db)?;
-	let mut sel_item_eff = ItemEffect::select_statement(db)?;
+	let mut sel_item = Item::select_statement(db, r#"where "key" in "dirty_items""#)?;
+	let mut sel_item_ab = ItemAbility::select_statement(db, r#"where "key"=?"#)?;
+	let mut sel_item_eff = ItemEffect::select_statement(db, r#"where "key"=?"#)?;
 	for x in sel_item.as_table(())? {
 		save_item(x, &mut sel_item_ab, &mut sel_item_eff)?;
 	}
