@@ -18,7 +18,7 @@
  - a global option to limit languages
  + fill `strref_dict` table
  + use default value ("" for Resref, 0 for strref)
- - fill language strings tables
+ + fill language strings tables
   - decide how to convert `.po` to sql
 	- the {M} and {F} markers work in this conversion (sql treats all
 		languages as separate)
@@ -34,7 +34,7 @@
  + simplify interaction between Table and ResourceInsert (etc.)
  - for binaries: have a special variant of Resref which does interact with
 	 the db in a different way
- - try compiling a few items
+ + try compiling a few items
  + fill `resref_dict` table before compiling
  + inserting a Resref or a Strref populate the `*_dict` tables.
  + error propagation

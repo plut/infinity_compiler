@@ -493,8 +493,8 @@ pub enum FieldType { Integer, Text, Resref, Strref }
 impl FieldType {
 	pub const fn affinity(self)->&'static str {
 		match self {
-			FieldType::Integer | FieldType::Strref => "integer",
-			FieldType::Text | FieldType::Resref => "text",
+			FieldType::Integer | FieldType::Strref => r#"integer default 0"#,
+			FieldType::Text | FieldType::Resref => r#"text default """#,
 		}
 	}
 }
@@ -707,7 +707,7 @@ impl<'schema> Schema<'schema> {
 					write!(&mut select, r#"case when typeof({a}) == 'integer' then {a} else ifnull({b}."strref", 0) end as "{f}""#).unwrap();
 					write!(&mut source, r#"left join "strref_dict" as {b} on {a} = {b}."key"{n}"#).unwrap();
 				},
-				_ => write!(&mut select, r#""a"."{f}""#).unwrap(),
+				_ => write!(&mut select, r#""a"."{f}""#).unwrap()
 			}
 		}
 		let mut condition = String::new();
@@ -1101,7 +1101,9 @@ fn save_strings(db: &mut Connection, game: &GameIndex)->Result<()> {
 			let pitch = row.get::<_,i32>(5)?;
 			vec[strref] = GameString { flags, sound, volume, pitch, string };
 		}
-		gameindex::GameStringsIterator::save(&vec, &"./test.tlk")?;
+		let target = format!("./{lang}.tlk");
+		gameindex::GameStringsIterator::save(&vec, &target)?;
+// 		gameindex::GameStringsIterator::save(&vec, &"./test.tlk")?;
 	}
 	Ok(())
 }
