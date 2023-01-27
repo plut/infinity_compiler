@@ -9,10 +9,8 @@
 )]
 // #![feature(trace_macros)]
 // trace_macros!(false);
+const BACKUP_DIR: &str = "simod-backup";
 
-const BACKUP_DIR: &str = "simod_backup";
-pub(crate) use rusqlite::{Connection,Statement};
-pub(crate) use anyhow::{Context, Result};
 
 mod gameindex {
 //, This mod contains code related to the KEY/BIF side of the database.
@@ -20,13 +18,16 @@ mod gameindex {
 //,  - `Pack` trait;
 //,  - `Resref`, `Strref` basic types;
 //,  - `Gameindex` type and iterator.
-use macros::Pack;
+use anyhow::{Result, Context};
+use log::{trace,debug,info,warn,error};
+
 use std::cmp::min;
 use std::fmt::{self,Display,Debug,Formatter};
 use std::fs::{self, File};
 use std::io::{self, Read, Write, Seek, SeekFrom, BufReader, Cursor};
 use std::path::{Path, PathBuf};
-use anyhow::{Result, Context};
+
+use macros::Pack;
 use crate::progress::{Progress};
 use crate::gametypes::{GameString};
 
@@ -326,11 +327,13 @@ pub fn save<T: AsRef<str>>(vec: &[GameString<T>], path: &impl AsRef<Path>)->Resu
 
 // IV. Game index main structure:
 #[derive(Debug)] pub struct GameIndex {
-	pub gamedir: PathBuf,
+	pub root: PathBuf,
 	pub bifnames: Vec<String>,
 	_bifsizes: Vec<u32>,
 	pub resources: Vec<KeyRes>,
+	// Those are computed from gamedir and cached here:
 	pub languages: Vec<(String,PathBuf)>,
+	pub backup: PathBuf,
 }
 impl GameIndex {
 	pub fn open(gamedir: impl AsRef<Path>)->Result<Self> {
@@ -341,7 +344,7 @@ impl GameIndex {
 		let hdr = KeyHdr::unpack(&mut f)
 			.with_context(|| format!("bad KEY header in file: {indexfile:?}"))?;
 		let bifentries = KeyBif::vecunpack(&mut f, hdr.nbif as usize)
-			.with_context(|| format!("could not read {} BIF entries in file: {indexfile:?}", hdr.nbif))?;
+			.with_context(|| format!("cannot read {} BIF entries in file: {indexfile:?}", hdr.nbif))?;
 		let mut bifnames = Vec::<String>::new();
 		let mut _bifsizes = Vec::<u32>::new();
 		for KeyBif{offset, namelength, filelength, ..} in bifentries {
@@ -352,10 +355,12 @@ impl GameIndex {
 		};
 		f.seek(SeekFrom::Start(hdr.resoffset as u64))?;
 		let resources = <KeyRes>::vecunpack(&mut f, hdr.nres as usize)
-			.with_context(|| format!("could not read {} BIF resources in file: {}",
+			.with_context(|| format!("cannot read {} BIF resources in file: {}",
 				hdr.nres, indexfile.to_str().unwrap()))?;
 		let languages = Self::languages(&gamedir)?;
-		Ok(GameIndex{ gamedir, bifnames, resources, _bifsizes, languages })
+		let backup = gamedir.join(crate::BACKUP_DIR);
+		Ok(GameIndex{ root: gamedir, bifnames, resources, _bifsizes, languages,
+			backup })
 	}
 	// We cannot be a true `Iterator` because of the “streaming iterator”
 	// problem (aka cannot return references to iterator-owned data),
@@ -363,7 +368,7 @@ impl GameIndex {
 	pub fn for_each<F>(&self, mut f: F)->Result<()> where F: (FnMut(Restype, ResHandle)->Result<()>) {
 		let pb = Progress::new(self.resources.len(), "resources");
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
-			let path = self.gamedir.join(filename);
+			let path = self.root.join(filename);
 			let mut bif = Option::<BifFile>::default();
 			let pb1 = Progress::new(self.resources.len(), filename);
 			for res in self.resources.iter() {
@@ -394,23 +399,28 @@ impl GameIndex {
 		}
 		Ok(r)
 	}
-	pub fn backup(&self)->Result<()> {
-		// create backup of all language files
-		let backup_dir = self.gamedir.join(crate::BACKUP_DIR);
-		let pb = Progress::new(self.languages.len(), "Strings backup");
-		if !fs::metadata(&backup_dir)?.is_dir() {
+	pub fn backup_as(&self, file: impl AsRef<Path>, to: impl AsRef<Path>)->Result<()> {
+		let backup_dir = &self.backup;
+		let file = file.as_ref();
+		if !backup_dir.exists() {
 			fs::create_dir(&backup_dir)
 				.with_context(||format!("cannot create backup directory: {backup_dir:?}"))?;
+			info!("created backup directory {backup_dir:?}");
+		} else {
+			debug!("skipped creating backup directory {backup_dir:?}: directory exists");
 		}
-		for (lang, path) in self.languages.iter() {
-			pb.inc(1);
-			let back = backup_dir.join(format!("{lang}.tlk"));
-			if !fs::metadata(&back)?.is_file() {
-				fs::copy(path, &back)
-					.with_context(||format!("cannot backup {path:?} to {back:?}"))?;
-			}
+		let dest = backup_dir.join(to.as_ref());
+		if !dest.exists() {
+			fs::copy(&file, &dest)
+				.with_context(||format!("cannot backup {file:?} to {dest:?}"))?;
+			info!("backed up {file:?} as {dest:?}");
+		} else {
+			debug!("skipped backup of {file:?} to {dest:?}: file already backed up");
 		}
 		Ok(())
+	}
+	pub fn backup(&self, file: impl AsRef<Path>)->Result<()> {
+		self.backup_as(&file, file.as_ref().file_name().unwrap())
 	}
 }
 pub struct ResHandle<'a> {
@@ -746,7 +756,7 @@ pub trait Table: Sized {
 //  - `TypedRows`: the iterator producing Table objects from the query.
 pub struct TypedStatement<'stmt, T: Table> (Statement<'stmt>, PhantomData<T>);
 impl<'stmt, T: Table> TypedStatement<'stmt, T> {
-	pub fn as_table<P: rusqlite::Params>(&mut self, params: P)->rusqlite::Result<TypedRows<T>> {
+	pub fn iter<P: rusqlite::Params>(&mut self, params: P)->rusqlite::Result<TypedRows<T>> {
 		let rows = self.0.query(params)?;
 		Ok(TypedRows { rows, _marker: PhantomData::<T>, index: 0 })
 	}
@@ -831,33 +841,38 @@ pub fn transaction<T>(db: &mut Connection, mut f: impl FnMut(&rusqlite::Transact
 
 } // mod progress
 
-pub use rusqlite;
 mod gametypes;
 mod constants;
+
+pub(crate) use rusqlite::{self,Connection,Statement};
+pub(crate) use anyhow::{Context, Result};
+use clap::Parser;
+use simplelog::{TermLogger,WriteLogger};
+use log::{trace,debug,info,warn,error};
+
+use std::io::{Seek, SeekFrom};
+use std::path::{Path,PathBuf};
+use std::fs::{self, File};
+use std::fmt::{self,Debug};
+fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
 use database::{Table, ConnectionExt, TypedStatement};
 use gameindex::{GameIndex, Pack, Strref, Resref, ResHandle};
 use progress::{Progress};
 use gametypes::*;
 
-fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
-use std::io::{Seek, SeekFrom};
-use std::path::{Path,PathBuf};
-use std::fs::{self, File};
-use std::fmt::{self,Debug};
-use clap::Parser;
-pub(crate) use anyhow::{Context, Result};
-
 // I. create DB
 pub fn create_db(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Connection> {
 	use std::fmt::Write;
-	let path = db_file.as_ref();
-	println!("creating file {path:?}");
-	if Path::new(&path).exists() {
-		fs::remove_file(path)
-		.with_context(|| format!("cannot remove DB file: {path:?}"))?;
+	let db_file = db_file.as_ref();
+	println!("creating file {db_file:?}");
+	if Path::new(&db_file).exists() {
+		fs::remove_file(db_file)
+		.with_context(|| format!("cannot remove DB file: {db_file:?}"))?;
 	}
-	let mut db = Connection::open(path)?;
+	let mut db = Connection::open(&db_file)
+		.with_context(|| format!("cannot open database: {db_file:?}"))?;
+	info!("opened database {db_file:?}");
 	progress::transaction(&mut db, |db| {
 	// Table description:
 	// `global`: global variables; ony a single row:
@@ -945,23 +960,27 @@ struct DbInserter<'a> {
 fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(3, "Generate database"); pb.inc(1);
 	populate_strings(db, game)
-		.with_context(|| format!("cannot read game strings from game directory {:?}", game.gamedir))?;
+		.with_context(|| format!("cannot read game strings from game directory {:?}", game.root))?;
 	pb.inc(1);
 	db.exec("begin transaction")?;
 	let mut base = DbInserter { db,
 		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_query()) )?,
 		add_resref: db.prepare(r#"insert or ignore into "resref_orig" values (?)"#)?
 	};
+	let mut n_items = 0;
 	game.for_each(|restype, mut handle| {
+		debug!("trying to load resource {} of type {:#04x}", &handle.resref, restype.value);
 		base.add_resref.execute((&handle.resref,))?;
 		match restype {
 		constants::RESTYPE_ITM =>
-			populate_item(&mut base, &mut handle),
+				populate_item(&mut base, &mut handle)
+					.and_then(|_| {n_items+= 1; Ok(())}),
 		_ => Ok(())
 		}
 	})?;
 	pb.inc(1);
 	db.exec("commit")?;
+	info!("loaded {n_items} items to database");
 	Ok(())
 }
 fn populate_strings(db: &Connection, game: &GameIndex)->Result<()> {
@@ -982,11 +1001,14 @@ fn populate_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> +
 	let itr = GameStringsIterator::new(bytes.as_ref())?;
 	let pb = Progress::new(itr.len(), "strings");
 	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
+	let mut n_strings = 0;
 	for (strref, x) in itr.enumerate() {
 		let s = x?;
 		pb.inc(1);
 		q.execute((strref, s.flags, s.sound, s.volume, s.pitch, s.string))?;
+		n_strings+= 1;
 	}
+	info!("loaded {n_strings} strings for language \"{langname}\"");
 	Ok(())
 }
 fn populate_item(db: &mut DbInserter, handle: &mut ResHandle)->Result<()> {
@@ -1020,14 +1042,14 @@ fn populate_item(db: &mut DbInserter, handle: &mut ResHandle)->Result<()> {
 	}
 	Ok(())
 }
-fn command_generate(gamedir: impl AsRef<Path>, database: impl AsRef<Path>)->Result<()> {
-	let db = create_db(options.database.as_ref().unwrap(), &game)
-		.with_context(|| "impossible to create database {:?}", path.as_ref)?;
-	game.backup()?;
-	populate(&db, &game)?;
+fn command_generate(game: &GameIndex, database: impl AsRef<Path>)->Result<()> {
+	let db = create_db(&database, game)
+		.with_context(|| format!("cannot create database {:?}", database.as_ref()))?;
+	populate(&db, game)?;
 	db.execute_batch(r#"
 update "items" set price=5,name='A new name for Albruin' where itemref='sw1h34';
 "#)?;
+	Ok(())
 }
 
 // III. SQL -> Game
@@ -1053,12 +1075,15 @@ fn translate_resrefs(db: &mut Connection)->Result<()> {
 	let mut enum_rows = enum_st.query(())?;
 	let mut find = db.prepare(r#"select 1 from "resref_orig" where "resref"=?1 union select 1 from "resref_dict" where "resref"=?1"#)?;
 	let mut update = db.prepare(r#"update "resref_dict" set "resref"=?2 where "key"=?1"#)?;
+	let mut n_resrefs = 0;
 	while let Some(row) = enum_rows.next()? {
 		let longref = row.get::<_,String>(0)?;
 		// TODO: remove spaces etc.
 		let resref = Resref::fresh(&longref, |r| find.exists((r,)))?;
 		update.execute((&longref, &resref))?;
+		n_resrefs+= 1;
 	}
+	info!("translated {n_resrefs} resrefs");
 	Ok(())
 	})?; Ok(())
 }
@@ -1068,6 +1093,7 @@ fn translate_strrefs(db: &mut Connection)->Result<()> {
 		.context("cannot purge stale string keys")?;
 	db.exec(r#"insert into "string_keys" select "key", "flags" from "new_strings" where "key" is not null"#)
 		.context("cannot generate new string keys")?;
+	info!("translated strrefs");
 	Ok(())
 	})?; Ok(())
 }
@@ -1082,7 +1108,7 @@ fn save(db: &mut Connection, game: &GameIndex)->Result<()> {
 	//, All this function does is wrap up `save_in_current_dir` so that any
 	//, exception throws do not prevent changing back to the previous
 	//, directory:
-	let tmpdir = Path::new(&game.gamedir).join("sim_out");
+	let tmpdir = Path::new(&game.root).join("simod_out");
 	fs::create_dir(&tmpdir)
 		.with_context(|| format!("cannot create temp directory {tmpdir:?}"))?;
 	let orig_dir = std::env::current_dir()?;
@@ -1092,11 +1118,19 @@ fn save(db: &mut Connection, game: &GameIndex)->Result<()> {
 	pb.inc(1);
 	res
 }
-fn save_strings(db: &mut Connection, game: &GameIndex)->Result<()> {
+fn save_strings(db: &Connection, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(game.languages.len(), "save translations");
-	for (lang, _path) in game.languages.iter() {
+	for (lang, path) in game.languages.iter() {
 		pb.inc(1);
-		if lang != "en" { continue }
+		if lang != "en" { continue } // TODO: remove; this is to speed up tests
+		let mut s1 = String::new(); let mut s2 = String::new();
+		for c in path.iter() {
+			std::mem::swap(&mut s1, &mut s2);
+			s2.clear(); s2.push_str(c.to_str().unwrap());
+		}
+		println!("s1='{s1}', s2='{s2}'");
+		game.backup_as(path, format!("{s1}.tlk"))
+			.with_context(|| format!("cannot backup strings file {path:?}"))?;
 		let count = db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
 			(), |row| row.get::<_,usize>(0))?;
 		let mut vec = vec![GameString::<String>::default(); count+1];
@@ -1113,6 +1147,7 @@ fn save_strings(db: &mut Connection, game: &GameIndex)->Result<()> {
 		}
 		let target = format!("./{lang}.tlk");
 		gameindex::GameStringsIterator::save(&vec, &target)?;
+		info!("updated strings in {target:?}; file now contains {count} entries");
 // 		gameindex::GameStringsIterator::save(&vec, &"./test.tlk")?;
 	}
 	Ok(())
@@ -1121,14 +1156,16 @@ fn save_in_current_dir(db: &Connection)->Result<()> {
 	let mut sel_item = Item::select_statement(db, r#"where "key" in "dirty_items""#)?;
 	let mut sel_item_ab = ItemAbility::select_statement(db, r#"where "key"=?"#)?;
 	let mut sel_item_eff = ItemEffect::select_statement(db, r#"where "key"=?"#)?;
-	for x in sel_item.as_table(())? {
-		save_item(x, &mut sel_item_ab, &mut sel_item_eff)?;
+	let mut n_items = 0;
+	for x in sel_item.iter(())? {
+		n_items+=save_item(x, &mut sel_item_ab, &mut sel_item_eff)?;
 	}
+	info!("compiled {n_items} item files");
 	Ok(())
 }
-fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAbility>, sel_item_eff: &mut TypedStatement<'_,ItemEffect>)->Result<()>{
+fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAbility>, sel_item_eff: &mut TypedStatement<'_,ItemEffect>)->Result<i32>{
 	// ignore malformed db input (but report it on stderr)
-	if x.is_db_malformed() { return Ok(()) }
+	if x.is_db_malformed() { return Ok(0) }
 	let (mut item, (itemref,)) = x?;
 	println!("got an item! {itemref}");
 	const NO_ABILITY: usize = usize::MAX; // a marker for global effects
@@ -1137,14 +1174,14 @@ fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAb
 	//  - effect = (effect, ability index)
 	let mut abilities = Vec::<(ItemAbility, i64)>::new();
 	let mut effects = Vec::<(ItemEffect, usize)>::new();
-	for x in sel_item_ab.as_table((&itemref,))? {
-		if x.is_db_malformed() { return Ok(()) }
+	for x in sel_item_ab.iter((&itemref,))? {
+		if x.is_db_malformed() { return Ok(0) }
 		let (ab, (_, abref)) = x?;
 		abilities.push((ab, abref));
 		item.abilities_count+= 1;
 	}
-	for x in sel_item_eff.as_table((&itemref,))? {
-		if x.is_db_malformed() { return Ok(()) }
+	for x in sel_item_eff.iter((&itemref,))? {
+		if x.is_db_malformed() { return Ok(0) }
 		let (eff, (_, parent)) = x?;
 		let ab_id = match abilities.iter().position(|&(_, abref)| Some(abref) == parent) {
 			Some(i) => { abilities[i].0.effect_count+= 1; i },
@@ -1190,13 +1227,45 @@ fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAb
 	for i in 0..item.abilities_count {
 		for (e, j) in &effects { if *j == i.into() { e.pack(&mut f)?; } }
 	}
+	debug!("compiled item file {itemref}.itm");
+	Ok(1)
+}
+fn command_compile(game: &GameIndex, database: impl AsRef<Path>)->Result<()> {
+	let database = database.as_ref();
+	let mut db = Connection::open(database)
+		.with_context(|| format!("cannot open database: {database:?}"))?;
+	info!("opened database {database:?}");
+	save(&mut db, game).context("cannot compile database to game")?;
 	Ok(())
 }
-fn command_compile(gamedir: impl AsRef<Path>, database: impl AsRef<Path>)->Result<()> {
-	let mut db = Connection::open(options.database.as_ref().unwrap())
-		.with_context("impossible to connect to database: {:?}", path.as_ref())?;
-	save(&mut db, &game)
-		.with_context("impossible to save game")?;
+
+fn command_restore(game: &GameIndex)->Result<()> {
+	for x in game.backup.read_dir()
+		.with_context(|| format!("cannot read backup directory {:?}", game.backup))? {
+		let path = x
+			.with_context(|| format!("cannot read file in backup directory {:?}", game.backup))?
+			.path();
+		let ext = path.extension().unwrap().to_str().unwrap();
+		match ext {
+			"tlk" => {
+				let mut lang = path.file_stem().unwrap().to_str().unwrap();
+				let mut tail = String::new();
+				if lang.as_bytes()[lang.len()-1] == b'F' {
+					lang = &lang[..lang.len()-1];
+					tail.push('F');
+				}
+				let dest = game.root.join("lang").join(lang)
+					.join(format!("dialog{tail}.tlk"));
+				fs::copy(&path, &dest)?;
+				info!("restored {path:?} to {dest:?}");
+			},
+			_ => { // override case
+				let dest = game.root.join("override").join(path.file_name().unwrap());
+				fs::copy(&path, &dest)?;
+				info!("restored {path:?} to {dest:?}");
+			}
+		};
+	}
 	Ok(())
 }
 
@@ -1208,6 +1277,10 @@ struct RuntimeOptions {
 	gamedir: PathBuf,
 	#[arg(short='F',long,help="sets the sqlite file")]
 	database: Option<PathBuf>,
+	#[arg(short='O',long,help="sets log output",default_value="simod.log")]
+	log_output: String,
+	#[arg(short='L',long,help="sets log level",default_value_t=0)]
+	log_level: i32,
 	#[command(subcommand)]
 	command: Command,
 // 	#[arg(short,long,help="generates the initial database")]
@@ -1218,8 +1291,11 @@ struct RuntimeOptions {
 #[derive(clap::Subcommand,Debug)]
 enum Command {
 	Generate,
-	Compile
-	Help
+	Compile,
+	Restore,
+	Add,
+	Remove,
+	Select,
 }
 
 fn main() -> Result<()> {
@@ -1228,22 +1304,33 @@ fn main() -> Result<()> {
 		options.database = Some(Path::new("game.sqlite").into());
 	}
 	let game = GameIndex::open(&options.gamedir)
-		.with_context(|| format!("could not initialize game from directory {:?}",
+		.with_context(|| format!("cannot initialize game from directory {:?}",
 		options.gamedir))?;
-	match options.command {
-		Generate => command_generate(&options.gamedir, &options.database),
-		Compile => command_compile(&options.gamedir, &options.database),
+	let loglevel = match options.log_level {
+		0 => simplelog::LevelFilter::Off,
+		1 => simplelog::LevelFilter::Error,
+		2 => simplelog::LevelFilter::Warn,
+		3 => simplelog::LevelFilter::Info,
+		4 => simplelog::LevelFilter::Debug,
+		_ => simplelog::LevelFilter::Trace,
 	};
-// 	if options.compile {
-// 		let mut db = Connection::open(options.database.as_ref().unwrap())?;
-// 		save(&mut db, &game)?;
-// 	}
-// 	println!("{:?}", RESOURCES.items.schema); return Ok(());
-// insert into "items" ("itemref", "name", "unidentified_name", "replacement", "ground_icon") values
-// ('New Item!', 'New Item name!', 'Mysterious Item', 'Replacement', 'new icon');
-	if options.compile {
-		let mut db = Connection::open(options.database.as_ref().unwrap())?;
-		save(&mut db, &game)?;
-	}
+	if options.log_output == "-" {
+		simplelog::TermLogger::init(loglevel,
+			simplelog::Config::default(),
+			simplelog::TerminalMode::Stderr,
+			simplelog::ColorChoice::Auto)
+	} else {
+			simplelog::WriteLogger::init(loglevel,
+			simplelog::Config::default(),
+			fs::File::create(&options.log_output)
+				.with_context(|| format!("cannot open log file {}", options.log_output))?)
+	}.context("cannot set up logging")?;
+	match options.command {
+		Command::Generate => command_generate(&game, options.database.unwrap())?,
+		Command::Compile => command_compile(&game, options.database.unwrap())?,
+		Command::Restore => command_restore(&game)?,
+		_ => todo!(),
+	};
+	info!("execution terminated with flying colors");
 	Ok(())
 }

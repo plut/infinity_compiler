@@ -1,7 +1,7 @@
 # Global
- - the program is named `simp`
+ - the program is named `simod`
  - embed lua into rust (and give sql access through rusqlite)
- - accept subcommands:
+ + accept subcommands: (PARTLY DONE)
     simp select <file.lua> <component>
     simp select <file.lua> # opens a menu
     simp select # opens a menu
