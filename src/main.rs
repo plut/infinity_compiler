@@ -10,7 +10,9 @@
 // #![feature(trace_macros)]
 // trace_macros!(false);
 
-const BACKUP_DIR: &str = "backup";
+const BACKUP_DIR: &str = "simod_backup";
+pub(crate) use rusqlite::{Connection,Statement};
+pub(crate) use anyhow::{Context, Result};
 
 mod gameindex {
 //, This mod contains code related to the KEY/BIF side of the database.
@@ -73,7 +75,7 @@ impl<const N: usize> Debug for StaticString<N> {
 			f.write_char(*c as char)?;
 		}
 		f.write_char('"')?;
-		f.write_fmt(format_args!("{}", N))?;
+		f.write_fmt(format_args!("{N}"))?;
 		Ok(())
 	}
 }
@@ -263,9 +265,10 @@ impl BifIndex {
 }
 impl<'a> /* From<T> for */ GameStringsIterator<'a> {
 	// not a From since we return a Result<>
-	pub fn new(bytes: &'a[u8])->io::Result<Self> {
+	pub fn new(bytes: &'a[u8])->Result<Self> {
 		let mut cursor = Cursor::new(bytes);
-		let header = TlkHeader::unpack(&mut cursor)?;
+		let header = TlkHeader::unpack(&mut cursor)
+			.context("malformed TLK header")?;
 		Ok(Self { cursor, index: 0, nstr: header.nstr as usize,
 			offset: header.offset as usize })
 	}
@@ -296,11 +299,12 @@ impl<'a> ExactSizeIterator for GameStringsIterator<'a> {
 }
 impl<'a> GameStringsIterator<'a> {
 // we put this function in an `impl` block for convenience:
-pub fn save<T: AsRef<str>>(vec: &[GameString<T>], path: &impl AsRef<Path>)->io::Result<()> {
+pub fn save<T: AsRef<str>>(vec: &[GameString<T>], path: &impl AsRef<Path>)->Result<()> {
 	// FIXME: this could be done with a prepared statement and iterator
 	// (saving the (rather big) memory for the whole vector of strings),
 	// but rusqlite does not export `reset`...
-	let mut file = fs::File::create(path)?;
+	let mut file = fs::File::create(path)
+		.with_context(|| format!("cannot create TLK file: {:?}", path.as_ref()))?;
 	TlkHeader { lang: 0, nstr: vec.len() as u32,
 		offset: (26*vec.len() + 18) as u32 }.pack(&mut file)?;
 	// first string in en.tlk has: (flags: u16=5, offset=0, strlen=9)
@@ -313,7 +317,8 @@ pub fn save<T: AsRef<str>>(vec: &[GameString<T>], path: &impl AsRef<Path>)->io::
 		delta+= l;
 	}
 	for s in vec {
-		file.write_all(s.string.as_ref().as_bytes())?;
+		file.write_all(s.string.as_ref().as_bytes())
+			.with_context(|| format!("cannot write strings to TLK file:{:?}", path.as_ref()))?;
 	}
 	Ok(())
 }
@@ -376,7 +381,7 @@ impl GameIndex {
 		let langdir = gamedir.as_ref().join("lang");
 		let mut r = Vec::<(String,PathBuf)>::new();
 		for x in fs::read_dir(&langdir)
-			.with_context(|| format!("read lang directory: {langdir:?}"))? {
+			.with_context(|| format!("cannot read lang directory: {langdir:?}"))? {
 			let entry = x?;
 			let lang = &entry.file_name().into_string().unwrap()[0..2];
 			// TMP: this is to speed up execution (a bit) during test runs.
@@ -468,7 +473,9 @@ pub trait ConnectionExt {
 }
 impl ConnectionExt for Connection {
 	fn exec(&self, s: impl AsRef<str>)->Result<()> {
-		self.execute(s.as_ref(), ())?; Ok(())
+		self.execute(s.as_ref(), ())
+			.with_context(|| format!("failed SQL statement:\n{}", s.as_ref()))?;
+		Ok(())
 	}
 }
 pub trait RowExt {
@@ -838,10 +845,8 @@ use std::io::{Seek, SeekFrom};
 use std::path::{Path,PathBuf};
 use std::fs::{self, File};
 use std::fmt::{self,Debug};
-use rusqlite::{Connection,Statement};
 use clap::Parser;
 pub(crate) use anyhow::{Context, Result};
-mod common;
 
 // I. create DB
 pub fn create_db(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Connection> {
@@ -1015,6 +1020,15 @@ fn populate_item(db: &mut DbInserter, handle: &mut ResHandle)->Result<()> {
 	}
 	Ok(())
 }
+fn command_generate(gamedir: impl AsRef<Path>, database: impl AsRef<Path>)->Result<()> {
+	let db = create_db(options.database.as_ref().unwrap(), &game)
+		.with_context(|| "impossible to create database {:?}", path.as_ref)?;
+	game.backup()?;
+	populate(&db, &game)?;
+	db.execute_batch(r#"
+update "items" set price=5,name='A new name for Albruin' where itemref='sw1h34';
+"#)?;
+}
 
 // III. SQL -> Game
 trait DbTypeCheck {
@@ -1070,7 +1084,7 @@ fn save(db: &mut Connection, game: &GameIndex)->Result<()> {
 	//, directory:
 	let tmpdir = Path::new(&game.gamedir).join("sim_out");
 	fs::create_dir(&tmpdir)
-		.with_context(|| format!("cannot create temp directory {:?}", tmpdir))?;
+		.with_context(|| format!("cannot create temp directory {tmpdir:?}"))?;
 	let orig_dir = std::env::current_dir()?;
 	std::env::set_current_dir(tmpdir)?;
 	let res = save_in_current_dir(db);
@@ -1178,6 +1192,13 @@ fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAb
 	}
 	Ok(())
 }
+fn command_compile(gamedir: impl AsRef<Path>, database: impl AsRef<Path>)->Result<()> {
+	let mut db = Connection::open(options.database.as_ref().unwrap())
+		.with_context("impossible to connect to database: {:?}", path.as_ref())?;
+	save(&mut db, &game)
+		.with_context("impossible to save game")?;
+	Ok(())
+}
 
 #[derive(clap::Parser,Debug)]
 #[command(version,about=
@@ -1209,24 +1230,20 @@ fn main() -> Result<()> {
 	let game = GameIndex::open(&options.gamedir)
 		.with_context(|| format!("could not initialize game from directory {:?}",
 		options.gamedir))?;
-// // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
 	match options.command {
 		Generate => command_generate(&options.gamedir, &options.database),
 		Compile => command_compile(&options.gamedir, &options.database),
 	};
-// 	if options.generate {
-// 		let db = create_db(options.database.as_ref().unwrap(), &game)?;
-// 		game.backup()?;
-// 		populate(&db, &game)?;
-// 		db.execute_batch(r#"
-// update "items" set price=5,name='A new name for Albruin' where itemref='sw1h34';
-// 	"#)?;
-// 	}
-// // insert into "items" ("itemref", "name", "unidentified_name", "replacement", "ground_icon") values
-// // ('New Item!', 'New Item name!', 'Mysterious Item', 'Replacement', 'new icon');
 // 	if options.compile {
 // 		let mut db = Connection::open(options.database.as_ref().unwrap())?;
 // 		save(&mut db, &game)?;
 // 	}
+// 	println!("{:?}", RESOURCES.items.schema); return Ok(());
+// insert into "items" ("itemref", "name", "unidentified_name", "replacement", "ground_icon") values
+// ('New Item!', 'New Item name!', 'Mysterious Item', 'Replacement', 'new icon');
+	if options.compile {
+		let mut db = Connection::open(options.database.as_ref().unwrap())?;
+		save(&mut db, &game)?;
+	}
 	Ok(())
 }
