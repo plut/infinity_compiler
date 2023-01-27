@@ -664,7 +664,7 @@ impl<'schema> Schema<'schema> {
 		let n = '\n';
 		use std::fmt::Write;
 		let name = &self.table_name;
-		let Self { parent_table, parent_key, .. } = self;
+		let Self { parent_key, .. } = self;
 		let mut select = format!(r#"create view "out_{name}" as select{n}  "#);
 		let mut source = format!(r#"{n}from "{name}" as "a"{n}"#);
 		for Column { fieldname: f, fieldtype, .. } in self.fields.iter() {
@@ -841,7 +841,7 @@ use std::fmt::{self,Debug};
 use rusqlite::{Connection,Statement};
 use clap::Parser;
 pub(crate) use anyhow::{Context, Result};
-
+mod common;
 
 // I. create DB
 pub fn create_db(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Connection> {
@@ -1113,13 +1113,14 @@ fn save_in_current_dir(db: &Connection)->Result<()> {
 	Ok(())
 }
 fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAbility>, sel_item_eff: &mut TypedStatement<'_,ItemEffect>)->Result<()>{
-	// ignore malformed db input (but report it on stdout)
+	// ignore malformed db input (but report it on stderr)
 	if x.is_db_malformed() { return Ok(()) }
 	let (mut item, (itemref,)) = x?;
 	println!("got an item! {itemref}");
-	// abilities = (ability, abref)
-	// effect = (effect, ability index)
-	const NO_ABILITY: usize = usize::MAX;
+	const NO_ABILITY: usize = usize::MAX; // a marker for global effects
+	// we store item effects & abilities in two vectors:
+	//  - abilities = (ability, abref)
+	//  - effect = (effect, ability index)
 	let mut abilities = Vec::<(ItemAbility, i64)>::new();
 	let mut effects = Vec::<(ItemEffect, usize)>::new();
 	for x in sel_item_ab.as_table((&itemref,))? {
@@ -1178,43 +1179,54 @@ fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAb
 	Ok(())
 }
 
-#[derive(Parser,Debug)]
+#[derive(clap::Parser,Debug)]
 #[command(version,about=
 r#"Exposes Infinity Engine game data as a SQLite database."#)]
 struct RuntimeOptions {
-	#[arg(short,long,help="generates the initial database")]
-	generate: bool,
-	#[arg(short,long,help="compile changes from database to override")]
-	compile: bool,
 	#[arg(short='G',long,help="sets the game directory (containing chitin.key)", default_value=".")]
 	gamedir: PathBuf,
 	#[arg(short='F',long,help="sets the sqlite file")]
 	database: Option<PathBuf>,
+	#[command(subcommand)]
+	command: Command,
+// 	#[arg(short,long,help="generates the initial database")]
+// 	generate: bool,
+// 	#[arg(short,long,help="compile changes from database to override")]
+// 	compile: bool,
+}
+#[derive(clap::Subcommand,Debug)]
+enum Command {
+	Generate,
+	Compile
+	Help
 }
 
 fn main() -> Result<()> {
 	let mut options = RuntimeOptions::parse();
-	options.compile = options.compile || !options.generate;
 	if options.database.is_none() {
 		options.database = Some(Path::new("game.sqlite").into());
 	}
 	let game = GameIndex::open(&options.gamedir)
 		.with_context(|| format!("could not initialize game from directory {:?}",
 		options.gamedir))?;
-// 	println!("{:?}", RESOURCES.items.schema); return Ok(());
-	if options.generate {
-		let db = create_db(options.database.as_ref().unwrap(), &game)?;
-		game.backup()?;
-		populate(&db, &game)?;
-		db.execute_batch(r#"
-update "items" set price=5,name='A new name for Albruin' where itemref='sw1h34';
-	"#)?;
-	}
-// insert into "items" ("itemref", "name", "unidentified_name", "replacement", "ground_icon") values
-// ('New Item!', 'New Item name!', 'Mysterious Item', 'Replacement', 'new icon');
-	if options.compile {
-		let mut db = Connection::open(options.database.as_ref().unwrap())?;
-		save(&mut db, &game)?;
-	}
+// // 	println!("{:?}", RESOURCES.items.schema); return Ok(());
+	match options.command {
+		Generate => command_generate(&options.gamedir, &options.database),
+		Compile => command_compile(&options.gamedir, &options.database),
+	};
+// 	if options.generate {
+// 		let db = create_db(options.database.as_ref().unwrap(), &game)?;
+// 		game.backup()?;
+// 		populate(&db, &game)?;
+// 		db.execute_batch(r#"
+// update "items" set price=5,name='A new name for Albruin' where itemref='sw1h34';
+// 	"#)?;
+// 	}
+// // insert into "items" ("itemref", "name", "unidentified_name", "replacement", "ground_icon") values
+// // ('New Item!', 'New Item name!', 'Mysterious Item', 'Replacement', 'new icon');
+// 	if options.compile {
+// 		let mut db = Connection::open(options.database.as_ref().unwrap())?;
+// 		save(&mut db, &game)?;
+// 	}
 	Ok(())
 }

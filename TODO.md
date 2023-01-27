@@ -1,4 +1,17 @@
+# Global
+ - the program is named `simp`
+ - embed lua into rust (and give sql access through rusqlite)
+ - accept subcommands:
+    simp select <file.lua> <component>
+    simp select <file.lua> # opens a menu
+    simp select # opens a menu
+    simp generate
+    simp compile
+    simp restore # restores backup files
 # Lua side:
+ - each component is stored in a normalized table containing:
+   name, categorization, description, code (function or string),
+   compatibility
  - type-check (based on schema) for updates
   - e.g. Strref accepts int or string,
  - implement sql stuff
@@ -9,6 +22,9 @@
   - schema for this field must include both the type (constructor) and
     the sql table name
 # Rust side:
+ - we can probably replace TypedStatement by some trait StructuredRead<T>
+   (or even better, include this in Table trait)
+   (or just in `as_table` function)
  + replace `write_columns` by a `display` method for `Schema`
  - clarify views:
   - human-readable vs. compiled
