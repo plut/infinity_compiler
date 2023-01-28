@@ -153,6 +153,10 @@ macro_rules! unpack_int {
 	})* }
 }
 unpack_int!(i8,i16,i32,i64,u8,u16,u32,u64);
+impl Pack for String { // String is ignored on pack/unpack:
+	fn unpack(_f: &mut impl Read)->io::Result<Self> { Ok(Self::new()) }
+	fn pack(&self, _f: &mut impl Write)->io::Result<()> { Ok(()) }
+}
 
 #[derive(Clone,Copy,Default)] pub struct Resref { pub name: StaticString::<8>, }
 impl Debug for Resref {
@@ -281,24 +285,23 @@ impl<'a> /* From<T> for */ GameStringsIterator<'a> {
 	}
 }
 impl<'a> Iterator for GameStringsIterator<'a> {
-	type Item = Result<GameString<&'a str>>;
+	type Item = Result<GameString>;
 	fn next(&mut self)->Option<Self::Item> {
 		if self.index >= self.nstr { return None }
-		let tlk_info =
-			<(u16, Resref, i32, i32, i32, i32) as Pack>::unpack(&mut self.cursor);
-		// propagate error to the calling loop (not the same Err types here):
-		if let Err(e) = tlk_info { return Some(Err(e.into())) }
-		let (flags, sound, volume, pitch, delta, strlen) = tlk_info.unwrap();
+		let mut s = match GameString::unpack(&mut self.cursor) {
+			Err(e) => return Some(Err(e.into())),
+			Ok(s) => s,
+		};
 
-		let start = self.offset + (delta as usize);
-		let end = start + (strlen as usize);
+		let start = self.offset + (s.delta as usize);
+		let end = start + (s.strlen as usize);
 		let buf = self.cursor.get_ref();
 		// string *might* be zero-terminated, in which case we discard:
 		let c = buf[end-1];
 		let end2 = std::cmp::max(start, end-((c==0) as usize));
-		let string = std::str::from_utf8(&buf[start..end2]).ok()?;
+		s.string.push_str(std::str::from_utf8(&buf[start..end2]).ok()?);
 		self.index+= 1;
-		Some(Ok(GameString{ flags, sound, volume, pitch, string }))
+		Some(Ok(s))
 	}
 }
 impl<'a> ExactSizeIterator for GameStringsIterator<'a> {
@@ -306,7 +309,7 @@ impl<'a> ExactSizeIterator for GameStringsIterator<'a> {
 }
 impl<'a> GameStringsIterator<'a> {
 // we put this function in an `impl` block for convenience:
-pub fn save<T: AsRef<str>>(vec: &[GameString<T>], path: &impl AsRef<Path>)->Result<()> {
+pub fn save(vec: &[GameString], path: &impl AsRef<Path>)->Result<()> {
 	// FIXME: this could be done with a prepared statement and iterator
 	// (saving the (rather big) memory for the whole vector of strings),
 	// but rusqlite does not export `reset`...
@@ -319,12 +322,12 @@ pub fn save<T: AsRef<str>>(vec: &[GameString<T>], path: &impl AsRef<Path>)->Resu
 	// (offset=72) etc.
 	let mut delta = 0;
 	for s in vec.iter() {
-		let l = s.string.as_ref().len() as u32;
+		let l = s.string.len() as u32;
 		(s.flags, s.sound, s.volume, s.pitch, delta, l).pack(&mut file)?;
 		delta+= l;
 	}
 	for s in vec {
-		file.write_all(s.string.as_ref().as_bytes())
+		file.write_all(s.string.as_bytes())
 			.with_context(|| format!("cannot write strings to TLK file:{:?}", path.as_ref()))?;
 	}
 	Ok(())
@@ -539,12 +542,15 @@ impl<T> SqlType for Option<T> where T: SqlType {
 impl<'a> SqlType for &'a str {
 	const SQL_TYPE: FieldType = FieldType::Text;
 }
+impl SqlType for String {
+	const SQL_TYPE: FieldType = FieldType::Text;
+}
 macro_rules! sqltype_int {
 	($($T:ty),*) => { $(impl SqlType for $T {
 		const SQL_TYPE: FieldType = FieldType::Integer;
 	})* }
 }
-sqltype_int!{i8,i16,i32,i64,u8,u16,u32,u64}
+sqltype_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
 // impl<T> SqlType for T where T: num::Integer {
 // 	const SQL_TYPE: FieldType = FieldType::Integer;
 // }
@@ -690,10 +696,10 @@ impl<'schema> Schema<'schema> {
 		insert or ignore into "{dirtytable}" values (old."resource");
 	end"#);
 		db.exec(trig)?;
-		db.exec(self.compile_query())?;
+		db.exec(self.select_statement())?;
 		Ok (())
 	}
-	pub fn compile_query(&self)->String {
+	pub fn select_statement(&self)->String {
 		let n = '\n';
 		use std::fmt::Write;
 		let name = &self.table_name;
@@ -721,7 +727,10 @@ impl<'schema> Schema<'schema> {
 		select
 	}
 	// Step 2: populating tables
-	pub fn insert_query(&self)->String {
+// 	pub fn select_statement(&self, name: impl Display)->String {
+// 		format!(r#"select {} from "{name}"#, self.columns(""))
+// 	}
+	pub fn insert_statement(&self)->String {
 		let table_name = &self.table_name;
 		let mut s = format!("insert into \"res_{table_name}\" ({}) values (",
 			self.columns(""));
@@ -761,11 +770,15 @@ pub trait Table: Sized {
 	const SCHEMA: Schema<'static>;
 	fn ins(&self, s: &mut Statement, key: &Self::KeyIn)->rusqlite::Result<()>;
 	fn sel(r: &Row)->rusqlite::Result<(Self, Self::KeyOut)>;
-	fn select_statement(db: &Connection, s: impl Display)->rusqlite::Result<TypedStatement<'_, Self>> {
-		let s = format!(r#"select {0} from "out_{1}" {s}"#,
-			Self::SCHEMA.columns(""), Self::SCHEMA.table_name);
+	fn select_query_gen(db: &Connection, n1: impl Display,
+		n2: impl Display, cond: impl Display)->rusqlite::Result<TypedStatement<'_,Self>> {
+		let s = format!(r#"select {cols} from "{n1}{n2}" {cond}"#,
+			cols=Self::SCHEMA.columns(""));
 		debug!("running SQL query: {s}");
 		Ok(TypedStatement(db.prepare(&s)?, PhantomData::<Self>))
+	}
+	fn select_query(db: &Connection, s: impl Display)->rusqlite::Result<TypedStatement<'_, Self>> {
+		Self::select_query_gen(db, "out_", Self::SCHEMA.table_name, s)
 	}
 }
 // We need a few types parametrized by a Table:
@@ -886,9 +899,9 @@ use gametypes::*;
 fn for_items(db: &Connection, condition: impl Display, f: impl Fn(&Resref, &mut Item,&mut [(ItemAbility,i64)], &mut [(ItemEffect,usize)])->Result<()>)->Result<i32> {
 	// calls the passed closure on each found item,
 	// and returns the number of items matched.
-	let mut sel_item = Item::select_statement(db, &condition)?;
-	let mut sel_item_ab = ItemAbility::select_statement(db, r#"where "key"=?"#)?;
-	let mut sel_item_eff = ItemEffect::select_statement(db, r#"where "key"=?"#)?;
+	let mut sel_item = Item::select_query(db, &condition)?;
+	let mut sel_item_ab = ItemAbility::select_query(db, r#"where "key"=?"#)?;
+	let mut sel_item_eff = ItemEffect::select_query(db, r#"where "key"=?"#)?;
 	let mut n_items = 0;
 	debug!("processing items under condition: {condition}");
 	for x in sel_item.iter(())? {
@@ -1022,7 +1035,7 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 	pb.inc(1);
 	db.exec("begin transaction")?;
 	let mut base = DbInserter { db,
-		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_query()) )?,
+		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_statement()) )?,
 		add_resref: db.prepare(r#"insert or ignore into "resref_orig" values (?)"#)?
 	};
 	let mut n_items = 0;
@@ -1191,22 +1204,16 @@ fn save_strings(db: &Connection, game: &GameIndex)->Result<()> {
 			.with_context(|| format!("cannot backup strings file {path:?}"))?;
 		let count = db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
 			(), |row| row.get::<_,usize>(0))?;
-		let mut vec = vec![GameString::<String>::default(); count+1];
-		let mut stmt = db.prepare(&format!(r#"select "strref", "string", "flags", "sound", "volume", "pitch", "raw" from "strings_{lang}""#))?;
-		let mut rows = stmt.query(())?;
-		while let Some(row) = rows.next()? {
-			let strref = row.get::<_,usize>(0)?;
-			let string = row.get::<_,String>(1)?;
-			let flags = row.get::<_,u16>(2)?;
-			let sound = row.get::<_,Resref>(3)?;
-			let volume = row.get::<_,i32>(4)?;
-			let pitch = row.get::<_,i32>(5)?;
-			vec[strref] = GameString { flags, sound, volume, pitch, string };
+		let mut vec = vec![GameString::default(); count+1];
+		let mut sel_str = GameString::select_query_gen(db, "strings_", lang, "")?;
+		for row in sel_str.iter(())? {
+			if row.is_db_malformed() { continue }
+			let (gamestring, (strref,)) = row.unwrap();
+			vec[strref] = gamestring;
 		}
 		let target = format!("./{lang}.tlk");
 		gameindex::GameStringsIterator::save(&vec, &target)?;
 		info!("updated strings in {target:?}; file now contains {count} entries");
-// 		gameindex::GameStringsIterator::save(&vec, &"./test.tlk")?;
 	}
 	Ok(())
 }
@@ -1270,7 +1277,7 @@ fn show_item(db: &Connection, resref: impl std::fmt::Display)->Result<()> {
 	}
 	*/
 	for_items(db, format!(r#"where "itemref"='{resref}'"#),
-		|itemref, item, abilities, effects| {
+		|itemref, item, abilities, _effects| {
 		println!("\
 [{itemref}] {name}/{unidentified_name} ${price} ⚖{weight} ?{lore}
 Requires: {st}/{ste} St, {dx} Dx, {co} Co, {wi} Wi, {in} In, {ch} Cha
@@ -1320,7 +1327,7 @@ fn command_restore(game: &GameIndex)->Result<()> {
 	}
 	Ok(())
 }
-fn command_add(db: Connection, target: &str)->Result<()> {
+fn command_add(db: Connection, _target: &str)->Result<()> {
 	use crate::database::RowExt;
 	let lua = Lua::new();
 	lua.scope(|scope| {
@@ -1330,7 +1337,7 @@ fn command_add(db: Connection, target: &str)->Result<()> {
 	let exec = scope.create_function(|_lua, query: String| {
 		println!("lua told me this: '{query}'");
 		let mut stmt = db.prepare(&query).unwrap();
-		let mut rows = stmt.query(()).map_err(|e| mlua::Error::RuntimeError("bad sql".to_string()))?;
+		let mut rows = stmt.query(()).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 		while let Some(row) = rows.next().unwrap() {
 			row.dump();
 		}
@@ -1342,7 +1349,7 @@ fn command_add(db: Connection, target: &str)->Result<()> {
 	lua.load(lua_file).exec().unwrap();
 // 		.with_context(|| format!("cannot load lua file {lua_file:?}"))?;
 		Ok(())
-	});
+	})?;
 	Ok(())
 }
 

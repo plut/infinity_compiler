@@ -1,3 +1,11 @@
+# Macros update
+ - a Resource exists in two versions: owned (with String) and not (with
+   &str)
+ - second one is called XxxRef
+ - unpack(XxxRef); pack(Xxx)
+   select(Xxx); insert(XxxRef)
+ - third version: XxxInspec
+   every field is replaced by 
 # Global
  - the program is named `simod`
  - embed lua into rust (and give sql access through rusqlite)
