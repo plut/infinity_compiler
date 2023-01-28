@@ -210,6 +210,12 @@ impl Resref {
 	}
 }
 #[derive(Debug,Pack,Clone,Copy)] pub struct Strref { pub value: i32, }
+impl Display for Strref {
+	fn fmt(&self, mut f: &mut Formatter<'_>)->std::result::Result<(),std::fmt::Error>{
+		use std::fmt::Write;
+		write!(&mut f, "@{}", self.value)
+	}
+}
 #[derive(Debug,Pack,Clone,Copy,PartialEq,Eq)] pub struct Restype { pub value: u16, }
 #[derive(Debug,Pack,Clone,Copy)] pub struct BifIndex { pub data: u32, }
 impl BifIndex {
@@ -403,7 +409,7 @@ impl GameIndex {
 		let backup_dir = &self.backup;
 		let file = file.as_ref();
 		if !backup_dir.exists() {
-			fs::create_dir(&backup_dir)
+			fs::create_dir(backup_dir)
 				.with_context(||format!("cannot create backup directory: {backup_dir:?}"))?;
 			info!("created backup directory {backup_dir:?}");
 		} else {
@@ -411,7 +417,7 @@ impl GameIndex {
 		}
 		let dest = backup_dir.join(to.as_ref());
 		if !dest.exists() {
-			fs::copy(&file, &dest)
+			fs::copy(file, &dest)
 				.with_context(||format!("cannot backup {file:?} to {dest:?}"))?;
 			info!("backed up {file:?} as {dest:?}");
 		} else {
@@ -470,12 +476,14 @@ mod database {
 //, Main exports are:
 //,  - `Schema` type: description of a particular SQL table;
 //,  - `Table` trait: connect a structure to a SQL row;
-use std::marker::PhantomData;
-use std::fmt::{Display,Debug,Formatter};
 use rusqlite::{Connection, Statement, Row, ToSql};
 use rusqlite::types::{FromSql, ValueRef};
-use crate::{Resref,Strref};
 use anyhow::{Context,Result};
+use log::{trace,debug,info,warn,error};
+use std::marker::PhantomData;
+use std::fmt::{Display,Debug,Formatter};
+use std::path::{Path,PathBuf};
+use crate::{Resref,Strref};
 
 // I. Low-level stuff: basic types and extensions for `rusqlite` traits.
 pub trait ConnectionExt {
@@ -504,6 +512,14 @@ impl<'a> RowExt for Row<'a> {
 			}
 		}
 	}
+}
+pub fn open(f: impl AsRef<Path>)->Result<Connection> {
+	// Connection::open, but with some extra logging:
+	let path = f.as_ref();
+	let db = Connection::open(path)
+		.with_context(|| format!("cannot open database: {path:?}"))?;
+	info!("opened database {path:?}");
+	Ok(db)
 }
 
 #[derive(Debug,Clone,Copy,PartialEq)]
@@ -727,7 +743,7 @@ impl<'a, T: Display> Display for ColumnWriter<'a,T> {
 		let mut isfirst = true;
 		for Column { fieldname, .. } in self.schema.fields.iter() {
 			if isfirst { isfirst = false; } else { write!(f, ",")?; }
-			write!(&mut f, r#" {}"{fieldname}" "#, self.prefix)?;
+			write!(&mut f, r#" {}"{fieldname}""#, self.prefix)?;
 		}
 		Ok(())
 	}
@@ -748,6 +764,7 @@ pub trait Table: Sized {
 	fn select_statement(db: &Connection, s: impl Display)->rusqlite::Result<TypedStatement<'_, Self>> {
 		let s = format!(r#"select {0} from "out_{1}" {s}"#,
 			Self::SCHEMA.columns(""), Self::SCHEMA.table_name);
+		debug!("running SQL query: {s}");
 		Ok(TypedStatement(db.prepare(&s)?, PhantomData::<Self>))
 	}
 }
@@ -849,11 +866,12 @@ pub(crate) use anyhow::{Context, Result};
 use clap::Parser;
 use simplelog::{TermLogger,WriteLogger};
 use log::{trace,debug,info,warn,error};
+use mlua::{Lua};
 
 use std::io::{Seek, SeekFrom};
 use std::path::{Path,PathBuf};
 use std::fs::{self, File};
-use std::fmt::{self,Debug};
+use std::fmt::{self,Debug,Display};
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
 use database::{Table, ConnectionExt, TypedStatement};
@@ -861,7 +879,49 @@ use gameindex::{GameIndex, Pack, Strref, Resref, ResHandle};
 use progress::{Progress};
 use gametypes::*;
 
-// I. create DB
+// trait TopResource: database::Table {
+// 	fn save(x: <Self as Table>::Res, subresources:
+// 	fn show(&
+// Iterators for various types
+fn for_items(db: &Connection, condition: impl Display, f: impl Fn(&Resref, &mut Item,&mut [(ItemAbility,i64)], &mut [(ItemEffect,usize)])->Result<()>)->Result<i32> {
+	// calls the passed closure on each found item,
+	// and returns the number of items matched.
+	let mut sel_item = Item::select_statement(db, &condition)?;
+	let mut sel_item_ab = ItemAbility::select_statement(db, r#"where "key"=?"#)?;
+	let mut sel_item_eff = ItemEffect::select_statement(db, r#"where "key"=?"#)?;
+	let mut n_items = 0;
+	debug!("processing items under condition: {condition}");
+	for x in sel_item.iter(())? {
+		if x.is_db_malformed() { continue }
+		let (mut item, (itemref,)) = x?;
+		debug!("reading item: {itemref}");
+		// we store item effects & abilities in two vectors:
+		//  - abilities = (ability, abref)
+		//  - effect = (effect, ability index)
+		let mut abilities = Vec::<(ItemAbility, i64)>::new();
+		let mut effects = Vec::<(ItemEffect, usize)>::new();
+		for x in sel_item_ab.iter((&itemref,))? {
+			if x.is_db_malformed() { continue }
+			let (ab, (_, abref)) = x?;
+			abilities.push((ab, abref));
+			item.abilities_count+= 1;
+		}
+		for x in sel_item_eff.iter((&itemref,))? {
+			if x.is_db_malformed() { continue }
+			let (eff, (_, parent)) = x?;
+			let ab_id = match abilities.iter().position(|&(_, abref)| Some(abref) == parent) {
+				Some(i) => { abilities[i].0.effect_count+= 1; i },
+				None    => { item.equip_effect_count+= 1; usize::MAX},
+			};
+			effects.push((eff, ab_id));
+		}
+		f(&itemref, &mut item, &mut abilities, &mut effects)?;
+		n_items+= 1;
+	}
+	debug!("processed {n_items} items");
+	Ok(n_items)
+}
+// I. generate
 pub fn create_db(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Connection> {
 	use std::fmt::Write;
 	let db_file = db_file.as_ref();
@@ -870,7 +930,7 @@ pub fn create_db(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Connection
 		fs::remove_file(db_file)
 		.with_context(|| format!("cannot remove DB file: {db_file:?}"))?;
 	}
-	let mut db = Connection::open(&db_file)
+	let mut db = Connection::open(db_file)
 		.with_context(|| format!("cannot open database: {db_file:?}"))?;
 	info!("opened database {db_file:?}");
 	progress::transaction(&mut db, |db| {
@@ -949,8 +1009,6 @@ left join "translations_{langname}" as "t" using ("key");
 	Ok(())
 	}).context("read game strings")
 }
-
-// II. Game -> SQL
 struct DbInserter<'a> {
 	db: &'a Connection,
 	add_resref: Statement<'a>,
@@ -974,7 +1032,7 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 		match restype {
 		constants::RESTYPE_ITM =>
 				populate_item(&mut base, &mut handle)
-					.and_then(|_| {n_items+= 1; Ok(())}),
+					.map(|_| {n_items+=1;}),
 		_ => Ok(())
 		}
 	})?;
@@ -1052,7 +1110,7 @@ update "items" set price=5,name='A new name for Albruin' where itemref='sw1h34';
 	Ok(())
 }
 
-// III. SQL -> Game
+// II. compile
 trait DbTypeCheck {
 	fn is_db_malformed(&self)->bool;
 }
@@ -1097,13 +1155,13 @@ fn translate_strrefs(db: &mut Connection)->Result<()> {
 	Ok(())
 	})?; Ok(())
 }
-fn save(db: &mut Connection, game: &GameIndex)->Result<()> {
+fn command_compile(game: &GameIndex, mut db: Connection)->Result<()> {
 	let pb = Progress::new(4, "saving"); pb.as_ref().tick();
-	translate_resrefs(db)?;
+	translate_resrefs(&mut db)?;
 	pb.inc(1);
-	translate_strrefs(db)?;
+	translate_strrefs(&mut db)?;
 	pb.inc(1);
-	save_strings(db, game)?;
+	save_strings(&db, game)?;
 	pb.inc(1);
 	//, All this function does is wrap up `save_in_current_dir` so that any
 	//, exception throws do not prevent changing back to the previous
@@ -1113,7 +1171,7 @@ fn save(db: &mut Connection, game: &GameIndex)->Result<()> {
 		.with_context(|| format!("cannot create temp directory {tmpdir:?}"))?;
 	let orig_dir = std::env::current_dir()?;
 	std::env::set_current_dir(tmpdir)?;
-	let res = save_in_current_dir(db);
+	let res = save_in_current_dir(&db);
 	std::env::set_current_dir(orig_dir)?;
 	pb.inc(1);
 	res
@@ -1153,47 +1211,51 @@ fn save_strings(db: &Connection, game: &GameIndex)->Result<()> {
 	Ok(())
 }
 fn save_in_current_dir(db: &Connection)->Result<()> {
-	let mut sel_item = Item::select_statement(db, r#"where "key" in "dirty_items""#)?;
-	let mut sel_item_ab = ItemAbility::select_statement(db, r#"where "key"=?"#)?;
-	let mut sel_item_eff = ItemEffect::select_statement(db, r#"where "key"=?"#)?;
-	let mut n_items = 0;
-	for x in sel_item.iter(())? {
-		n_items+=save_item(x, &mut sel_item_ab, &mut sel_item_eff)?;
-	}
+	let n_items = for_items(db, r#"where "key" in "dirty_items""#,
+		|itemref, item, abilities, effects| {
+		let mut current_effect_idx = item.equip_effect_count;
+		for (a, _) in abilities.iter_mut() {
+			a.effect_index = current_effect_idx;
+			current_effect_idx+= a.effect_count;
+		}
+		item.abilities_offset = 114;
+		item.effect_offset = 114 + 56*(item.abilities_count as u32);
+		println!("\x1b[34mitem is: {item:?}\x1b[m");
+
+		let mut f = File::create(format!("{itemref}.itm"))
+			.with_context(|| format!("cannot open output file: {itemref}.itm"))?;
+		item.pack(&mut f)
+			.with_context(|| format!("cannot pack item to {itemref}.itm"))?;
+		// pack abilities:
+		for (a, _) in abilities.iter() {
+			a.pack(&mut f)
+			.with_context(|| format!("cannot pack item ability to {itemref}.itm"))?;
+		}
+		// pack effects: first on-equip, then grouped by ability
+		for (e, j) in effects.iter() {
+			if *j == usize::MAX { e.pack(&mut f)?; }
+		}
+		for i in 0..item.abilities_count {
+			for (e, j) in effects.iter() { if *j == i.into() { e.pack(&mut f)?; } }
+		}
+		Ok(())
+	})?;
 	info!("compiled {n_items} item files");
 	Ok(())
 }
-fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAbility>, sel_item_eff: &mut TypedStatement<'_,ItemEffect>)->Result<i32>{
-	// ignore malformed db input (but report it on stderr)
-	if x.is_db_malformed() { return Ok(0) }
-	let (mut item, (itemref,)) = x?;
-	println!("got an item! {itemref}");
-	const NO_ABILITY: usize = usize::MAX; // a marker for global effects
-	// we store item effects & abilities in two vectors:
-	//  - abilities = (ability, abref)
-	//  - effect = (effect, ability index)
-	let mut abilities = Vec::<(ItemAbility, i64)>::new();
-	let mut effects = Vec::<(ItemEffect, usize)>::new();
-	for x in sel_item_ab.iter((&itemref,))? {
-		if x.is_db_malformed() { return Ok(0) }
-		let (ab, (_, abref)) = x?;
-		abilities.push((ab, abref));
-		item.abilities_count+= 1;
+// III. show
+fn command_show(db: Connection, target: impl AsRef<str>)->Result<()> {
+	let target = target.as_ref();
+	let (resref, resext) = match target.rfind('.') {
+		None => return Ok(()),
+		Some(i) => (&target[..i], &target[i+1..]),
+	};
+	match resext.to_lowercase().as_ref() {
+		"itm" => show_item(&db, resref),
+		x => { println!("unknown resource type: {x}"); Ok(()) },
 	}
-	for x in sel_item_eff.iter((&itemref,))? {
-		if x.is_db_malformed() { return Ok(0) }
-		let (eff, (_, parent)) = x?;
-		let ab_id = match abilities.iter().position(|&(_, abref)| Some(abref) == parent) {
-			Some(i) => { abilities[i].0.effect_count+= 1; i },
-			None    => { item.equip_effect_count+= 1; NO_ABILITY},
-		};
-		effects.push((eff, ab_id));
-	}
-	let mut current_effect_idx = item.equip_effect_count;
-	for (a, _) in abilities.iter_mut() {
-		a.effect_index = current_effect_idx;
-		current_effect_idx+= a.effect_count;
-	}
+}
+fn show_item(db: &Connection, resref: impl std::fmt::Display)->Result<()> {
 	/*
 	println!("item has {} abilities and {} effects", abilities.len(),
 		effects.len());
@@ -1207,35 +1269,25 @@ fn save_item(x: <Item as Table>::Res, sel_item_ab: &mut TypedStatement<'_,ItemAb
 			a.effect_count, a.effect_index);
 	}
 	*/
-	item.abilities_offset = 114;
-	item.effect_offset = 114 + 56*(item.abilities_count as u32);
-	println!("\x1b[34mitem is: {item:?}\x1b[m");
-// 
-	let mut f = File::create(format!("{itemref}.itm"))
-		.with_context(|| format!("cannot open output file: {itemref}.itm"))?;
-	item.pack(&mut f)
-		.with_context(|| format!("cannot pack item to {itemref}.itm"))?;
-	// pack abilities:
-	for (a, _) in abilities {
-		a.pack(&mut f)
-		.with_context(|| format!("cannot pack item ability to {itemref}.itm"))?;
-	}
-	// pack effects: first on-equip, then grouped by ability
-	for (e, j) in &effects {
-		if *j == NO_ABILITY { e.pack(&mut f)?; }
-	}
-	for i in 0..item.abilities_count {
-		for (e, j) in &effects { if *j == i.into() { e.pack(&mut f)?; } }
-	}
-	debug!("compiled item file {itemref}.itm");
-	Ok(1)
-}
-fn command_compile(game: &GameIndex, database: impl AsRef<Path>)->Result<()> {
-	let database = database.as_ref();
-	let mut db = Connection::open(database)
-		.with_context(|| format!("cannot open database: {database:?}"))?;
-	info!("opened database {database:?}");
-	save(&mut db, game).context("cannot compile database to game")?;
+	for_items(db, format!(r#"where "itemref"='{resref}'"#),
+		|itemref, item, abilities, effects| {
+		println!("\
+[{itemref}] {name}/{unidentified_name} ${price} ⚖{weight} ?{lore}
+Requires: {st}/{ste} St, {dx} Dx, {co} Co, {wi} Wi, {in} In, {ch} Cha
+Proficiency: {prof}
+", name=item.name, unidentified_name = item.unidentified_name,
+	price=item.price, weight=item.weight, lore=item.lore,
+	st=item.min_strength, ste=item.min_strengthbonus,
+	dx=item.min_dexterity, co=item.min_constitution,
+	wi=item.min_wisdom, in=item.min_intelligence, ch=item.min_charisma,
+	prof=item.proficiency);
+		for (ability, _) in abilities {
+			println!("
+Attack type: {atype}",
+			atype=ability.attack_type);
+		}
+		Ok(())
+	})?;
 	Ok(())
 }
 
@@ -1268,6 +1320,31 @@ fn command_restore(game: &GameIndex)->Result<()> {
 	}
 	Ok(())
 }
+fn command_add(db: Connection, target: &str)->Result<()> {
+	use crate::database::RowExt;
+	let lua = Lua::new();
+	lua.scope(|scope| {
+	let globals = lua.globals();
+	let sqlite = lua.create_table()?;
+	let lua_file = Path::new("./init.lua");
+	let exec = scope.create_function(|_lua, query: String| {
+		println!("lua told me this: '{query}'");
+		let mut stmt = db.prepare(&query).unwrap();
+		let mut rows = stmt.query(()).map_err(|e| mlua::Error::RuntimeError("bad sql".to_string()))?;
+		while let Some(row) = rows.next().unwrap() {
+			row.dump();
+		}
+		Ok(())
+	}.map_err(|e: anyhow::Error| mlua::Error::RuntimeError(e.to_string())))?;
+	sqlite.set("exec", exec)?;
+	globals.set("sqlite", sqlite)?;
+
+	lua.load(lua_file).exec().unwrap();
+// 		.with_context(|| format!("cannot load lua file {lua_file:?}"))?;
+		Ok(())
+	});
+	Ok(())
+}
 
 #[derive(clap::Parser,Debug)]
 #[command(version,about=
@@ -1293,9 +1370,14 @@ enum Command {
 	Generate,
 	Compile,
 	Restore,
-	Add,
+	Add {
+		target: String,
+	},
 	Remove,
 	Select,
+	Show {
+		target: String,
+	},
 }
 
 fn main() -> Result<()> {
@@ -1325,10 +1407,13 @@ fn main() -> Result<()> {
 			fs::File::create(&options.log_output)
 				.with_context(|| format!("cannot open log file {}", options.log_output))?)
 	}.context("cannot set up logging")?;
+	let db_file = options.database.unwrap();
 	match options.command {
-		Command::Generate => command_generate(&game, options.database.unwrap())?,
-		Command::Compile => command_compile(&game, options.database.unwrap())?,
+		Command::Generate => command_generate(&game, &db_file)?,
+		Command::Compile => command_compile(&game, database::open(db_file)?)?,
 		Command::Restore => command_restore(&game)?,
+		Command::Show{ target, .. } => command_show(database::open(db_file)?, target)?,
+		Command::Add{ target, .. } => command_add(database::open(db_file)?, &target)?,
 		_ => todo!(),
 	};
 	info!("execution terminated with flying colors");
