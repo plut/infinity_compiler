@@ -1,13 +1,5 @@
-# Macros update
- - a Resource exists in two versions: owned (with String) and not (with
-   &str)
- - second one is called XxxRef
- - unpack(XxxRef); pack(Xxx)
-   select(Xxx); insert(XxxRef)
- - third version: XxxInspec
-   every field is replaced by 
 # Global
- - the program is named `simod`
+ + the program is named `simod`
  - embed lua into rust (and give sql access through rusqlite)
  + accept subcommands: (PARTLY DONE)
     simod select <file.lua> <component>
@@ -30,6 +22,7 @@
     the sql table name
  `mlua::Lua::load(Path)` should work
 # Rust side:
+ - move all `*_item` etc. functions to `gametypes`
  - show: add a flag to keep original resref and a language selector
  - we can probably replace TypedStatement by some trait StructuredRead<T>
    (or even better, include this in Table trait)
@@ -41,8 +34,6 @@
   + this will **heavily** simplify the rust select query
   + with extra fields for (*untranslated*) parent and dirty bit
  - a global option to limit languages
- + fill `strref_dict` table
- + use default value ("" for Resref, 0 for strref)
  + fill language strings tables
   - decide how to convert `.po` to sql
 	- the {M} and {F} markers work in this conversion (sql treats all
@@ -56,18 +47,8 @@
   and a set of triggers to manipulate this
 	- default values (untranslated) are best left to global select instead
 		of 20 triggers...
- + simplify interaction between Table and ResourceInsert (etc.)
  - for binaries: have a special variant of Resref which does interact with
 	 the db in a different way
- + try compiling a few items
- + fill `resref_dict` table before compiling
- + inserting a Resref or a Strref populate the `*_dict` tables.
- + error propagation
- + try to make namedrows a true Iterator
- - move compile views to sql-side?
-  pros: eases debugging
-  cons: possibly slightly less efficient (i.e. not filtering...)?
-	  need to add dirty bit as an extra column
  - expand `current` to add file+line reference to Lua code
  - see if need to split bitfields
 # Rust resources

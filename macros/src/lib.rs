@@ -338,7 +338,11 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 	});
 
 	let code = quote!{
+/// A struct holding one field for each game resource type.
+///
+/// This is used for iterating similar code for each resources.
 		pub struct AllResources<T> { _marker: std::marker::PhantomData<T>, #fields }
+/// An heterogeneous iterator over the constant list of all game resource types.
 		pub const RESOURCES: AllResources<()> = AllResources {
 			_marker: std::marker::PhantomData::<()>, #data };
 		impl<T> AllResources<T> {

@@ -1,3 +1,7 @@
+//! Full definition of all structures representing game resources.
+//!
+//! This crate makes heavy use of the `Pack` and `Table` derive macros to
+//! automatically interface with game files and the SQL database.
 use crate::{Resref,Strref};
 use macros::{Pack, Table, produce_resource_list};
 #[derive(Debug,Default,Clone,Pack,Table)] pub struct GameString {
@@ -113,3 +117,8 @@ use macros::{Pack, Table, produce_resource_list};
 //  - its implementation of `iter()` and an iterator
 //  - and the constant holding the parent resources.
 produce_resource_list!();
+
+// The constants indicating the various resource types also have their
+// place in this mod:
+use crate::gameindex::Restype;
+pub const RESTYPE_ITM: Restype = Restype { value: 0x03ed };
