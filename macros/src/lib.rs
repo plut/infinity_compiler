@@ -328,6 +328,7 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 	let mut map = pm2::TokenStream::new();
 	let mut map_mut = pm2::TokenStream::new();
 	let mut data = pm2::TokenStream::new();
+	let mut find_schema = pm2::TokenStream::new();
 	let mut n = 0usize;
 	RESOURCES.with(|v| {
 		use pm2::{Span,Ident};
@@ -342,6 +343,9 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 		quote!{ #field: f(&<#ty as crate::database::Table>::SCHEMA,&self.#field)?, }
 			.to_tokens(&mut map_mut);
 		quote!{ #field: (), }.to_tokens(&mut data);
+		quote!{ let sch = &<#ty as crate::database::Table>::SCHEMA;
+			if s == sch.table_name { return Some(sch) } }
+			.to_tokens(&mut find_schema);
 	}
 	});
 
@@ -361,13 +365,15 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 			/// Number of resources in this table.
 			pub fn len(&self)->usize { #n }
 			/// Calls a closure for each resource type in the game.
-			pub fn map<U: Debug,E,F:Fn(&crate::database::Schema,&T)->Result<U,E>>(&self, f: F)->Result<AllResources<U>,E> {
+			pub fn map<U: Debug,E,F:Fn(&'static crate::database::Schema,&T)->Result<U,E>>(&self, f: F)->Result<AllResources<U>,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map })
 			}
 			/// Calls a closure for each resource type in the game.
 			pub fn map_mut<U: Debug,E,F:FnMut(&crate::database::Schema,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources<U>,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map_mut })
 			}
+			pub fn find_schema(&self, s: &str)->Option<&'static crate::database::Schema> {
+				#find_schema; None }
 		}
 	};
 	code.into()

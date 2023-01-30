@@ -1,0 +1,7 @@
+print(1, "print simod")
+print(simod)
+print(2, "simod exec")
+simod.exec("select itemref,name from items limit 10")
+print(3, "simod setfield")
+simod.setfield("items", "sw1h34", "unidentified_name", "mysterious sword")
+print(4, "finished")

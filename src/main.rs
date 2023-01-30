@@ -1,7 +1,8 @@
 //! Compiler between IE game files and a SQLite database.
 #![allow(
-	unused_imports,
-	dead_code,
+	unused_attributes,
+// 	unused_imports,
+// 	dead_code,
 // 	unreachable_code,
 // 	unused_macros,
 // 	unused_variables,
@@ -311,6 +312,7 @@ impl FromSql for Strref {
 impl BifIndex {
 	fn sourcefile(&self)->usize { (self.data >> 20) as usize }
 	fn resourceindex(&self)->usize { (self.data & 0x3fff) as usize }
+#[allow(dead_code)]
 	fn tilesetindex(&self)->usize { ((self.data >> 14) & 0x3f) as usize }
 }
 
@@ -588,7 +590,12 @@ impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
 
 
 #[derive(Debug,Clone,Copy,PartialEq)]
-/// An utility enum defining SQL affinity for a given resource field type.
+/// An utility enum defining SQL behaviour for a given resource field type.
+///
+/// This is somewhat different from [`rusqlite::types::Type`]:
+///  - not all SQLite types exist here;
+///  - the `Strref` variant can accept either a string or an integer,
+/// etc.
 pub enum FieldType { Integer, Text, Resref, Strref }
 impl FieldType {
 	pub const fn affinity(self)->&'static str {
@@ -1151,7 +1158,6 @@ pub fn save(db: &Connection, game: &GameIndex)->Result<()> {
 pub mod gametypes;
 
 use crate::prelude::*;
-pub(crate) use anyhow::{Context, Result};
 use clap::Parser;
 use mlua::{Lua};
 
@@ -1289,15 +1295,54 @@ fn load(db: Connection, game: &GameIndex)->Result<()> {
 	Ok(())
 }
 // Ⅱ add
+// Interface accessible from Lua side:
+//  - foo = item("foo")
+//  - items()
+//  - foo.field = value
+// i.e. we need:
+//  - setfield("items", "sw1h34", "field", "value")
+//  - getrow("items", "sw1h34")
+//  - allrows("items")
+struct LuaToSql<'a>(mlua::Value<'a>);
+impl rusqlite::ToSql for LuaToSql<'_> {
+	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+		use rusqlite::types::{ToSqlOutput::Owned,Value as SqlValue};
+		let LuaToSql(value,) = self;
+		match value {
+		mlua::Value::Nil => Ok(Owned(SqlValue::Null)),
+		mlua::Value::Boolean(b) => Ok(Owned(SqlValue::Integer(*b as i64))),
+		mlua::Value::Integer(n) => Ok(Owned(SqlValue::Integer(*n))),
+		mlua::Value::Number(x) => Ok(Owned(SqlValue::Real(*x))),
+		mlua::Value::String(ref s) =>
+			Ok(Owned(SqlValue::from(s.to_str().unwrap().to_owned()))),
+		e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
+		}
+	}
+}
+/// Implementation of the `setfield` function exported to Lua scripts.
+fn setfield(db: &Connection,
+	(table, key, field, value): (String, String, String, mlua::Value))
+	->Result<(),mlua::Error> {
+		println!("finding schema for {table}");
+	let schema = match RESOURCES.find_schema(&table) {
+		Some(s) => Ok(s),
+		None => Err(mlua::Error::RuntimeError(format!("unknown table: {table}")))
+	}?;
+	println!("found schema={schema:?}");
+	// TODO: check for appropriateness of value
+	db.execute(&format!(r#"update "{table}" set "{field}"=? where "{primary_key}"='{key}'"#, primary_key = schema.primary_key),
+		(LuaToSql(value),)).to_lua_err()?;
+	Ok(())
+}
 /// Passes any Rust error (implementing `Display`) to Lua.
 trait ToLuaError {
 	type LuaResult;
 	fn to_lua_err(self)->Self::LuaResult;
 }
-impl<T,E: Display> ToLuaError for std::result::Result<T,E> {
+impl<T,E: Display+Debug> ToLuaError for std::result::Result<T,E> {
 	type LuaResult = std::result::Result<T,mlua::Error>;
 	fn to_lua_err(self)->Self::LuaResult {
-		self.map_err(|e| mlua::Error::RuntimeError(e.to_string()))
+		self.map_err(|e| { panic!("to_lua_err{e:?}"); mlua::Error::RuntimeError(e.to_string())} )
 	}
 }
 struct LuaWrapper<T> (T);
@@ -1334,9 +1379,9 @@ fn command_add(db: Connection, _target: &str)->Result<()> {
 	// lifetimes of the references therein:
 	lua.scope(|scope| {
 		let globals = lua.globals();
-		let lua_file = Path::new("./init.lua");
+		let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
 		let exec = scope.create_function(
-		|_lua, (_myself, query): (mlua::Table, String)| {
+		|_lua, (query,): (String,)| {
 			println!("lua told me this: '{query}'");
 			let mut stmt = db.prepare(&query).to_lua_err()?;
 			let mut rows = stmt.query(()).to_lua_err()?;
@@ -1345,18 +1390,13 @@ fn command_add(db: Connection, _target: &str)->Result<()> {
 			}
 			Ok::<_,anyhow::Error>(())
 		}.to_lua_err())?;
-// 		let prepare = scope.create_function(
-// 		|_lua, (_myself, query): (mlua::Table, String)| {
-// 			println!("preparing this query from Lua: \x1b[33m{query}\x1b[m");
-// 			let stmt = db.prepare(&query).to_lua_err()?;
-// 			Ok::<_,anyhow::Error>(LuaWrapper(stmt))
-// 		}.to_lua_err())?;
 
-		// Store the API in the lua `db` table
-		let sqlite = lua.create_table()?;
-		sqlite.set("exec", exec)?;
-// 		sqlite.set("items", items)?;
-		globals.set("game", sqlite)?;
+		// Store the API in a lua table:
+		let simod = lua.create_table()?;
+		simod.set("exec", exec)?;
+		simod.set("setfield", scope.create_function(
+		|_lua, p: (String, String, String, mlua::Value)| setfield(&db, p))?)?;
+		globals.set("simod", simod)?;
 
 		lua.load(lua_file).exec()
 			.with_context(|| format!("cannot load lua file {lua_file:?}"))
