@@ -247,9 +247,8 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 		}
 		ncol+= 1;
 	}
-// 	let field = pm2::Ident::new(&table_name, pm2::Span::call_site());
-	let code = quote! {
-		impl#generics crate::database::Table for #ident#generics {
+	let mut code = quote! {
+		impl #generics crate::database::Table for #ident #generics {
 			type KeyIn = (#key_in);
 			type KeyOut = (#key_out);
 			type Res = anyhow::Result<(Self, Self::KeyOut)>;
@@ -269,7 +268,14 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 // 		println!("\x1b[36m{}\x1b[m", code);
 	}
 	if !table_name.is_empty() {
+		let field = pm2::Ident::new(&table_name, pm2::Span::call_site());
 		push_resource(ResourceDef(type_name, table_name));
+		quote! {
+			impl #generics NamedTable for #ident #generics {
+	fn find_field<T: Debug>(all: &AllResources<T>)->&T { &all.#field }
+	fn find_field_mut<T: Debug>(all: &mut AllResources<T>)->&mut T { &mut all.#field }
+			}
+		}.to_tokens(&mut code);
 	}
 	code.into()
 } // Table

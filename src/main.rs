@@ -1059,7 +1059,7 @@ impl ExactSizeIterator for GameStringsIterator<'_> {
 	fn len(&self) -> usize { self.nstr }
 }
 /// Saves game strings in one language to the given file.
-pub fn save(vec: &[GameString], path: &impl AsRef<Path>)->Result<()> {
+pub fn save_language(vec: &[GameString], path: &impl AsRef<Path>)->Result<()> {
 	// FIXME: this could be done with a prepared statement and iterator
 	// (saving the (rather big) memory for the whole vector of strings),
 	// but rusqlite does not export `reset`...
@@ -1117,7 +1117,7 @@ fn load_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> + Deb
 ///
 /// This also backups those files if needed (i.e. if no backup exists
 /// yet).
-pub fn save_strings(db: &Connection, game: &GameIndex)->Result<()> {
+pub fn save(db: &Connection, game: &GameIndex)->Result<()> {
 	use database::DbTypeCheck;
 	let pb = Progress::new(game.languages.len(), "save translations");
 	for (lang, path) in game.languages.iter() {
@@ -1141,7 +1141,7 @@ pub fn save_strings(db: &Connection, game: &GameIndex)->Result<()> {
 			vec[strref] = gamestring;
 		}
 		let target = format!("./{lang}.tlk");
-		save(&vec, &target)?;
+		save_language(&vec, &target)?;
 		info!("updated strings in {target:?}; file now contains {count} entries");
 	}
 	Ok(())
@@ -1162,14 +1162,7 @@ use gameindex::{GameIndex};
 use progress::{Progress};
 use gametypes::*;
 
-// Ⅰ generate
-/// A structure holding insertion statements for all resource types.
-#[derive(Debug)]
-pub struct DbInserter<'a> {
-	db: &'a Connection,
-	add_resref: Statement<'a>,
-	tables: AllResources<Statement<'a>>,
-}
+// Ⅰ init
 /// Creates and initializes the game database.
 ///
 /// This creates all relevant tables and views in the database
@@ -1258,72 +1251,119 @@ pub fn create_language_tables(db: &mut Connection, game: &GameIndex)->Result<()>
 	crate::progress::transaction(db, |db| {
 	const SCHEMA: &str = r#"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer)"#;
 	const SCHEMA1: &str = r#"("key" string primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer)"#;
-	for (langname, _) in game.languages.iter() {
+	for (lang, _) in game.languages.iter() {
 		db.execute_batch(&format!(r#"
-create table "res_strings_{langname}"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer);
-create table "translations_{langname}"("key" string primary key, "string" text, "sound" text, "volume" integer, "pitch" integer);
-create view "strings_{langname}" as
-select "strref", "string",  "flags", "sound", "volume", "pitch", 0 as "raw" from "res_strings_{langname}" union
+create table "res_strings_{lang}"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer);
+create table "translations_{lang}"("key" string primary key, "string" text, "sound" text, "volume" integer, "pitch" integer);
+create view "strings_{lang}" as
+select "strref", "string",  "flags", "sound", "volume", "pitch", 0 as "raw" from "res_strings_{lang}" union
 select "strref", ifnull("string", "key"), "flags", ifnull("sound",''), ifnull("volume",0), ifnull("pitch",0), ("string" is null)
 from "strref_dict" as "d"
-left join "translations_{langname}" as "t" using ("key");
+left join "translations_{lang}" as "t" using ("key");
 "#))?;
 	}
 	Ok(())
-	}).context("read game strings")
+	})
 }
 /// Fills the database from game files.
+///
+/// The database must have been already created and initialized (with
+/// empty tables).
 fn load(db: Connection, game: &GameIndex)->Result<()> {
-	let pb = Progress::new(3, "Generate database"); pb.inc(1);
+	let pb = Progress::new(3, "Fill database"); pb.inc(1);
 	gamestrings::load(&db, game)
 		.with_context(|| format!("cannot read game strings from game directory {:?}", game.root))?;
 	pb.inc(1);
 	db.exec("begin transaction")?;
-	let mut base = DbInserter { db: &db,
-		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_statement()) )?,
-		add_resref: db.prepare(r#"insert or ignore into "resref_orig" values (?)"#)?
-	};
-	let mut n_items = 0;
-	game.for_each(|restype, mut handle| {
-		debug!("trying to load resource {} of type {:#04x}", &handle.resref, restype.value);
-		base.add_resref.execute((&handle.resref,))?;
+	let mut base = DbInserter::new(&db)?;
+	game.for_each(|restype, handle| {
+		trace!("found resource {}.{:#04x}", &handle.resref, restype.value);
+		base.register(&handle.resref)?;
 		match restype {
-		RESTYPE_ITM =>
-			Item::load(&mut base, handle.open()?, handle.resref)
-					.map(|_| {n_items+=1;}),
+		RESTYPE_ITM => base.load::<Item>(handle),
 		_ => Ok(())
 		}
 	})?;
 	pb.inc(1);
 	db.exec("commit")?;
-	info!("loaded {n_items} items to database");
 	Ok(())
 }
 // Ⅱ add
+/// Passes any Rust error (implementing `Display`) to Lua.
+trait ToLuaError {
+	type LuaResult;
+	fn to_lua_err(self)->Self::LuaResult;
+}
+impl<T,E: Display> ToLuaError for std::result::Result<T,E> {
+	type LuaResult = std::result::Result<T,mlua::Error>;
+	fn to_lua_err(self)->Self::LuaResult {
+		self.map_err(|e| mlua::Error::RuntimeError(e.to_string()))
+	}
+}
+struct LuaWrapper<T> (T);
+impl mlua::UserData for LuaWrapper<Statement<'_>> {
+	fn add_methods<'lua, M: mlua::UserDataMethods<'lua, Self>>(methods: &mut M) {
+		methods.add_method("column_names",
+		|_lua, LuaWrapper(myself), ()| {
+			println!("column names for statement: {names:?}",
+				names=myself.column_names());
+			Ok(())
+		});
+	}
+}
+
 /// Runs the lua script for adding a mod component to the database.
+///
+/// We provide the lua instance with a `db` object implementing
+/// a subset of `lsqlite3`'s API:
+/// [`http://lua.sqlite.org/index.cgi/doc/tip/doc/lsqlite3.wiki`]
+/// This avoids loading sqlite twice (since we already have
+/// rusqlite on-hand here).
+///
+/// Namely, the following functions are implemented:
+///  - `db:exec` directly executes a Lua query;
+///
+/// For simplicity, all code which is strictly higher-level than this is
+/// written in Lua and read from the config file "init.lua".
 fn command_add(db: Connection, _target: &str)->Result<()> {
 	use crate::database::RowExt;
+	{ // scope lua shorter than db
 	let lua = Lua::new();
-	lua.scope(|scope| {
-	let globals = lua.globals();
-	let sqlite = lua.create_table()?;
-	let lua_file = Path::new("./init.lua");
-	let exec = scope.create_function(|_lua, query: String| {
-		println!("lua told me this: '{query}'");
-		let mut stmt = db.prepare(&query).unwrap();
-		let mut rows = stmt.query(()).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
-		while let Some(row) = rows.next().unwrap() {
-			row.dump();
-		}
-		Ok(())
-	}.map_err(|e: anyhow::Error| mlua::Error::RuntimeError(e.to_string())))?;
-	sqlite.set("exec", exec)?;
-	globals.set("sqlite", sqlite)?;
 
-	lua.load(lua_file).exec().unwrap();
-// 		.with_context(|| format!("cannot load lua file {lua_file:?}"))?;
-		Ok(())
+	// We need to wrap the rusqlite calls in a Lua scope to preserve the
+	// lifetimes of the references therein:
+	lua.scope(|scope| {
+		let globals = lua.globals();
+		let lua_file = Path::new("./init.lua");
+		let exec = scope.create_function(
+		|_lua, (_myself, query): (mlua::Table, String)| {
+			println!("lua told me this: '{query}'");
+			let mut stmt = db.prepare(&query).to_lua_err()?;
+			let mut rows = stmt.query(()).to_lua_err()?;
+			while let Some(row) = rows.next().unwrap() {
+				row.dump();
+			}
+			Ok::<_,anyhow::Error>(())
+		}.to_lua_err())?;
+// 		let prepare = scope.create_function(
+// 		|_lua, (_myself, query): (mlua::Table, String)| {
+// 			println!("preparing this query from Lua: \x1b[33m{query}\x1b[m");
+// 			let stmt = db.prepare(&query).to_lua_err()?;
+// 			Ok::<_,anyhow::Error>(LuaWrapper(stmt))
+// 		}.to_lua_err())?;
+
+		// Store the API in the lua `db` table
+		let sqlite = lua.create_table()?;
+		sqlite.set("exec", exec)?;
+// 		sqlite.set("items", items)?;
+		globals.set("game", sqlite)?;
+
+		lua.load(lua_file).exec()
+			.with_context(|| format!("cannot load lua file {lua_file:?}"))
+			.to_lua_err()?;
+			Ok(())
 	})?;
+	}
 	Ok(())
 }
 // Ⅲ compile
@@ -1362,13 +1402,13 @@ fn translate_strrefs(db: &mut Connection)->Result<()> {
 /// This wraps [`save_resources`] so that any
 /// exception throws do not prevent changing back to the previous
 /// directory:
-fn command_compile(game: &GameIndex, mut db: Connection)->Result<()> {
+fn command_save(game: &GameIndex, mut db: Connection)->Result<()> {
 	let pb = Progress::new(4, "save all"); pb.as_ref().tick();
 	translate_resrefs(&mut db)?;
 	pb.inc(1);
 	translate_strrefs(&mut db)?;
 	pb.inc(1);
-	gamestrings::save_strings(&db, game)?;
+	gamestrings::save(&db, game)?;
 	pb.inc(1);
 	let tmpdir = Path::new(&game.root).join("simod_out");
 	fs::create_dir(&tmpdir)
@@ -1389,7 +1429,7 @@ fn save_resources(db: &Connection)->Result<()> {
 	Item::save_all(db)?;
 	Ok(())
 }
-// Ⅳ show
+// Ⅳ others: show etc.
 fn command_show(db: Connection, target: impl AsRef<str>)->Result<()> {
 	let target = target.as_ref();
 	let (resref, resext) = match target.rfind('.') {
@@ -1401,7 +1441,6 @@ fn command_show(db: Connection, target: impl AsRef<str>)->Result<()> {
 		x => { println!("unknown resource type: {x}"); Ok(()) },
 	}
 }
-
 /// Restores all backed up files.
 fn command_restore(game: &GameIndex)->Result<()> {
 	for x in game.backup.read_dir()
@@ -1447,16 +1486,12 @@ struct RuntimeOptions {
 	log_level: i32,
 	#[command(subcommand)]
 	command: Command,
-// 	#[arg(short,long,help="generates the initial database")]
-// 	generate: bool,
-// 	#[arg(short,long,help="compile changes from database to override")]
-// 	compile: bool,
 }
 /// Subcommands passed to the executable.
 #[derive(clap::Subcommand,Debug)]
 enum Command {
-	Generate,
-	Compile,
+	Init,
+	Save,
 	Restore,
 	Add {
 		target: String,
@@ -1497,8 +1532,8 @@ fn main() -> Result<()> {
 	}.context("cannot set up logging")?;
 	let db_file = options.database.unwrap();
 	match options.command {
-		Command::Generate => load(create_db(&db_file, &game)?, &game)?,
-		Command::Compile => command_compile(&game, database::open(db_file)?)?,
+		Command::Init => load(create_db(&db_file, &game)?, &game)?,
+		Command::Save => command_save(&game, database::open(db_file)?)?,
 		Command::Restore => command_restore(&game)?,
 		Command::Show{ target, .. } => command_show(database::open(db_file)?, target)?,
 		Command::Add{ target, .. } => command_add(database::open(db_file)?, &target)?,

@@ -5,11 +5,18 @@
 use crate::prelude::*;
 use macros::{produce_resource_list};
 use crate::database::{Table,DbTypeCheck};
-use crate::gameindex::{Pack};
+use crate::gameindex::{Pack,Restype};
 
+/// Those resources which are associated to a global table.
+pub trait NamedTable: Table {
+	/// Returns the associated field (e.g. `.item`) in an `AllResources` table.
+	fn find_field<T: Debug>(all: &AllResources<T>)->&T;
+	/// Same as above; `mut` case.
+	fn find_field_mut<T: Debug>(all: &mut AllResources<T>)->&mut T;
+}
 /// A top-level resource (i.e. saved to its own file in the override
 /// directory).
-pub trait ToplevelResource: Table {
+pub trait ToplevelResource: NamedTable {
 	/// The file extension associated with this resource.
 	const EXTENSION: &'static str;
 	/// Subresources for this resource (together with linking info.).
@@ -18,7 +25,7 @@ pub trait ToplevelResource: Table {
 	/// some `Vec` with elements (subresource, linking-info).
 	type Subresources<'a>;
 	/// Inserts a single resource in the database.
-	fn load(db: &mut crate::DbInserter, cursor: impl Read+Seek, resref: Resref)
+	fn load(db: &mut DbInserter, cursor: impl Read+Seek, resref: Resref)
 		->Result<()>;
 	/// Saves a single resource (with its subresources) to game files.
 	fn save(&mut self, file: impl Write+Debug, subresources: Self::Subresources<'_>)
@@ -64,6 +71,7 @@ pub trait ToplevelResource: Table {
 		Ok(())
 	}
 } // trait ToplevelResource
+
 /// An effect inside a .itm file (either global or in an ability).
 #[derive(Debug,Pack,Table)]
 #[allow(missing_copy_implementations)]
@@ -171,7 +179,7 @@ impl ToplevelResource for Item {
 	const EXTENSION: &'static str = "itm";
 	type Subresources<'a> = (&'a mut [(ItemAbility,i64)], &'a mut[(ItemEffect,usize)]);
 	/// load an item from cursor
-	fn load(db: &mut crate::DbInserter, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
+	fn load(db: &mut DbInserter, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
 		let item = Item::unpack(&mut cursor)?;
 		item.ins(&mut db.tables.items, &(resref,))?;
 
@@ -289,7 +297,48 @@ Attack type: {atype}",
 //  - and the constant holding the parent resources.
 produce_resource_list!();
 
+/// A structure holding insertion statements for all resource types.
+///
+/// This structure does the main work for initially filling the database.
+/// It also contains a statement for storing original resrefs.
+#[derive(Debug)]
+pub struct DbInserter<'a> {
+	db: &'a Connection,
+	add_resref: Statement<'a>,
+	tables: AllResources<Statement<'a>>,
+	resource_count: AllResources<usize>,
+}
+impl<'a> DbInserter<'a> {
+	/// Creates a new `DbInserter` from a database and the list of all
+	/// resources.
+	pub fn new(db: &'a Connection)->Result<Self> {
+		Ok(Self { db,
+		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_statement()) )?,
+		resource_count: RESOURCES.map(|_,_| Ok::<usize,rusqlite::Error>(0))?,
+		add_resref: db.prepare(r#"insert or ignore into "resref_orig" values (?)"#)?
+	}) }
+	/// Adds a new [`Resref`] to the table of original resrefs.
+	pub fn register(&mut self, resref: &Resref)->rusqlite::Result<usize> {
+		self.add_resref.execute((resref,))
+	}
+	/// Loads a new top-level resource
+	pub fn load<T: ToplevelResource>(&mut self, mut handle: crate::gameindex::ResHandle)->Result<()> {
+		T::load(self, handle.open()?, handle.resref)?;
+		*(<T as NamedTable>::find_field_mut(&mut self.resource_count))+=1;
+		Ok(())
+	}
+}
+impl Drop for DbInserter<'_> {
+	fn drop(&mut self) {
+		self.resource_count.map(|schema, n| {
+			if *n > 0 {
+				info!(r#"loaded {n} entries in table "{}""#, schema.table_name);
+			}
+			Ok::<(),rusqlite::Error>(())
+		}).unwrap();
+	}
+}
+
 // The constants indicating the various resource types also have their
 // place in this mod:
-use crate::gameindex::Restype;
 pub(crate) const RESTYPE_ITM: Restype = Restype { value: 0x03ed };
