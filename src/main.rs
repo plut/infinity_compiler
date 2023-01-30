@@ -587,6 +587,22 @@ pub fn open(f: impl AsRef<Path>)->Result<Connection> {
 	info!("opened database {path:?}");
 	Ok(db)
 }
+pub trait DbTypeCheck {
+	fn is_db_malformed(&self)->bool;
+}
+impl<T> DbTypeCheck for Result<T,anyhow::Error> {
+	fn is_db_malformed(&self)-> bool {
+		use rusqlite::types::FromSqlError::{self,*};
+		let err = match self { Ok(_) => return false, Err(e) => e };
+		matches!(err.downcast_ref::<FromSqlError>(), Some(InvalidType))
+	}
+}
+impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
+	fn is_db_malformed(&self)-> bool {
+		matches!(self, Err(rusqlite::Error::FromSqlConversionFailure(_,_,_)))
+	}
+}
+
 
 #[derive(Debug,Clone,Copy,PartialEq)]
 /// An utility enum defining SQL affinity for a given resource field type.
@@ -1021,51 +1037,6 @@ use gameindex::{GameIndex, Pack, Strref, Resref, ResHandle};
 use progress::{Progress};
 use gametypes::*;
 
-/// Iterates a closure over items in the database (with their
-/// associated properties) matching the given condition.
-///
-/// This function links items with their sub-resources (abilities and
-/// effects) and calls the passed closure on the resulting structure.
-///
-/// It returns the number of items matched.
-fn for_items(db: &Connection, condition: impl Display, f: impl Fn(&Resref, &mut Item,&mut [(ItemAbility,i64)], &mut [(ItemEffect,usize)])->Result<()>)->Result<i32> {
-	// calls the passed closure on each found item,
-	// and returns the number of items matched.
-	let mut sel_item = Item::select_query(db, &condition)?;
-	let mut sel_item_ab = ItemAbility::select_query(db, r#"where "key"=?"#)?;
-	let mut sel_item_eff = ItemEffect::select_query(db, r#"where "key"=?"#)?;
-	let mut n_items = 0;
-	debug!("processing items under condition: {condition}");
-	for x in sel_item.iter(())? {
-		if x.is_db_malformed() { continue }
-		let (mut item, (itemref,)) = x?;
-		debug!("reading item: {itemref}");
-		// we store item effects & abilities in two vectors:
-		//  - abilities = (ability, abref)
-		//  - effect = (effect, ability index)
-		let mut abilities = Vec::<(ItemAbility, i64)>::new();
-		let mut effects = Vec::<(ItemEffect, usize)>::new();
-		for x in sel_item_ab.iter((&itemref,))? {
-			if x.is_db_malformed() { continue }
-			let (ab, (_, abref)) = x?;
-			abilities.push((ab, abref));
-			item.abilities_count+= 1;
-		}
-		for x in sel_item_eff.iter((&itemref,))? {
-			if x.is_db_malformed() { continue }
-			let (eff, (_, parent)) = x?;
-			let ab_id = match abilities.iter().position(|&(_, abref)| Some(abref) == parent) {
-				Some(i) => { abilities[i].0.effect_count+= 1; i },
-				None    => { item.equip_effect_count+= 1; usize::MAX},
-			};
-			effects.push((eff, ab_id));
-		}
-		f(&itemref, &mut item, &mut abilities, &mut effects)?;
-		n_items+= 1;
-	}
-	debug!("processed {n_items} items");
-	Ok(n_items)
-}
 // I. generate
 /// Creates and initializes the game database.
 ///
@@ -1169,7 +1140,8 @@ left join "translations_{langname}" as "t" using ("key");
 	Ok(())
 	}).context("read game strings")
 }
-struct DbInserter<'a> {
+/// A structure holding insertion statements for all resource types.
+pub struct DbInserter<'a> {
 	db: &'a Connection,
 	add_resref: Statement<'a>,
 	tables: AllResources<Statement<'a>>,
@@ -1191,7 +1163,7 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 		base.add_resref.execute((&handle.resref,))?;
 		match restype {
 		gametypes::RESTYPE_ITM =>
-				populate_item(&mut base, &mut handle)
+			Item::load(&mut base, handle.open()?, handle.resref)
 					.map(|_| {n_items+=1;}),
 		_ => Ok(())
 		}
@@ -1231,38 +1203,6 @@ fn populate_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> +
 	info!("loaded {n_strings} strings for language \"{langname}\"");
 	Ok(())
 }
-/// Inserts a single item in the database.
-fn populate_item(db: &mut DbInserter, handle: &mut ResHandle)->Result<()> {
-	let mut cursor = handle.open()?;
-	let resref = handle.resref;
-	let item = Item::unpack(&mut cursor)?;
-	item.ins(&mut db.tables.items, &(resref,))?;
-
-	cursor.seek(SeekFrom::Start(item.abilities_offset as u64))?;
-	// TODO zip those vectors
-	let mut ab_n = Vec::<u16>::with_capacity(item.abilities_count as usize);
-	let mut ab_i = Vec::<i64>::with_capacity(item.abilities_count as usize);
-	for _ in 0..item.abilities_count {
-		let ab = ItemAbility::unpack(&mut cursor)?;
-		ab.ins(&mut db.tables.item_abilities, &(resref,))?;
-		ab_n.push(ab.effect_count);
-		ab_i.push(db.db.last_insert_rowid());
-	}
-// 	println!("inserting item {resref}: {ab_n:?} {ab_i:?}");
-	cursor.seek(SeekFrom::Start(item.effect_offset as u64))?;
-	for _ in 0..item.equip_effect_count { // on-equip effects
-		let eff = ItemEffect::unpack(&mut cursor)?;
-		// TODO swap with Some above!!
-		eff.ins(&mut db.tables.item_effects, &(resref, None))?;
-	}
-	for (i, n) in ab_n.iter().enumerate() {
-		for _ in 0..*n {
-			let eff = ItemEffect::unpack(&mut cursor)?;
-			eff.ins(&mut db.tables.item_effects, &(resref, Some(ab_i[i])))?;
-		}
-	}
-	Ok(())
-}
 fn command_generate(game: &GameIndex, database: impl AsRef<Path>)->Result<()> {
 	let db = create_db(&database, game)
 		.with_context(|| format!("cannot create database {:?}", database.as_ref()))?;
@@ -1274,22 +1214,6 @@ update "items" set price=5,name='A new name for Albruin' where itemref='sw1h34';
 }
 
 // II. compile
-trait DbTypeCheck {
-	fn is_db_malformed(&self)->bool;
-}
-impl<T> DbTypeCheck for Result<T,anyhow::Error> {
-	fn is_db_malformed(&self)-> bool {
-		use rusqlite::types::FromSqlError::{self,*};
-		let err = match self { Ok(_) => return false, Err(e) => e };
-		matches!(err.downcast_ref::<FromSqlError>(), Some(InvalidType))
-	}
-}
-impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
-	fn is_db_malformed(&self)-> bool {
-		matches!(self, Err(rusqlite::Error::FromSqlConversionFailure(_,_,_)))
-	}
-}
-
 /// Before saving: fills the resref translation table.
 fn translate_resrefs(db: &mut Connection)->Result<()> {
 	crate::progress::transaction(db, |db|{
@@ -1349,6 +1273,7 @@ fn command_compile(game: &GameIndex, mut db: Connection)->Result<()> {
 /// This also backups those files if needed (i.e. if no backup exists
 /// yet).
 fn save_strings(db: &Connection, game: &GameIndex)->Result<()> {
+	use database::DbTypeCheck;
 	let pb = Progress::new(game.languages.len(), "save translations");
 	for (lang, path) in game.languages.iter() {
 		pb.inc(1);
@@ -1382,36 +1307,7 @@ fn save_strings(db: &Connection, game: &GameIndex)->Result<()> {
 /// a chdir to the appropriate override directory needs to have been done
 /// first.
 fn save_resources(db: &Connection)->Result<()> {
-	let n_items = for_items(db, r#"where "key" in "dirty_items""#,
-		|itemref, item, abilities, effects| {
-		let mut current_effect_idx = item.equip_effect_count;
-		for (a, _) in abilities.iter_mut() {
-			a.effect_index = current_effect_idx;
-			current_effect_idx+= a.effect_count;
-		}
-		item.abilities_offset = 114;
-		item.effect_offset = 114 + 56*(item.abilities_count as u32);
-		println!("\x1b[34mitem is: {item:?}\x1b[m");
-
-		let mut f = File::create(format!("{itemref}.itm"))
-			.with_context(|| format!("cannot open output file: {itemref}.itm"))?;
-		item.pack(&mut f)
-			.with_context(|| format!("cannot pack item to {itemref}.itm"))?;
-		// pack abilities:
-		for (a, _) in abilities.iter() {
-			a.pack(&mut f)
-			.with_context(|| format!("cannot pack item ability to {itemref}.itm"))?;
-		}
-		// pack effects: first on-equip, then grouped by ability
-		for (e, j) in effects.iter() {
-			if *j == usize::MAX { e.pack(&mut f)?; }
-		}
-		for i in 0..item.abilities_count {
-			for (e, j) in effects.iter() { if *j == i.into() { e.pack(&mut f)?; } }
-		}
-		Ok(())
-	})?;
-	info!("compiled {n_items} item files");
+	Item::save_all(db)?;
 	Ok(())
 }
 // III. show
@@ -1422,44 +1318,9 @@ fn command_show(db: Connection, target: impl AsRef<str>)->Result<()> {
 		Some(i) => (&target[..i], &target[i+1..]),
 	};
 	match resext.to_lowercase().as_ref() {
-		"itm" => show_item(&db, resref),
+		"itm" => Item::show_all(&db, resref),
 		x => { println!("unknown resource type: {x}"); Ok(()) },
 	}
-}
-fn show_item(db: &Connection, resref: impl std::fmt::Display)->Result<()> {
-	/*
-	println!("item has {} abilities and {} effects", abilities.len(),
-		effects.len());
-	for (i, (e, a)) in effects.iter().enumerate() {
-		println!("  effect {i} (opcode {} parameters {},{}) belongs to ability {a}",
-			e.opcode, e.parameter1, e.parameter2);
-	}
-	println!("item has {} global effects", item.equip_effect_count);
-	for (i, (a, _)) in abilities.iter().enumerate() {
-		println!("  ability {i} has {} effects, starting at {}",
-			a.effect_count, a.effect_index);
-	}
-	*/
-	for_items(db, format!(r#"where "itemref"='{resref}'"#),
-		|itemref, item, abilities, _effects| {
-		println!("\
-[{itemref}] {name}/{unidentified_name} ${price} ⚖{weight} ?{lore}
-Requires: {st}/{ste} St, {dx} Dx, {co} Co, {wi} Wi, {in} In, {ch} Cha
-Proficiency: {prof}
-", name=item.name, unidentified_name = item.unidentified_name,
-	price=item.price, weight=item.weight, lore=item.lore,
-	st=item.min_strength, ste=item.min_strengthbonus,
-	dx=item.min_dexterity, co=item.min_constitution,
-	wi=item.min_wisdom, in=item.min_intelligence, ch=item.min_charisma,
-	prof=item.proficiency);
-		for (ability, _) in abilities {
-			println!("
-Attack type: {atype}",
-			atype=ability.attack_type);
-		}
-		Ok(())
-	})?;
-	Ok(())
 }
 
 /// Restores all backed up files.

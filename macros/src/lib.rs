@@ -106,10 +106,11 @@ impl AttrParser {
 }
 impl From<pm2::TokenStream> for AttrParser {
 	fn from(tokens: pm2::TokenStream)->Self {
+// 		println!("tokens = {tokens:?}");
 			Self(match tokens.into_iter().next() {
-			None => { Vec::<pm2::TokenStream>::new().into_iter() },
 			Some(pm2::TokenTree::Group(g)) => Self::split(g.stream()).into_iter(),
-			_ => unimplemented!()
+			_ => { Vec::<pm2::TokenStream>::new().into_iter() },
+// 			x => panic!("unknown attributes: {:?}", x),
 		})
 	}
 }
@@ -181,6 +182,7 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	let type_name = toks_to_string(&ident);
 	let mut parent_key = String::new();
 	let mut parent = String::new();
+// 	println!("parsing attributes: {:?}", attrs.iter().map(toks_to_string).collect::<Vec<_>>());
 	for (name, mut args) in attrs.into_iter().map(parse_attr) {
 		match &name[..] {
 			"resource" => table_attr_resource(&mut args, &mut table_name, &mut parent,

@@ -23,6 +23,7 @@
  `mlua::Lua::load(Path)` should work
 # Rust side:
  - move all `*_item` etc. functions to `gametypes`
+  - define a `ToplevelResource` trait for this...
  - show: add a flag to keep original resref and a language selector
  - we can probably replace TypedStatement by some trait StructuredRead<T>
    (or even better, include this in Table trait)

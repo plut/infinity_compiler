@@ -18,3 +18,4 @@ t: test
 test:
 	rm -rf $(BG)/sim_out
 	RUST_BACKTRACE=1 ./infinity_compiler -G $(BG) -L 5 -O a.log show sw1h03.itm
+	RUST_BACKTRACE=1 ./infinity_compiler -G $(BG) -L 5 -O a.log compile
