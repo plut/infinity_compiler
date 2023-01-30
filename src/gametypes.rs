@@ -4,7 +4,7 @@
 //! automatically interface with game files and the SQL database.
 use crate::prelude::*;
 use macros::{produce_resource_list};
-use crate::database::{Schema,Table,DbTypeCheck};
+use crate::database::{Table,DbTypeCheck};
 use crate::gameindex::{Pack};
 
 /// A top-level resource (i.e. saved to its own file in the override

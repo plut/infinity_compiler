@@ -30,15 +30,18 @@ const BACKUP_DIR: &str = "simod-backup";
 pub (crate) mod prelude {
 //! The set of symbols we want accessible from everywhere in the crate.
 pub(crate) use anyhow::{Result,Context};
+#[allow(unused_imports)]
 pub(crate) use log::{trace,debug,info,warn,error};
 pub(crate) use rusqlite::{self,Connection,Statement};
 
+#[allow(unused_imports)]
 pub(crate) use std::fmt::{self,Display,Debug,Formatter};
 pub(crate) use std::fs::{self,File};
+#[allow(unused_imports)]
 pub(crate) use std::io::{self,Cursor,Read,Write,Seek,SeekFrom};
 pub(crate) use std::path::{Path, PathBuf};
 
-pub(crate) use crate::{Resref,Strref};
+pub(crate) use crate::gameindex::{Resref,Strref};
 pub(crate) use macros::{Pack,Table};
 }
 pub mod gameindex {
@@ -58,7 +61,6 @@ use std::cmp::min;
 use std::io::{self, BufReader};
 
 use crate::progress::{Progress};
-use crate::gamestrings::{GameString};
 use crate::database::{SqlType,FieldType};
 
 // I. Basic types: StaticString, Resref, Strref etc.
@@ -524,7 +526,7 @@ pub mod database {
 //!  - [`Schema`] type: description of a particular SQL table;
 //!  - [`Table`] trait: connect a Rust structure to a SQL row.
 use crate::prelude::*;
-use rusqlite::{Row, ToSql, types::{FromSql, ValueRef}};
+use rusqlite::{Row};
 use std::marker::PhantomData;
 
 // I. Low-level stuff: basic types and extensions for `rusqlite` traits.
@@ -641,7 +643,7 @@ sqltype_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
 	/// The table holding the top-level resource.
 	pub parent_table: &'a str,
 	/// Descriptions for all the fields of this struct.
-	pub fields: &'a[Column<'a>], // fat pointer
+	pub fields: &'a[Column<'a>],
 }
 impl<'schema> Schema<'schema> {
 	// Step 0: a few useful functions
@@ -945,12 +947,14 @@ thread_local! {
 ///
 /// This bar is removed from the stack when it is dropped.
 #[derive(Debug)]
-pub struct Progress { pb: ProgressBar, }
+pub struct Progress { pb: ProgressBar, name: String, }
 impl AsRef<ProgressBar> for Progress {
 	fn as_ref(&self)->&ProgressBar { &self.pb }
 }
 impl Drop for Progress {
 	fn drop(&mut self) {
+		debug!(r#"finished task "{name}" in {elapsed:?}"#,
+			name=self.name, elapsed=self.pb.elapsed());
 		MULTI.with(|c| c.borrow_mut().remove(&self.pb));
 		COUNT.with(|c| *c.borrow_mut()-= 1)
 	}
@@ -961,13 +965,15 @@ const COLORS: &[&str] = &["red", "yellow", "green", "cyan", "blue", "magenta" ];
 impl Progress {
 	/// Appends a new progress bar to the stack.
 	pub fn new(n: impl num::ToPrimitive, text: impl Display)->Self {
-		let s = format!("{text} {{wide_bar:.{}}}{{pos:>5}}/{{len:>5}}",
+		let name = text.to_string();
+		let s = format!("{name} {{wide_bar:.{}}}{{pos:>5}}/{{len:>5}}",
 			COLORS[COUNT.with(|c| *c.borrow()) % COLORS.len()]);
 		let pb0 = ProgressBar::new(<u64 as num::NumCast>::from(n).unwrap());
 		pb0.set_style(ProgressStyle::with_template(&s).unwrap());
 		let pb = MULTI.with(|c| c.borrow_mut().add(pb0));
 		COUNT.with(|c| *c.borrow_mut()+= 1);
-		Self { pb }
+		debug!(r#"start task "{name}""#);
+		Self { pb, name, }
 	}
 	/// Advances the progress bar by the given amount.
 	pub fn inc(&self, n: u64) { self.as_ref().inc(n) }
@@ -990,7 +996,7 @@ pub mod gamestrings {
 use crate::prelude::*;
 use crate::progress::{Progress};
 use crate::database::{self,ConnectionExt,Table};
-use crate::gameindex::{self,Pack,GameIndex};
+use crate::gameindex::{Pack,GameIndex};
 
 #[derive(Debug,Pack)] struct TlkHeader {
 	#[header("TLK V1  ")]
@@ -1078,7 +1084,7 @@ pub fn save(vec: &[GameString], path: &impl AsRef<Path>)->Result<()> {
 }
 
 /// Fills all game strings tables from game dialog files.
-pub fn load_strings(db: &Connection, game: &GameIndex)->Result<()> {
+pub fn load(db: &Connection, game: &GameIndex)->Result<()> {
 	db.exec("begin transaction")?;
 	let pb = Progress::new(game.languages.len(), "languages");
 	for (langname, dialog) in game.languages.iter() {
@@ -1147,17 +1153,16 @@ pub mod gametypes;
 use crate::prelude::*;
 pub(crate) use anyhow::{Context, Result};
 use clap::Parser;
-use simplelog::{TermLogger,WriteLogger};
 use mlua::{Lua};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
-use database::{Table, ConnectionExt, TypedStatement};
-use gameindex::{GameIndex, Pack, Strref, Resref, ResHandle};
+use database::{ConnectionExt};
+use gameindex::{GameIndex};
 use progress::{Progress};
 use gametypes::*;
 
-// I. generate
+// Ⅰ generate
 /// A structure holding insertion statements for all resource types.
 #[derive(Debug)]
 pub struct DbInserter<'a> {
@@ -1268,13 +1273,13 @@ left join "translations_{langname}" as "t" using ("key");
 	}).context("read game strings")
 }
 /// Fills the database from game files.
-fn load(db: &Connection, game: &GameIndex)->Result<()> {
+fn load(db: Connection, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(3, "Generate database"); pb.inc(1);
-	gamestrings::load_strings(db, game)
+	gamestrings::load(&db, game)
 		.with_context(|| format!("cannot read game strings from game directory {:?}", game.root))?;
 	pb.inc(1);
 	db.exec("begin transaction")?;
-	let mut base = DbInserter { db,
+	let mut base = DbInserter { db: &db,
 		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_statement()) )?,
 		add_resref: db.prepare(r#"insert or ignore into "resref_orig" values (?)"#)?
 	};
@@ -1294,17 +1299,34 @@ fn load(db: &Connection, game: &GameIndex)->Result<()> {
 	info!("loaded {n_items} items to database");
 	Ok(())
 }
-fn command_generate(game: &GameIndex, database: impl AsRef<Path>)->Result<()> {
-	let db = create_db(&database, game)
-		.with_context(|| format!("cannot create database {:?}", database.as_ref()))?;
-	load(&db, game)?;
-	db.execute_batch(r#"
-update "items" set price=5,name='A new name for Albruin' where itemref='sw1h34';
-"#)?;
+// Ⅱ add
+/// Runs the lua script for adding a mod component to the database.
+fn command_add(db: Connection, _target: &str)->Result<()> {
+	use crate::database::RowExt;
+	let lua = Lua::new();
+	lua.scope(|scope| {
+	let globals = lua.globals();
+	let sqlite = lua.create_table()?;
+	let lua_file = Path::new("./init.lua");
+	let exec = scope.create_function(|_lua, query: String| {
+		println!("lua told me this: '{query}'");
+		let mut stmt = db.prepare(&query).unwrap();
+		let mut rows = stmt.query(()).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+		while let Some(row) = rows.next().unwrap() {
+			row.dump();
+		}
+		Ok(())
+	}.map_err(|e: anyhow::Error| mlua::Error::RuntimeError(e.to_string())))?;
+	sqlite.set("exec", exec)?;
+	globals.set("sqlite", sqlite)?;
+
+	lua.load(lua_file).exec().unwrap();
+// 		.with_context(|| format!("cannot load lua file {lua_file:?}"))?;
+		Ok(())
+	})?;
 	Ok(())
 }
-
-// II. compile
+// Ⅲ compile
 /// Before saving: fills the resref translation table.
 fn translate_resrefs(db: &mut Connection)->Result<()> {
 	crate::progress::transaction(db, |db|{
@@ -1341,7 +1363,7 @@ fn translate_strrefs(db: &mut Connection)->Result<()> {
 /// exception throws do not prevent changing back to the previous
 /// directory:
 fn command_compile(game: &GameIndex, mut db: Connection)->Result<()> {
-	let pb = Progress::new(4, "saving"); pb.as_ref().tick();
+	let pb = Progress::new(4, "save all"); pb.as_ref().tick();
 	translate_resrefs(&mut db)?;
 	pb.inc(1);
 	translate_strrefs(&mut db)?;
@@ -1367,7 +1389,7 @@ fn save_resources(db: &Connection)->Result<()> {
 	Item::save_all(db)?;
 	Ok(())
 }
-// III. show
+// Ⅳ show
 fn command_show(db: Connection, target: impl AsRef<str>)->Result<()> {
 	let target = target.as_ref();
 	let (resref, resext) = match target.rfind('.') {
@@ -1408,32 +1430,6 @@ fn command_restore(game: &GameIndex)->Result<()> {
 			}
 		};
 	}
-	Ok(())
-}
-/// Runs the lua script for adding a mod component to the database.
-fn command_add(db: Connection, _target: &str)->Result<()> {
-	use crate::database::RowExt;
-	let lua = Lua::new();
-	lua.scope(|scope| {
-	let globals = lua.globals();
-	let sqlite = lua.create_table()?;
-	let lua_file = Path::new("./init.lua");
-	let exec = scope.create_function(|_lua, query: String| {
-		println!("lua told me this: '{query}'");
-		let mut stmt = db.prepare(&query).unwrap();
-		let mut rows = stmt.query(()).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
-		while let Some(row) = rows.next().unwrap() {
-			row.dump();
-		}
-		Ok(())
-	}.map_err(|e: anyhow::Error| mlua::Error::RuntimeError(e.to_string())))?;
-	sqlite.set("exec", exec)?;
-	globals.set("sqlite", sqlite)?;
-
-	lua.load(lua_file).exec().unwrap();
-// 		.with_context(|| format!("cannot load lua file {lua_file:?}"))?;
-		Ok(())
-	})?;
 	Ok(())
 }
 
@@ -1501,7 +1497,7 @@ fn main() -> Result<()> {
 	}.context("cannot set up logging")?;
 	let db_file = options.database.unwrap();
 	match options.command {
-		Command::Generate => command_generate(&game, &db_file)?,
+		Command::Generate => load(create_db(&db_file, &game)?, &game)?,
 		Command::Compile => command_compile(&game, database::open(db_file)?)?,
 		Command::Restore => command_restore(&game)?,
 		Command::Show{ target, .. } => command_show(database::open(db_file)?, target)?,
