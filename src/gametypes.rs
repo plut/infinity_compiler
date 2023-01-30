@@ -2,16 +2,10 @@
 //!
 //! This crate makes heavy use of the `Pack` and `Table` derive macros to
 //! automatically interface with game files and the SQL database.
-use rusqlite::{Connection,Statement};
-use anyhow::{Context,Result};
-use std::fmt::{Display,Debug};
-use std::fs::{File};
-use std::io::{Read,Write,Seek,SeekFrom};
-use macros::{Pack, Table, produce_resource_list};
-use crate::{Resref,Strref};
+use crate::prelude::*;
+use macros::{produce_resource_list};
 use crate::database::{Schema,Table,DbTypeCheck};
 use crate::gameindex::{Pack};
-use log::{trace,debug,info,warn,error};
 
 /// A top-level resource (i.e. saved to its own file in the override
 /// directory).
@@ -40,7 +34,8 @@ pub trait ToplevelResource: Table {
 	///
 	/// It returns the number of rows matched.
 	fn for_each<F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>>
-		(db: &Connection, condition: impl std::fmt::Display, f:F)->Result<i32>;
+		(db: &Connection, condition: impl Display, f:F)->Result<i32>;
+	/// Saves all toplevel resources of this type.
 	fn save_all(db: &Connection)->Result<()> {
 		let name = <Self as Table>::SCHEMA.table_name;
 		let condition = format!(r#"where "key" in "dirty_{name}""#);
@@ -55,7 +50,10 @@ pub trait ToplevelResource: Table {
 		info!("compiled {n} entries from {name} to override");
 		Ok(())
 	}
+	/// Shows a resource on stdout (grouped with its subresources) in a
+	/// nice user format.
 	fn show(&self, resref: impl Display, subresources: Self::Subresources<'_>);
+	/// Shows on stdout the resource with given resref, or returns an error.
 	fn show_all(db: &Connection, resref: impl Display)->Result<()> {
 		Self::for_each(db, format!(r#"where "{key}"='{resref}'"#,
 			key=<Self as Table>::SCHEMA.primary_key),
@@ -66,66 +64,56 @@ pub trait ToplevelResource: Table {
 		Ok(())
 	}
 } // trait ToplevelResource
-/// A game string as present in a .tlk file.
-#[derive(Debug,Default,Clone,Pack,Table)]
-pub struct GameString {
-#[column(strref, usize, "primary key")]
-	pub flags: u16,
-	pub sound: Resref,
-	pub volume: i32,
-	pub pitch: i32,
-#[column(false)] pub delta: i32,
-#[column(false)] pub strlen: i32,
-	pub string: String,
-}
 /// An effect inside a .itm file (either global or in an ability).
 #[derive(Debug,Pack,Table)]
+#[allow(missing_copy_implementations)]
 #[resource(item_effects,itemref,items)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
 #[column(abref, Option<i64>, r#"references "item_abilities"("abref")"#)]
-	pub opcode: u16, //opcode,
-	pub target: u8, // EffectTarget,
-	pub power: u8,
-	pub parameter1: u32,
-	pub parameter2: u32,
-	pub timing_mode: u8, // TimingMode,
-	pub dispel_mode: u8, // DispelMode,
-	pub duration: u32,
-	pub proba1: u8,
-	pub proba2: u8,
-	pub resource: Resref,
-	pub dice_thrown: i32,
-	pub dice_sides: i32,
-	pub saving_throw_type: u32,
-	pub saving_throw_bonus: i32,
-	pub stacking_id: u32,
+	opcode: u16, //opcode,
+	target: u8, // EffectTarget,
+	power: u8,
+	parameter1: u32,
+	parameter2: u32,
+	timing_mode: u8, // TimingMode,
+	dispel_mode: u8, // DispelMode,
+	duration: u32,
+	proba1: u8,
+	proba2: u8,
+	resource: Resref,
+	dice_thrown: i32,
+	dice_sides: i32,
+	saving_throw_type: u32,
+	saving_throw_bonus: i32,
+	stacking_id: u32,
 }
 /// An ability inside a .itm file.
 #[derive(Debug,Pack,Table)]
+#[allow(missing_copy_implementations)]
 #[resource(item_abilities,itemref,items)] pub struct ItemAbility {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
 #[column(abref, auto, "primary key")]
-	pub attack_type: u8, // AttackType,
-	pub must_identify: u8,
-	pub location: u8,
-	pub alternative_dice_sides: u8,
-	pub use_icon: Resref,
-	pub target_type: u8, // TargetType,
-	pub target_count: u8,
-	pub range: u16,
-	pub launcher_required: u8,
-	pub alternative_dice_thrown: u8,
-	pub speed_factor: u8,
-	pub alternative_damage_bonus: u8,
-	pub thac0_bonus: u16,
-	pub dice_sides: u8,
-	pub primary_type: u8,
-	pub dice_thrown: u8,
-	pub secondary_type: u8,
-	pub damage_bonus: u16,
-	pub damage_type: u16, // DamageType,
-#[column(false)] pub effect_count: u16, // = 0,
-#[column(false)] pub effect_index: u16, // = 0,
+	attack_type: u8, // AttackType,
+	must_identify: u8,
+	location: u8,
+	alternative_dice_sides: u8,
+	use_icon: Resref,
+	target_type: u8, // TargetType,
+	target_count: u8,
+	range: u16,
+	launcher_required: u8,
+	alternative_dice_thrown: u8,
+	speed_factor: u8,
+	alternative_damage_bonus: u8,
+	thac0_bonus: u16,
+	dice_sides: u8,
+	primary_type: u8,
+	dice_thrown: u8,
+	secondary_type: u8,
+	damage_bonus: u16,
+	damage_type: u16, // DamageType,
+#[column(false)] effect_count: u16, // = 0,
+#[column(false)] effect_index: u16, // = 0,
 	max_charges: u16,
 	depletion: u16,
 	flags: u32,
@@ -139,44 +127,45 @@ pub struct GameString {
 }
 /// An item effect, corresponding to a .itm file.
 #[derive(Debug,Pack,Table)]
+#[allow(missing_copy_implementations)]
 #[resource(items,itemref,items)] pub struct Item {
 #[header("ITM V1  ")]
 #[column(itemref, Resref, "primary key")]
-	pub unidentified_name: Strref,
-	pub name: Strref,
-	pub replacement: Resref,
-	pub flags: u32, // ItemFlags,
-	pub itemtype: u16, // ItemType,
-	pub usability: u32, // UsabilityFlags,
-	pub animation: u16, // StaticString<2>,
-	pub min_level: u16,
-	pub min_strength: u16,
-	pub min_strengthbonus: u8,
-	pub kit1: u8,
-	pub min_intelligence: u8,
-	pub kit2: u8,
-	pub min_dexterity: u8,
-	pub kit3: u8,
-	pub min_wisdom: u8,
-	pub kit4: u8,
-	pub min_constitution: u8,
-	pub proficiency: u8, // WProf,
-	pub min_charisma: u16,
-	pub price: u32,
-	pub stack_amount: u16,
-	pub inventory_icon: Resref,
-	pub lore: u16,
-	pub ground_icon: Resref,
-	pub weight: i32,
-	pub unidentified_description: Strref,
-	pub description: Strref,
-	pub description_icon: Resref,
-	pub enchantment: i32,
-#[column(false)] pub abilities_offset: u32,
-#[column(false)] pub abilities_count: u16,
-#[column(false)] pub effect_offset: u32,
-#[column(false)] pub effect_index: u16,
-#[column(false)] pub equip_effect_count: u16,
+	unidentified_name: Strref,
+	name: Strref,
+	replacement: Resref,
+	flags: u32, // ItemFlags,
+	itemtype: u16, // ItemType,
+	usability: u32, // UsabilityFlags,
+	animation: u16, // StaticString<2>,
+	min_level: u16,
+	min_strength: u16,
+	min_strengthbonus: u8,
+	kit1: u8,
+	min_intelligence: u8,
+	kit2: u8,
+	min_dexterity: u8,
+	kit3: u8,
+	min_wisdom: u8,
+	kit4: u8,
+	min_constitution: u8,
+	proficiency: u8, // WProf,
+	min_charisma: u16,
+	price: u32,
+	stack_amount: u16,
+	inventory_icon: Resref,
+	lore: u16,
+	ground_icon: Resref,
+	weight: i32,
+	unidentified_description: Strref,
+	description: Strref,
+	description_icon: Resref,
+	enchantment: i32,
+#[column(false)] abilities_offset: u32,
+#[column(false)] abilities_count: u16,
+#[column(false)] effect_offset: u32,
+#[column(false)] effect_index: u16,
+#[column(false)] equip_effect_count: u16,
 }
 impl ToplevelResource for Item {
 	const EXTENSION: &'static str = "itm";
@@ -239,7 +228,7 @@ impl ToplevelResource for Item {
 		Ok(())
 	}
 	fn for_each<F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>>
-		(db: &Connection, condition: impl std::fmt::Display, f:F)->Result<i32> {
+		(db: &Connection, condition: impl Display, f:F)->Result<i32> {
 		let mut sel_item = Item::select_query(db, &condition)?;
 		let mut sel_item_ab = ItemAbility::select_query(db, r#"where "key"=?"#)?;
 		let mut sel_item_eff = ItemEffect::select_query(db, r#"where "key"=?"#)?;
@@ -303,4 +292,4 @@ produce_resource_list!();
 // The constants indicating the various resource types also have their
 // place in this mod:
 use crate::gameindex::Restype;
-pub const RESTYPE_ITM: Restype = Restype { value: 0x03ed };
+pub(crate) const RESTYPE_ITM: Restype = Restype { value: 0x03ed };

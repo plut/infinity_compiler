@@ -22,18 +22,16 @@
     the sql table name
  `mlua::Lua::load(Path)` should work
 # Rust side:
- - move all `*_item` etc. functions to `gametypes`
-  - define a `ToplevelResource` trait for this...
+ + move all `*_item` etc. functions to `gametypes`
+  + define a `ToplevelResource` trait for this...
+  - and un-`pub` all fields...
+ - add a module holding common functions for game strings
  - show: add a flag to keep original resref and a language selector
  - we can probably replace TypedStatement by some trait StructuredRead<T>
    (or even better, include this in Table trait)
    (or just in `as_table` function)
- + replace `write_columns` by a `display` method for `Schema`
  - clarify views:
   - human-readable vs. compiled
-  + include the views in database file
-  + this will **heavily** simplify the rust select query
-  + with extra fields for (*untranslated*) parent and dirty bit
  - a global option to limit languages
  + fill language strings tables
   - decide how to convert `.po` to sql

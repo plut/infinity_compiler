@@ -1,3 +1,4 @@
+//! Compiler between IE game files and a SQLite database.
 #![allow(
 	unused_imports,
 	dead_code,
@@ -7,11 +8,40 @@
 // 	unused_must_use,
 // 	unused_mut,
 )]
+#![warn(
+	explicit_outlives_requirements,
+	single_use_lifetimes,
+	unused_lifetimes,
+	trivial_casts,
+	trivial_numeric_casts,
+	keyword_idents,
+	unused_crate_dependencies,
+	unused_qualifications,
+	variant_size_differences,
+	noop_method_call,
+	missing_copy_implementations,
+	missing_debug_implementations,
+// 	missing_docs,
+)]
 // #![feature(trace_macros)]
 // trace_macros!(false);
 const BACKUP_DIR: &str = "simod-backup";
 
-mod gameindex {
+pub (crate) mod prelude {
+//! The set of symbols we want accessible from everywhere in the crate.
+pub(crate) use anyhow::{Result,Context};
+pub(crate) use log::{trace,debug,info,warn,error};
+pub(crate) use rusqlite::{self,Connection,Statement};
+
+pub(crate) use std::fmt::{self,Display,Debug,Formatter};
+pub(crate) use std::fs::{self,File};
+pub(crate) use std::io::{self,Cursor,Read,Write,Seek,SeekFrom};
+pub(crate) use std::path::{Path, PathBuf};
+
+pub(crate) use crate::{Resref,Strref};
+pub(crate) use macros::{Pack,Table};
+}
+pub mod gameindex {
 //! Access to the KEY/BIF side of the database.
 //!
 //! Main interface:
@@ -21,18 +51,15 @@ mod gameindex {
 //!
 //! A lot of structs in this file (e.g. [`KeyHdr`], [`BifIndex`]) are
 //! exact mirrors of entries in game files and left undocumented.
-use anyhow::{Result, Context};
-use log::{trace,debug,info,warn,error};
+use crate::prelude::*;
+use rusqlite::types::{FromSql,ToSql, ValueRef};
 
 use std::cmp::min;
-use std::fmt::{self,Display,Debug,Formatter};
-use std::fs::{self, File};
-use std::io::{self, Read, Write, Seek, SeekFrom, BufReader, Cursor};
-use std::path::{Path, PathBuf};
+use std::io::{self, BufReader};
 
-use macros::Pack;
 use crate::progress::{Progress};
-use crate::gametypes::{GameString};
+use crate::gamestrings::{GameString};
+use crate::database::{SqlType,FieldType};
 
 // I. Basic types: StaticString, Resref, Strref etc.
 #[derive(Clone,Copy)]
@@ -92,17 +119,17 @@ impl<const N: usize> Debug for StaticString<N> {
 	}
 }
 impl<const N: usize> Display for StaticString<N> {
-	fn fmt(&self, f:&mut fmt::Formatter) -> fmt::Result {
+	fn fmt(&self, f:&mut Formatter) -> fmt::Result {
 		Display::fmt(&self.as_ref(), f)
 	}
 }
 impl<const N: usize> Pack for StaticString<N> {
-	fn unpack(f: &mut impl io::Read)->io::Result<Self> {
+	fn unpack(f: &mut impl Read)->io::Result<Self> {
 		let mut x = [0u8; N];
 		f.read_exact(&mut x)?;
 		Ok(Self{ bytes: x, })
 	}
-	fn pack(&self, f: &mut impl io::Write)->io::Result<()> {
+	fn pack(&self, f: &mut impl Write)->io::Result<()> {
 		f.write_all(&self.bytes)
 	}
 }
@@ -120,7 +147,7 @@ pub trait Pack: Sized {
 	/// Reads this object from a binary source.
 	fn unpack(f: &mut impl Read)->io::Result<Self>;
 	/// Writes this objects to a binary sink.
-	fn pack(&self, _f: &mut impl io::Write)->io::Result<()> {
+	fn pack(&self, _f: &mut impl Write)->io::Result<()> {
 		println!("Pack for type: {}", crate::type_of(&self));
 		unimplemented!() }
 	/// Reads a vector of objects (of known size) from a binary source.
@@ -151,7 +178,7 @@ macro_rules! pack_tuple {
 			fn unpack(f: &mut impl Read)->io::Result<Self> {
 				Ok((A::unpack(f)?, $($B::unpack(f)?,)*))
 			}
-			fn pack(&self, f: &mut impl io::Write)->io::Result<()> {
+			fn pack(&self, f: &mut impl Write)->io::Result<()> {
 				#[allow(non_snake_case)]
 				let (A, $($B,)*) = self;
 				A.pack(f)?; $($B.pack(f)?;)* Ok(())
@@ -199,7 +226,22 @@ impl Pack for Resref {
 		name.bytes.make_ascii_lowercase();
 		Ok(Self { name, })
 	}
-	fn pack(&self, f: &mut impl io::Write)->io::Result<()> { self.name.pack(f) }
+	fn pack(&self, f: &mut impl Write)->io::Result<()> { self.name.pack(f) }
+}
+impl SqlType for Resref {
+	const SQL_TYPE: FieldType = crate::database::FieldType::Resref;
+}
+impl ToSql for Resref {
+	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.name.as_ref().to_sql() }
+}
+impl FromSql for Resref {
+	fn column_result(v: ValueRef)->rusqlite::types::FromSqlResult<Self> {
+		match v {
+			ValueRef::Text(s) => Ok(Resref { name: s.into() }),
+			ValueRef::Null => Ok(Resref { name: "".into() }),
+			_ => Err(rusqlite::types::FromSqlError::InvalidType)
+		}
+	}
 }
 impl Resref {
 	// iterates until `test` returns FALSE
@@ -242,15 +284,26 @@ impl Resref {
 	}
 }
 /// A string reference as used by the game: 32-bit integer.
-#[derive(Debug,Pack,Clone,Copy)] pub struct Strref { pub value: i32, }
+#[derive(Debug,Pack,Clone,Copy)] pub struct Strref { value: i32, }
 impl Display for Strref {
 	fn fmt(&self, mut f: &mut Formatter<'_>)->std::result::Result<(),std::fmt::Error>{
 		use std::fmt::Write;
 		write!(&mut f, "@{}", self.value)
 	}
 }
+impl SqlType for Strref {
+	const SQL_TYPE: FieldType = FieldType::Strref;
+}
+impl ToSql for Strref {
+	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.value.to_sql() }
+}
+impl FromSql for Strref {
+	fn column_result(v: ValueRef)->rusqlite::types::FromSqlResult<Self> {
+		i32::column_result(v).map(|x| Strref { value: x })
+	}
+}
 #[derive(Debug,Pack,Clone,Copy,PartialEq,Eq)] pub struct Restype { pub value: u16, }
-#[derive(Debug,Pack,Clone,Copy)] pub struct BifIndex { pub data: u32, }
+#[derive(Debug,Pack,Clone,Copy)] pub struct BifIndex { data: u32, }
 /// A reference to a resource inside a BIF file as encoded in
 /// `chitin.key`.
 impl BifIndex {
@@ -278,12 +331,6 @@ impl BifIndex {
 	restype: Restype,
 	location: BifIndex,
 }
-#[derive(Debug,Pack)] struct TlkHeader {
-	#[header("TLK V1  ")]
-	lang: u16,
-	nstr: u32,
-	offset: u32,
-}
 #[derive(Debug,Pack)] struct BifHdr {
 	#[header("BIFFV1  ")]
 	nres: u32,
@@ -298,87 +345,19 @@ impl BifIndex {
 	_unknown: u16,
 }
 
-// III. Game strings:
-/// The iterator used for accessing game strings.
-#[derive(Debug)] pub struct GameStringsIterator<'a> {
-	cursor: Cursor<&'a[u8]>,
-	index: usize,
-	nstr: usize,
-	offset: usize,
-}
-impl<'a> /* From<T> for */ GameStringsIterator<'a> {
-	/// Tries to build a new iterator from the raw data in a `.tlk` file.
-	///
-	/// not a From since we return a Result<>. FIXME: use a TryFrom.
-	pub fn new(bytes: &'a[u8])->Result<Self> {
-		let mut cursor = Cursor::new(bytes);
-		let header = TlkHeader::unpack(&mut cursor)
-			.context("malformed TLK header")?;
-		Ok(Self { cursor, index: 0, nstr: header.nstr as usize,
-			offset: header.offset as usize })
-	}
-}
-impl<'a> Iterator for GameStringsIterator<'a> {
-	type Item = Result<GameString>;
-	/// Iterates over all game strings in the file, returning a `Result`
-	/// indicating whether there was an error in the file.
-	fn next(&mut self)->Option<Self::Item> {
-		if self.index >= self.nstr { return None }
-		let mut s = match GameString::unpack(&mut self.cursor) {
-			Err(e) => return Some(Err(e.into())),
-			Ok(s) => s,
-		};
-
-		let start = self.offset + (s.delta as usize);
-		let end = start + (s.strlen as usize);
-		let buf = self.cursor.get_ref();
-		// string *might* be zero-terminated, in which case we discard:
-		let c = buf[end-1];
-		let end2 = std::cmp::max(start, end-((c==0) as usize));
-		s.string.push_str(std::str::from_utf8(&buf[start..end2]).ok()?);
-		self.index+= 1;
-		Some(Ok(s))
-	}
-}
-impl<'a> ExactSizeIterator for GameStringsIterator<'a> {
-	fn len(&self) -> usize { self.nstr }
-}
-impl<'a> GameStringsIterator<'a> {
-// we put this function in an `impl` block for convenience:
-pub fn save(vec: &[GameString], path: &impl AsRef<Path>)->Result<()> {
-	// FIXME: this could be done with a prepared statement and iterator
-	// (saving the (rather big) memory for the whole vector of strings),
-	// but rusqlite does not export `reset`...
-	let mut file = fs::File::create(path)
-		.with_context(|| format!("cannot create TLK file: {:?}", path.as_ref()))?;
-	TlkHeader { lang: 0, nstr: vec.len() as u32,
-		offset: (26*vec.len() + 18) as u32 }.pack(&mut file)?;
-	// first string in en.tlk has: (flags: u16=5, offset=0, strlen=9)
-	// second string has (flags: u16=1, offset=9, strlen=63) etc.
-	// (offset=72) etc.
-	let mut delta = 0;
-	for s in vec.iter() {
-		let l = s.string.len() as u32;
-		(s.flags, s.sound, s.volume, s.pitch, delta, l).pack(&mut file)?;
-		delta+= l;
-	}
-	for s in vec {
-		file.write_all(s.string.as_bytes())
-			.with_context(|| format!("cannot write strings to TLK file:{:?}", path.as_ref()))?;
-	}
-	Ok(())
-}
-}
-
 // IV. Game index main structure:
 /// The main structure accessing game files.
 #[derive(Debug)] pub struct GameIndex {
+	/// The root directory (containing "chitin.key").
 	pub root: PathBuf,
-	pub bifnames: Vec<String>,
+	/// The names of the BIF files, as found in chitin.key.
+	bifnames: Vec<String>,
 	_bifsizes: Vec<u32>,
 	resources: Vec<KeyRes>,
-	// Those are computed from gamedir and cached here:
+	/// The set of languages in the file, as a list of (language code, path
+	/// to dialog.tlk).
 	pub languages: Vec<(String,PathBuf)>,
+	/// The backup directory (full path) for this tool.
 	pub backup: PathBuf,
 }
 impl GameIndex {
@@ -485,15 +464,18 @@ impl GameIndex {
 /// This opens the BIF file only when its [`ResHandle::open`] method is invoked.
 /// TODO: convert this into a trait, and add an implementation which
 /// looks in override files instead.
+#[derive(Debug)]
 pub struct ResHandle<'a> {
 	bif: &'a mut Option<BifFile>,
 	path: &'a PathBuf,
 	location: BifIndex,
 	restype: Restype,
+	/// The name associated to this buffer, either as an index in bif file,
+	/// or as (TODO) the name of an override file.
 	pub resref: Resref,
 }
-impl<'a> ResHandle<'a> {
-	pub fn open(&mut self)->Result<io::Cursor<Vec<u8>>> {
+impl ResHandle<'_> {
+	pub fn open(&mut self)->Result<Cursor<Vec<u8>>> {
 		biffile(self.bif, &self.path)
 			.context("cannot open BIF file")?;
 		let biffile = self.bif.as_mut().unwrap();
@@ -516,6 +498,7 @@ fn bifresources(file: impl AsRef<Path>+Debug)->Result<Vec<BifResource>> {
 		.map_err(|e| e.into())
 }
 /// Abstract, higher-level representation of a BIF file.
+#[derive(Debug)]
 struct BifFile {
 	buf: BufReader<File>,
 	resources: Vec<BifResource>,
@@ -534,20 +517,15 @@ fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->
 	Ok(o.as_ref().unwrap())
 }
 } // mod gameindex
-mod database {
+pub mod database {
 //! Access to the SQL side of the database.
 //!
 //! Main exports are:
 //!  - [`Schema`] type: description of a particular SQL table;
 //!  - [`Table`] trait: connect a Rust structure to a SQL row.
-use rusqlite::{Connection, Statement, Row, ToSql};
-use rusqlite::types::{FromSql, ValueRef};
-use anyhow::{Context,Result};
-use log::{trace,debug,info,warn,error};
+use crate::prelude::*;
+use rusqlite::{Row, ToSql, types::{FromSql, ValueRef}};
 use std::marker::PhantomData;
-use std::fmt::{Display,Debug,Formatter};
-use std::path::{Path,PathBuf};
-use crate::{Resref,Strref};
 
 // I. Low-level stuff: basic types and extensions for `rusqlite` traits.
 pub trait ConnectionExt {
@@ -564,7 +542,7 @@ impl ConnectionExt for Connection {
 pub trait RowExt {
 	fn dump(&self);
 }
-impl<'a> RowExt for Row<'a> {
+impl RowExt for Row<'_> {
 	/// Dumps all values found in a single row to stdout.
 	fn dump(&self) {
 		for (i, c) in self.as_ref().column_names().iter().enumerate() {
@@ -587,7 +565,10 @@ pub fn open(f: impl AsRef<Path>)->Result<Connection> {
 	info!("opened database {path:?}");
 	Ok(db)
 }
+/// Detecting recoverable errors due to incorrect SQL typing.
 pub trait DbTypeCheck {
+	/// Returns `true` when a `Result` is an `Err` variant corresponding to
+	/// a recoverable error due to a wrong SQL type.
 	fn is_db_malformed(&self)->bool;
 }
 impl<T> DbTypeCheck for Result<T,anyhow::Error> {
@@ -615,11 +596,12 @@ impl FieldType {
 		}
 	}
 }
+/// A correspondence between (some) Rust types and SQL types.
 pub trait SqlType { const SQL_TYPE: FieldType; }
 impl<T> SqlType for Option<T> where T: SqlType {
 	const SQL_TYPE: FieldType = T::SQL_TYPE;
 }
-impl<'a> SqlType for &'a str {
+impl SqlType for &str {
 	const SQL_TYPE: FieldType = FieldType::Text;
 }
 impl SqlType for String {
@@ -634,33 +616,6 @@ sqltype_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
 // impl<T> SqlType for T where T: num::Integer {
 // 	const SQL_TYPE: FieldType = FieldType::Integer;
 // }
-impl SqlType for Strref {
-	const SQL_TYPE: FieldType = FieldType::Strref;
-}
-impl ToSql for Strref {
-	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.value.to_sql() }
-}
-impl FromSql for Strref {
-	fn column_result(v: ValueRef)->rusqlite::types::FromSqlResult<Self> {
-		i32::column_result(v).map(|x| Strref { value: x })
-	}
-}
-impl SqlType for Resref {
-	const SQL_TYPE: FieldType = FieldType::Resref;
-}
-impl ToSql for Resref {
-	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.name.as_ref().to_sql() }
-}
-impl FromSql for Resref {
-	fn column_result(v: ValueRef)->rusqlite::types::FromSqlResult<Self> {
-		match v {
-			ValueRef::Text(s) => Ok(Resref { name: s.into() }),
-			ValueRef::Null => Ok(Resref { name: "".into() }),
-			_ => Err(rusqlite::types::FromSqlError::InvalidType)
-		}
-	}
-}
-
 // II. Everything connected to the table schemas (but not to Connection;
 // only as SQL strings).
 /// Description of a field in a game resource.
@@ -677,10 +632,15 @@ impl FromSql for Resref {
 /// In practice there exists exactly one [`Schema`] instance per
 /// resource, and it is compiled by the [`Table`] derive macro.
 #[derive(Debug)] pub struct Schema<'a> {
+	/// The stem for the SQL table name associated with this structure.
 	pub table_name: &'a str,
+	/// The SQL primary key of this table.
 	pub primary_key: &'a str,
+	/// The field pointing to the top-level resource.
 	pub parent_key: &'a str,
+	/// The table holding the top-level resource.
 	pub parent_table: &'a str,
+	/// Descriptions for all the fields of this struct.
 	pub fields: &'a[Column<'a>], // fat pointer
 }
 impl<'schema> Schema<'schema> {
@@ -855,7 +815,7 @@ struct ColumnWriter<'a,T: Display> {
 	prefix: T,
 	schema: &'a Schema<'a>,
 }
-impl<'a, T: Display> Display for ColumnWriter<'a,T> {
+impl<T: Display> Display for ColumnWriter<'_,T> {
 	fn fmt(&self, mut f: &mut Formatter<'_>)->std::result::Result<(),std::fmt::Error>{
 		use std::fmt::Write;
 		let mut isfirst = true;
@@ -888,6 +848,8 @@ pub trait Table: Sized {
 	///
 	/// TODO: Res is more useful than KeyOut, replace KeyOut by Res
 	type Res;
+	/// The internal description of the fields of this structure, as used
+	/// to produce SQL statements.
 	const SCHEMA: Schema<'static>;
 	/// The low-level insert function for an object to a database row.
 	fn ins(&self, s: &mut Statement, key: &Self::KeyIn)->rusqlite::Result<()>;
@@ -918,8 +880,11 @@ pub trait Table: Sized {
 /// We need a few types parametrized by a Table:
 ///  - `TypedStatement`: this gets saved as a (mut) local variable;
 ///  - `TypedRows`: the iterator producing Table objects from the query.
+#[derive(Debug)]
 pub struct TypedStatement<'stmt, T: Table> (Statement<'stmt>, PhantomData<T>);
-impl<'stmt, T: Table> TypedStatement<'stmt, T> {
+impl<T: Table> TypedStatement<'_, T> {
+	/// Iterates over this statement, returning (possibly) Rust structs of
+	/// the type associated with this table.
 	pub fn iter<P: rusqlite::Params>(&mut self, params: P)->rusqlite::Result<TypedRows<T>> {
 		let rows = self.0.query(params)?;
 		Ok(TypedRows { rows, _marker: PhantomData::<T>, index: 0 })
@@ -932,12 +897,13 @@ impl<'stmt, T: Table> TypedStatement<'stmt, T> {
 ///
 /// This also behaves as an `Iterator` (throwing when the underlying
 /// `Row` iterator fails).
+#[allow(missing_debug_implementations)]
 pub struct TypedRows<'stmt,T: Table> {
 	rows: rusqlite::Rows<'stmt>,
 	_marker: PhantomData<T>,
 	index: usize,
 }
-impl<'stmt,T: Table> Iterator for TypedRows<'stmt,T> {
+impl<T: Table> Iterator for TypedRows<'_,T> {
 	type Item = Result<(T, T::KeyOut)>;
 	fn next(&mut self)->Option<Self::Item> {
 		loop {
@@ -960,24 +926,25 @@ impl<'stmt,T: Table> Iterator for TypedRows<'stmt,T> {
 	}
 }
 } // mod resources
-mod progress {
+pub mod progress {
 //! Generic useful functions for user interaction.
 //!
 //! This contains among other:
 //!  - [`Progress`], a utility wrapper for a progress bar stack;
 //!  - [`transaction`], wrapping a closure inside a database transaction.
-
-use std::fmt::{Display,Debug};
+use crate::prelude::*;
 use std::cell::{RefCell};
 use indicatif::{ProgressBar,ProgressStyle,MultiProgress};
-use anyhow::{Result,Context};
-use rusqlite::{Connection};
 
 thread_local! {
 	static COUNT: RefCell<usize> = RefCell::new(0);
 	static MULTI: RefCell<MultiProgress> =
 		RefCell::new(MultiProgress::new());
 }
+/// A stacked progress bar.
+///
+/// This bar is removed from the stack when it is dropped.
+#[derive(Debug)]
 pub struct Progress { pb: ProgressBar, }
 impl AsRef<ProgressBar> for Progress {
 	fn as_ref(&self)->&ProgressBar { &self.pb }
@@ -992,6 +959,7 @@ impl Drop for Progress {
 const COLORS: &[&str] = &["red", "yellow", "green", "cyan", "blue", "magenta" ];
 
 impl Progress {
+	/// Appends a new progress bar to the stack.
 	pub fn new(n: impl num::ToPrimitive, text: impl Display)->Self {
 		let s = format!("{text} {{wide_bar:.{}}}{{pos:>5}}/{{len:>5}}",
 			COLORS[COUNT.with(|c| *c.borrow()) % COLORS.len()]);
@@ -1001,6 +969,7 @@ impl Progress {
 		COUNT.with(|c| *c.borrow_mut()+= 1);
 		Self { pb }
 	}
+	/// Advances the progress bar by the given amount.
 	pub fn inc(&self, n: u64) { self.as_ref().inc(n) }
 }
 
@@ -1008,7 +977,7 @@ impl Progress {
 ///
 /// The transaction aborts if the closure returns an `Err` variant, and
 /// commits if it returns an `Ok` variant.
-pub fn transaction<T>(db: &mut Connection, mut f: impl FnMut(&rusqlite::Transaction)->Result<T>)->anyhow::Result<T> {
+pub fn transaction<T>(db: &mut Connection, mut f: impl FnMut(&rusqlite::Transaction)->Result<T>)->Result<T> {
 	let t = db.transaction().context("create new transaction")?;
 	let r = f(&t)?; // automatic rollback if Err
 	t.commit()?;
@@ -1016,20 +985,171 @@ pub fn transaction<T>(db: &mut Connection, mut f: impl FnMut(&rusqlite::Transact
 }
 
 } // mod progress
+pub mod gamestrings {
+//! Access to game strings in database.
+use crate::prelude::*;
+use crate::progress::{Progress};
+use crate::database::{self,ConnectionExt,Table};
+use crate::gameindex::{self,Pack,GameIndex};
 
-mod gametypes;
+#[derive(Debug,Pack)] struct TlkHeader {
+	#[header("TLK V1  ")]
+	lang: u16,
+	nstr: u32,
+	offset: u32,
+}
+/// A game string as present in a .tlk file.
+#[derive(Debug,Default,Clone,Pack,Table)]
+pub struct GameString {
+#[column(strref, usize, "primary key")]
+	flags: u16,
+	sound: Resref,
+	volume: i32,
+	pitch: i32,
+#[column(false)] delta: i32,
+#[column(false)] strlen: i32,
+	string: String,
+}
+/// The iterator used for accessing game strings.
+#[derive(Debug)] pub struct GameStringsIterator<'a> {
+	cursor: Cursor<&'a[u8]>,
+	index: usize,
+	nstr: usize,
+	offset: usize,
+}
+impl<'a> TryFrom<&'a [u8]> for GameStringsIterator<'a> {
+	type Error = anyhow::Error;
+	fn try_from(bytes: &'a[u8])->Result<Self> {
+		let mut cursor = Cursor::new(bytes);
+		let header = TlkHeader::unpack(&mut cursor)
+			.context("malformed TLK header")?;
+		Ok(Self { cursor, index: 0, nstr: header.nstr as usize,
+			offset: header.offset as usize })
+	}
+}
+impl Iterator for GameStringsIterator<'_> {
+	type Item = Result<GameString>;
+	/// Iterates over all game strings in the file, returning a `Result`
+	/// indicating whether there was an error in the file.
+	fn next(&mut self)->Option<Self::Item> {
+		if self.index >= self.nstr { return None }
+		let mut s = match GameString::unpack(&mut self.cursor) {
+			Err(e) => return Some(Err(e.into())),
+			Ok(s) => s,
+		};
 
-pub(crate) use rusqlite::{self,Connection,Statement};
+		let start = self.offset + (s.delta as usize);
+		let end = start + (s.strlen as usize);
+		let buf = self.cursor.get_ref();
+		// string *might* be zero-terminated, in which case we discard:
+		let c = buf[end-1];
+		let end2 = std::cmp::max(start, end-((c==0) as usize));
+		s.string.push_str(std::str::from_utf8(&buf[start..end2]).ok()?);
+		self.index+= 1;
+		Some(Ok(s))
+	}
+}
+impl ExactSizeIterator for GameStringsIterator<'_> {
+	fn len(&self) -> usize { self.nstr }
+}
+/// Saves game strings in one language to the given file.
+pub fn save(vec: &[GameString], path: &impl AsRef<Path>)->Result<()> {
+	// FIXME: this could be done with a prepared statement and iterator
+	// (saving the (rather big) memory for the whole vector of strings),
+	// but rusqlite does not export `reset`...
+	let mut file = fs::File::create(path)
+		.with_context(|| format!("cannot create TLK file: {:?}", path.as_ref()))?;
+	TlkHeader { lang: 0, nstr: vec.len() as u32,
+		offset: (26*vec.len() + 18) as u32 }.pack(&mut file)?;
+	// first string in en.tlk has: (flags: u16=5, offset=0, strlen=9)
+	// second string has (flags: u16=1, offset=9, strlen=63) etc.
+	// (offset=72) etc.
+	let mut delta = 0;
+	for s in vec.iter() {
+		let l = s.string.len() as u32;
+		(s.flags, s.sound, s.volume, s.pitch, delta, l).pack(&mut file)?;
+		delta+= l;
+	}
+	for s in vec {
+		file.write_all(s.string.as_bytes())
+			.with_context(|| format!("cannot write strings to TLK file:{:?}", path.as_ref()))?;
+	}
+	Ok(())
+}
+
+/// Fills all game strings tables from game dialog files.
+pub fn load_strings(db: &Connection, game: &GameIndex)->Result<()> {
+	db.exec("begin transaction")?;
+	let pb = Progress::new(game.languages.len(), "languages");
+	for (langname, dialog) in game.languages.iter() {
+		pb.inc(1);
+		load_language(db, langname, &dialog)
+			.with_context(|| format!("cannot load language '{langname}' from '{dialog:?}'"))?;
+	}
+	db.exec("commit")?; Ok(())
+}
+/// Fills the database table for a single language.
+fn load_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> + Debug))->Result<()> {
+	let bytes = fs::read(path)
+		.with_context(|| format!("cannot open strings file: {path:?}"))?;
+	let mut q = db.prepare(&format!(r#"insert into "res_strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
+	let itr = GameStringsIterator::try_from(bytes.as_ref())?;
+	let pb = Progress::new(itr.len(), "strings");
+	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
+	let mut n_strings = 0;
+	for (strref, x) in itr.enumerate() {
+		let s = x?;
+		pb.inc(1);
+		q.execute((strref, s.flags, s.sound, s.volume, s.pitch, s.string))?;
+		n_strings+= 1;
+	}
+	info!("loaded {n_strings} strings for language \"{langname}\"");
+	Ok(())
+}
+/// Saves all database strings to "dialog.tlk" files for all game
+/// languages.
+///
+/// This also backups those files if needed (i.e. if no backup exists
+/// yet).
+pub fn save_strings(db: &Connection, game: &GameIndex)->Result<()> {
+	use database::DbTypeCheck;
+	let pb = Progress::new(game.languages.len(), "save translations");
+	for (lang, path) in game.languages.iter() {
+		pb.inc(1);
+		if lang != "en" { continue } // TODO: remove; this is to speed up tests
+		let mut s1 = String::new(); let mut s2 = String::new();
+		for c in path.iter() {
+			std::mem::swap(&mut s1, &mut s2);
+			s2.clear(); s2.push_str(c.to_str().unwrap());
+		}
+		println!("s1='{s1}', s2='{s2}'");
+		game.backup_as(path, format!("{s1}.tlk"))
+			.with_context(|| format!("cannot backup strings file {path:?}"))?;
+		let count = db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
+			(), |row| row.get::<_,usize>(0))?;
+		let mut vec = vec![GameString::default(); count+1];
+		let mut sel_str = GameString::select_query_gen(db, "strings_", lang, "")?;
+		for row in sel_str.iter(())? {
+			if row.is_db_malformed() { continue }
+			let (gamestring, (strref,)) = row.unwrap();
+			vec[strref] = gamestring;
+		}
+		let target = format!("./{lang}.tlk");
+		save(&vec, &target)?;
+		info!("updated strings in {target:?}; file now contains {count} entries");
+	}
+	Ok(())
+}
+}
+
+pub mod gametypes;
+
+use crate::prelude::*;
 pub(crate) use anyhow::{Context, Result};
 use clap::Parser;
 use simplelog::{TermLogger,WriteLogger};
-use log::{trace,debug,info,warn,error};
 use mlua::{Lua};
 
-use std::io::{Seek, SeekFrom};
-use std::path::{Path,PathBuf};
-use std::fs::{self, File};
-use std::fmt::{self,Debug,Display};
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
 use database::{Table, ConnectionExt, TypedStatement};
@@ -1038,6 +1158,13 @@ use progress::{Progress};
 use gametypes::*;
 
 // I. generate
+/// A structure holding insertion statements for all resource types.
+#[derive(Debug)]
+pub struct DbInserter<'a> {
+	db: &'a Connection,
+	add_resref: Statement<'a>,
+	tables: AllResources<Statement<'a>>,
+}
 /// Creates and initializes the game database.
 ///
 /// This creates all relevant tables and views in the database
@@ -1140,16 +1267,10 @@ left join "translations_{langname}" as "t" using ("key");
 	Ok(())
 	}).context("read game strings")
 }
-/// A structure holding insertion statements for all resource types.
-pub struct DbInserter<'a> {
-	db: &'a Connection,
-	add_resref: Statement<'a>,
-	tables: AllResources<Statement<'a>>,
-}
 /// Fills the database from game files.
-fn populate(db: &Connection, game: &GameIndex)->Result<()> {
+fn load(db: &Connection, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(3, "Generate database"); pb.inc(1);
-	populate_strings(db, game)
+	gamestrings::load_strings(db, game)
 		.with_context(|| format!("cannot read game strings from game directory {:?}", game.root))?;
 	pb.inc(1);
 	db.exec("begin transaction")?;
@@ -1162,7 +1283,7 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 		debug!("trying to load resource {} of type {:#04x}", &handle.resref, restype.value);
 		base.add_resref.execute((&handle.resref,))?;
 		match restype {
-		gametypes::RESTYPE_ITM =>
+		RESTYPE_ITM =>
 			Item::load(&mut base, handle.open()?, handle.resref)
 					.map(|_| {n_items+=1;}),
 		_ => Ok(())
@@ -1173,40 +1294,10 @@ fn populate(db: &Connection, game: &GameIndex)->Result<()> {
 	info!("loaded {n_items} items to database");
 	Ok(())
 }
-/// Fills all game strings tables from game dialog files.
-fn populate_strings(db: &Connection, game: &GameIndex)->Result<()> {
-	db.exec("begin transaction")?;
-	let pb = Progress::new(game.languages.len(), "languages");
-	for (langname, dialog) in game.languages.iter() {
-		pb.inc(1);
-		populate_language(db, langname, &dialog)
-			.with_context(|| format!("cannot populate language '{langname}' from '{dialog:?}'"))?;
-	}
-	db.exec("commit")?; Ok(())
-}
-/// Fills the database table for a single language.
-fn populate_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> + Debug))->Result<()> {
-	use gameindex::{GameStringsIterator};
-	let bytes = fs::read(path)
-		.with_context(|| format!("cannot open strings file: {path:?}"))?;
-	let mut q = db.prepare(&format!(r#"insert into "res_strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
-	let itr = GameStringsIterator::new(bytes.as_ref())?;
-	let pb = Progress::new(itr.len(), "strings");
-	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
-	let mut n_strings = 0;
-	for (strref, x) in itr.enumerate() {
-		let s = x?;
-		pb.inc(1);
-		q.execute((strref, s.flags, s.sound, s.volume, s.pitch, s.string))?;
-		n_strings+= 1;
-	}
-	info!("loaded {n_strings} strings for language \"{langname}\"");
-	Ok(())
-}
 fn command_generate(game: &GameIndex, database: impl AsRef<Path>)->Result<()> {
 	let db = create_db(&database, game)
 		.with_context(|| format!("cannot create database {:?}", database.as_ref()))?;
-	populate(&db, game)?;
+	load(&db, game)?;
 	db.execute_batch(r#"
 update "items" set price=5,name='A new name for Albruin' where itemref='sw1h34';
 "#)?;
@@ -1255,7 +1346,7 @@ fn command_compile(game: &GameIndex, mut db: Connection)->Result<()> {
 	pb.inc(1);
 	translate_strrefs(&mut db)?;
 	pb.inc(1);
-	save_strings(&db, game)?;
+	gamestrings::save_strings(&db, game)?;
 	pb.inc(1);
 	let tmpdir = Path::new(&game.root).join("simod_out");
 	fs::create_dir(&tmpdir)
@@ -1266,40 +1357,6 @@ fn command_compile(game: &GameIndex, mut db: Connection)->Result<()> {
 	std::env::set_current_dir(orig_dir)?;
 	pb.inc(1);
 	res
-}
-/// Saves all database strings to "dialog.tlk" files for all game
-/// languages.
-///
-/// This also backups those files if needed (i.e. if no backup exists
-/// yet).
-fn save_strings(db: &Connection, game: &GameIndex)->Result<()> {
-	use database::DbTypeCheck;
-	let pb = Progress::new(game.languages.len(), "save translations");
-	for (lang, path) in game.languages.iter() {
-		pb.inc(1);
-		if lang != "en" { continue } // TODO: remove; this is to speed up tests
-		let mut s1 = String::new(); let mut s2 = String::new();
-		for c in path.iter() {
-			std::mem::swap(&mut s1, &mut s2);
-			s2.clear(); s2.push_str(c.to_str().unwrap());
-		}
-		println!("s1='{s1}', s2='{s2}'");
-		game.backup_as(path, format!("{s1}.tlk"))
-			.with_context(|| format!("cannot backup strings file {path:?}"))?;
-		let count = db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
-			(), |row| row.get::<_,usize>(0))?;
-		let mut vec = vec![GameString::default(); count+1];
-		let mut sel_str = GameString::select_query_gen(db, "strings_", lang, "")?;
-		for row in sel_str.iter(())? {
-			if row.is_db_malformed() { continue }
-			let (gamestring, (strref,)) = row.unwrap();
-			vec[strref] = gamestring;
-		}
-		let target = format!("./{lang}.tlk");
-		gameindex::GameStringsIterator::save(&vec, &target)?;
-		info!("updated strings in {target:?}; file now contains {count} entries");
-	}
-	Ok(())
 }
 /// Saves all modified game resources to game files.
 ///

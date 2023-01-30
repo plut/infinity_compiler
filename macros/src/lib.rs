@@ -266,7 +266,7 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 		}
 	};
 	if table_name.is_empty() {
-		println!("\x1b[36m{}\x1b[m", code);
+// 		println!("\x1b[36m{}\x1b[m", code);
 	}
 	if !table_name.is_empty() {
 		push_resource(ResourceDef(type_name, table_name));
@@ -330,7 +330,7 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 
 		let ty = Ident::new(type_name, Span::call_site());
 		let field = Ident::new(table_name, Span::call_site());
-		quote!{ pub #field: T, }.to_tokens(&mut fields);
+		quote!{ #[allow(missing_docs)] pub #field: T, }.to_tokens(&mut fields);
 		quote!{ #field: f(&<#ty as crate::database::Table>::SCHEMA,&self.#field)?, }
 			.to_tokens(&mut map);
 		quote!{ #field: f(&<#ty as crate::database::Table>::SCHEMA,&self.#field)?, }
@@ -343,16 +343,23 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 /// A struct holding one field for each game resource type.
 ///
 /// This is used for iterating similar code for each resources.
-		pub struct AllResources<T> { _marker: std::marker::PhantomData<T>, #fields }
+		#[derive(Debug)] #[allow(clippy::missing_docs)]
+		pub struct AllResources<T:Debug > {
+#[allow(clippy::missing_docs)]
+			_marker: std::marker::PhantomData<T>, #fields }
 /// An heterogeneous iterator over the constant list of all game resource types.
 		pub const RESOURCES: AllResources<()> = AllResources {
 			_marker: std::marker::PhantomData::<()>, #data };
-		impl<T> AllResources<T> {
+		#[allow(clippy::len_without_is_empty)]
+		impl<T: Debug> AllResources<T> {
+			/// Number of resources in this table.
 			pub fn len(&self)->usize { #n }
-			pub fn map<U,E,F:Fn(&crate::database::Schema,&T)->Result<U,E>>(&self, f: F)->Result<AllResources<U>,E> {
+			/// Calls a closure for each resource type in the game.
+			pub fn map<U: Debug,E,F:Fn(&crate::database::Schema,&T)->Result<U,E>>(&self, f: F)->Result<AllResources<U>,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map })
 			}
-			pub fn map_mut<U,E,F:FnMut(&crate::database::Schema,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources<U>,E> {
+			/// Calls a closure for each resource type in the game.
+			pub fn map_mut<U: Debug,E,F:FnMut(&crate::database::Schema,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources<U>,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map_mut })
 			}
 		}
