@@ -1,17 +1,17 @@
 //! Compiler between IE game files and a SQLite database.
 #![allow(
 	unused_attributes,
-// 	unused_imports,
-// 	dead_code,
-// 	unreachable_code,
+	unused_imports,
+	dead_code,
+	unreachable_code,
 // 	unused_macros,
-// 	unused_variables,
+	unused_variables,
 // 	unused_must_use,
 // 	unused_mut,
 )]
 #![warn(
 	explicit_outlives_requirements,
-	single_use_lifetimes,
+// 	single_use_lifetimes,
 	unused_lifetimes,
 	trivial_casts,
 	trivial_numeric_casts,
@@ -22,6 +22,7 @@
 	noop_method_call,
 	missing_copy_implementations,
 	missing_debug_implementations,
+	elided_lifetimes_in_paths,
 // 	missing_docs,
 )]
 // #![feature(trace_macros)]
@@ -42,10 +43,10 @@ pub(crate) use std::fs::{self,File};
 pub(crate) use std::io::{self,Cursor,Read,Write,Seek,SeekFrom};
 pub(crate) use std::path::{Path, PathBuf};
 
-pub(crate) use crate::gameindex::{Resref,Strref};
+pub(crate) use crate::gamefiles::{Resref,Strref};
 pub(crate) use macros::{Pack,Table};
 }
-pub mod gameindex {
+pub (crate) mod gamefiles {
 //! Access to the KEY/BIF side of the database.
 //!
 //! Main interface:
@@ -109,7 +110,7 @@ impl<const N: usize> AsRef<str> for StaticString<N> {
 	}
 }
 impl<const N: usize> Debug for StaticString<N> {
-	fn fmt(&self, f:&mut Formatter) -> fmt::Result {
+	fn fmt(&self, f:&mut Formatter<'_>) -> fmt::Result {
 		use std::fmt::Write;
 		f.write_char('"')?;
 		for c in &self.bytes {
@@ -122,7 +123,7 @@ impl<const N: usize> Debug for StaticString<N> {
 	}
 }
 impl<const N: usize> Display for StaticString<N> {
-	fn fmt(&self, f:&mut Formatter) -> fmt::Result {
+	fn fmt(&self, f:&mut Formatter<'_>) -> fmt::Result {
 		Display::fmt(&self.as_ref(), f)
 	}
 }
@@ -218,10 +219,10 @@ impl Pack for String { // String is ignored on pack/unpack:
 /// unnamed structs, we use a named struct here).
 #[derive(Clone,Copy,Default)] pub struct Resref { pub name: StaticString::<8>, }
 impl Debug for Resref {
-	fn fmt(&self, f:&mut Formatter)->fmt::Result { Debug::fmt(&self.name, f) }
+	fn fmt(&self, f:&mut Formatter<'_>)->fmt::Result { Debug::fmt(&self.name, f) }
 }
 impl Display for Resref {
-	fn fmt(&self, f:&mut Formatter)->fmt::Result {Display::fmt(&self.name, f)}
+	fn fmt(&self, f:&mut Formatter<'_>)->fmt::Result {Display::fmt(&self.name, f)}
 }
 impl Pack for Resref {
 	fn unpack(f: &mut impl Read)->io::Result<Self> {
@@ -235,10 +236,10 @@ impl SqlType for Resref {
 	const SQL_TYPE: FieldType = crate::database::FieldType::Resref;
 }
 impl ToSql for Resref {
-	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.name.as_ref().to_sql() }
+	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> { self.name.as_ref().to_sql() }
 }
 impl FromSql for Resref {
-	fn column_result(v: ValueRef)->rusqlite::types::FromSqlResult<Self> {
+	fn column_result(v: ValueRef<'_>)->rusqlite::types::FromSqlResult<Self> {
 		match v {
 			ValueRef::Text(s) => Ok(Resref { name: s.into() }),
 			ValueRef::Null => Ok(Resref { name: "".into() }),
@@ -298,10 +299,10 @@ impl SqlType for Strref {
 	const SQL_TYPE: FieldType = FieldType::Strref;
 }
 impl ToSql for Strref {
-	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput> { self.value.to_sql() }
+	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> { self.value.to_sql() }
 }
 impl FromSql for Strref {
-	fn column_result(v: ValueRef)->rusqlite::types::FromSqlResult<Self> {
+	fn column_result(v: ValueRef<'_>)->rusqlite::types::FromSqlResult<Self> {
 		i32::column_result(v).map(|x| Strref { value: x })
 	}
 }
@@ -415,7 +416,7 @@ impl GameIndex {
 	/// We cannot be a true `Iterator` because of the “streaming iterator”
 	/// problem (aka cannot return references to iterator-owned data),
 	/// so we perform internal iteration by this `for_each` method:
-	pub fn for_each<F>(&self, mut f: F)->Result<()> where F: (FnMut(Restype, ResHandle)->Result<()>) {
+	pub fn for_each<F>(&self, mut f: F)->Result<()> where F: (FnMut(Restype, ResHandle<'_>)->Result<()>) {
 		let pb = Progress::new(self.resources.len(), "resources");
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
 			let path = self.root.join(filename);
@@ -520,8 +521,8 @@ fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->
 	}
 	Ok(o.as_ref().unwrap())
 }
-} // mod gameindex
-pub mod database {
+} // mod gamefiles
+pub (crate) mod database {
 //! Access to the SQL side of the database.
 //!
 //! Main exports are:
@@ -861,9 +862,9 @@ pub trait Table: Sized {
 	/// to produce SQL statements.
 	const SCHEMA: Schema<'static>;
 	/// The low-level insert function for an object to a database row.
-	fn ins(&self, s: &mut Statement, key: &Self::KeyIn)->rusqlite::Result<()>;
+	fn ins(&self, s: &mut Statement<'_>, key: &Self::KeyIn)->rusqlite::Result<()>;
 	/// The low-level select function from a database row to an object.
-	fn sel(r: &Row)->rusqlite::Result<(Self, Self::KeyOut)>;
+	fn sel(r: &Row<'_>)->rusqlite::Result<(Self, Self::KeyOut)>;
 	/// The select [`rusqlite::Statement`] for an object.
 	///
 	/// The name of the table is `{n1}{n2}`; since many tables are built in
@@ -894,7 +895,7 @@ pub struct TypedStatement<'stmt, T: Table> (Statement<'stmt>, PhantomData<T>);
 impl<T: Table> TypedStatement<'_, T> {
 	/// Iterates over this statement, returning (possibly) Rust structs of
 	/// the type associated with this table.
-	pub fn iter<P: rusqlite::Params>(&mut self, params: P)->rusqlite::Result<TypedRows<T>> {
+	pub fn iter<P: rusqlite::Params>(&mut self, params: P) ->rusqlite::Result<TypedRows<'_,T>> {
 		let rows = self.0.query(params)?;
 		Ok(TypedRows { rows, _marker: PhantomData::<T>, index: 0 })
 	}
@@ -935,7 +936,7 @@ impl<T: Table> Iterator for TypedRows<'_,T> {
 	}
 }
 } // mod resources
-pub mod progress {
+pub (crate) mod progress {
 //! Generic useful functions for user interaction.
 //!
 //! This contains among other:
@@ -990,7 +991,7 @@ impl Progress {
 ///
 /// The transaction aborts if the closure returns an `Err` variant, and
 /// commits if it returns an `Ok` variant.
-pub fn transaction<T>(db: &mut Connection, mut f: impl FnMut(&rusqlite::Transaction)->Result<T>)->Result<T> {
+pub fn transaction<T>(db: &mut Connection, mut f: impl FnMut(&rusqlite::Transaction<'_>)->Result<T>)->Result<T> {
 	let t = db.transaction().context("create new transaction")?;
 	let r = f(&t)?; // automatic rollback if Err
 	t.commit()?;
@@ -1003,7 +1004,7 @@ pub mod gamestrings {
 use crate::prelude::*;
 use crate::progress::{Progress};
 use crate::database::{self,ConnectionExt,Table};
-use crate::gameindex::{Pack,GameIndex};
+use crate::gamefiles::{Pack,GameIndex};
 
 #[derive(Debug,Pack)] struct TlkHeader {
 	#[header("TLK V1  ")]
@@ -1164,11 +1165,11 @@ use mlua::{Lua};
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
 use database::{ConnectionExt};
-use gameindex::{GameIndex};
+use gamefiles::{GameIndex};
 use progress::{Progress};
 use gametypes::*;
 
-// Ⅰ init
+// I init
 /// Creates and initializes the game database.
 ///
 /// This creates all relevant tables and views in the database
@@ -1294,7 +1295,7 @@ fn load(db: Connection, game: &GameIndex)->Result<()> {
 	db.exec("commit")?;
 	Ok(())
 }
-// Ⅱ add
+// II add
 // Interface accessible from Lua side:
 //  - foo = item("foo")
 //  - items()
@@ -1321,7 +1322,7 @@ impl rusqlite::ToSql for LuaToSql<'_> {
 }
 /// Implementation of the `setfield` function exported to Lua scripts.
 fn setfield(db: &Connection,
-	(table, key, field, value): (String, String, String, mlua::Value))
+	(table, key, field, value): (String, String, String, mlua::Value<'_>))
 	->Result<(),mlua::Error> {
 		println!("finding schema for {table}");
 	let schema = match RESOURCES.find_schema(&table) {
@@ -1356,7 +1357,32 @@ impl mlua::UserData for LuaWrapper<Statement<'_>> {
 		});
 	}
 }
+impl<T> mlua::UserData for LuaWrapper<RefCell<T>> { }
+use std::cell::{RefCell};
+fn meta_prepare<'a>(_lua: &Lua, LuaWrapper(myself): &LuaWrapper<&'a Connection>, (query,): (String,))->mlua::Result<LuaWrapper<RefCell<Statement<'a>>>> {
+	Ok(LuaWrapper(RefCell::new(myself.prepare(&query).to_lua_err()?)))
+}
 
+// impl<'a> mlua::UserData for LuaWrapper<&'a Connection> {
+// 	fn add_methods<'lua, M: mlua::UserDataMethods<'lua, Self>>(methods: &mut M)
+// 		{
+// 		methods.add_method("prepare",
+// 		|_lua, LuaWrapper(myself), (query,):(String,)| {
+// 			Ok(LuaWrapper(myself.prepare(&query).unwrap()))
+// 		});
+// 	}
+// }
+// 	fn add_methods<'lua, M: mlua::UserDataMethods<'lua, Self>>(methods: &mut M) {
+// 		methods.add_method("prepare",
+// 		|_lua, LuaWrapper(myself), (query,): (String,)| {
+// 			Ok(LuaWrapper(myself.prepare(&query).unwrap()))
+// 		});
+// 	}
+// }
+
+fn add_prep<'a>(db: &'a Connection, _lua: Lua, query: &str)->Statement<'a> {
+	db.prepare(query).unwrap()
+}
 /// Runs the lua script for adding a mod component to the database.
 ///
 /// We provide the lua instance with a `db` object implementing
@@ -1372,6 +1398,8 @@ impl mlua::UserData for LuaWrapper<Statement<'_>> {
 /// written in Lua and read from the config file "init.lua".
 fn command_add(db: Connection, _target: &str)->Result<()> {
 	use crate::database::RowExt;
+	use std::cell::{Cell,RefCell};
+// 	let c = RefCell::new(db);
 	{ // scope lua shorter than db
 	let lua = Lua::new();
 
@@ -1380,33 +1408,35 @@ fn command_add(db: Connection, _target: &str)->Result<()> {
 	lua.scope(|scope| {
 		let globals = lua.globals();
 		let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
-		let exec = scope.create_function(
-		|_lua, (query,): (String,)| {
-			println!("lua told me this: '{query}'");
-			let mut stmt = db.prepare(&query).to_lua_err()?;
-			let mut rows = stmt.query(()).to_lua_err()?;
-			while let Some(row) = rows.next().unwrap() {
-				row.dump();
-			}
-			Ok::<_,anyhow::Error>(())
-		}.to_lua_err())?;
+// 		let exec = scope.create_function(
+// 		|_lua, (query,): (String,)| {
+// 			println!("lua told me this: '{query}'");
+// 			let mut stmt = db.prepare(&query).to_lua_err()?;
+// 			let mut rows = stmt.query(()).to_lua_err()?;
+// 			while let Some(row) = rows.next().unwrap() {
+// 				row.dump();
+// 			}
+// 			Ok::<_,mlua::Error>(())
+// 		})?;
+// 		let prepare = scope.create_function_mut(
+// 		|_lua, (db1, query,): (String,)| {
+// 			vs.push(db.prepare(&query).to_lua_err()?);
+// 		})?;
 
 		// Store the API in a lua table:
 		let simod = lua.create_table()?;
-		simod.set("exec", exec)?;
-		simod.set("setfield", scope.create_function(
-		|_lua, p: (String, String, String, mlua::Value)| setfield(&db, p))?)?;
+// 		simod.set("exec", exec)?;
+// 		simod.set("setfield", scope.create_function(
+// 		|_lua, p: (String, String, String, mlua::Value)| setfield(&db, p))?)?;
 		globals.set("simod", simod)?;
 
-		lua.load(lua_file).exec()
-			.with_context(|| format!("cannot load lua file {lua_file:?}"))
-			.to_lua_err()?;
-			Ok(())
+		lua.load(lua_file).exec()?;
+		Ok(())
 	})?;
 	}
 	Ok(())
 }
-// Ⅲ compile
+// III compile
 /// Before saving: fills the resref translation table.
 fn translate_resrefs(db: &mut Connection)->Result<()> {
 	crate::progress::transaction(db, |db|{
@@ -1469,7 +1499,7 @@ fn save_resources(db: &Connection)->Result<()> {
 	Item::save_all(db)?;
 	Ok(())
 }
-// Ⅳ others: show etc.
+// IV others: show etc.
 fn command_show(db: Connection, target: impl AsRef<str>)->Result<()> {
 	let target = target.as_ref();
 	let (resref, resext) = match target.rfind('.') {

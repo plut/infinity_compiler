@@ -135,7 +135,7 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 		quote!{ self.#ident.pack(f)?; }.to_tokens(&mut writef);
 	}
 	let code = quote! {
-		impl crate::gameindex::Pack for #ident {
+		impl crate::gamefiles::Pack for #ident {
 			fn unpack(f: &mut impl std::io::Read)->std::io::Result<Self> {
 				#readf; Ok(Self{ #build })
 			}

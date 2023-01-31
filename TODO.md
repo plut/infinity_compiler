@@ -9,6 +9,15 @@
     simod compile
     simod restore # restores backup files
 # Lua side:
+ - check type of value passed
+ - determine primitive ops:
+  + `setfield`
+  - `getrow`
+  - `allrows`
+  - `insert`
+ - primitive ops for subresources: get list, insert, delete etc.
+ - build something intelligent to derive a resource accessor
+   from Rust side
  - each mod component is stored in a normalized table containing
    metadata: name, categorization, description, code (function or string),
    compatibility

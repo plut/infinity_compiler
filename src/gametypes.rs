@@ -5,7 +5,7 @@
 use crate::prelude::*;
 use macros::{produce_resource_list};
 use crate::database::{Table,DbTypeCheck};
-use crate::gameindex::{Pack,Restype};
+use crate::gamefiles::{Pack,Restype};
 
 /// Those resources which are associated to a global table.
 pub trait NamedTable: Table {
@@ -25,7 +25,7 @@ pub trait ToplevelResource: NamedTable {
 	/// some `Vec` with elements (subresource, linking-info).
 	type Subresources<'a>;
 	/// Inserts a single resource in the database.
-	fn load(db: &mut DbInserter, cursor: impl Read+Seek, resref: Resref)
+	fn load(db: &mut DbInserter<'_>, cursor: impl Read+Seek, resref: Resref)
 		->Result<()>;
 	/// Saves a single resource (with its subresources) to game files.
 	fn save(&mut self, file: impl Write+Debug, subresources: Self::Subresources<'_>)
@@ -179,7 +179,7 @@ impl ToplevelResource for Item {
 	const EXTENSION: &'static str = "itm";
 	type Subresources<'a> = (&'a mut [(ItemAbility,i64)], &'a mut[(ItemEffect,usize)]);
 	/// load an item from cursor
-	fn load(db: &mut DbInserter, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
+	fn load(db: &mut DbInserter<'_>, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
 		let item = Item::unpack(&mut cursor)?;
 		item.ins(&mut db.tables.items, &(resref,))?;
 
@@ -322,7 +322,7 @@ impl<'a> DbInserter<'a> {
 		self.add_resref.execute((resref,))
 	}
 	/// Loads a new top-level resource
-	pub fn load<T: ToplevelResource>(&mut self, mut handle: crate::gameindex::ResHandle)->Result<()> {
+	pub fn load<T: ToplevelResource>(&mut self, mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
 		T::load(self, handle.open()?, handle.resref)?;
 		*(<T as NamedTable>::find_field_mut(&mut self.resource_count))+=1;
 		Ok(())
@@ -341,4 +341,4 @@ impl Drop for DbInserter<'_> {
 
 // The constants indicating the various resource types also have their
 // place in this mod:
-pub(crate) const RESTYPE_ITM: Restype = Restype { value: 0x03ed };
+pub const RESTYPE_ITM: Restype = Restype { value: 0x03ed };
