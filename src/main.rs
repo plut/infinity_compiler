@@ -660,7 +660,7 @@ impl<'schema> Schema<'schema> {
 	///
 	/// Each column may be preceded by a prefix; this is used for e.g.
 	/// `"new"."column"`.
-	fn columns<T: Display>(&'schema self, s: T)->ColumnWriter<'schema, T> {
+	pub fn columns<T: Display>(&'schema self, s: T)->ColumnWriter<'schema, T> {
 		ColumnWriter { schema: self, prefix: s }
 	}
 	// Step 1: creating tables
@@ -816,12 +816,24 @@ impl<'schema> Schema<'schema> {
 		s.push(')');
 		s
 	}
+	pub fn all_keys(&self, db: &Connection)->rusqlite::Result<Vec<String>> {
+		let mut stmt = db.prepare(&format!(
+			r#"select "{primary_key}" from "{table}""#,
+			primary_key = self.primary_key, table = self.table_name))?;
+		let mut v = Vec::<String>::new();
+		let mut rows = stmt.query(())?;
+		while let Some(row) = rows.next()? {
+			v.push(row.get(0)?)
+		}
+		Ok(v)
+	}
 }
+
 /// A utility type for inserting column headers from a schema in a string.
 ///
 /// This type implements [`std::fmt::Display`], which simplifies writing
 /// some SELECT statements.
-struct ColumnWriter<'a,T: Display> {
+#[derive(Debug)] pub struct ColumnWriter<'a,T: Display> {
 	prefix: T,
 	schema: &'a Schema<'a>,
 }
@@ -1298,12 +1310,13 @@ fn load(db: Connection, game: &GameIndex)->Result<()> {
 // II add
 // Interface accessible from Lua side:
 //  - foo = item("foo")
-//  - items()
+//  - items() — returns a vector of improved strings
 //  - foo.field = value
 // i.e. we need:
 //  - setfield("items", "sw1h34", "field", "value")
 //  - getrow("items", "sw1h34")
-//  - allrows("items")
+//  - allkeys("items")
+/// A simple wrapper allowing `mlua::Value` to be converted to SQL.
 struct LuaToSql<'a>(mlua::Value<'a>);
 impl rusqlite::ToSql for LuaToSql<'_> {
 	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
@@ -1320,48 +1333,94 @@ impl rusqlite::ToSql for LuaToSql<'_> {
 		}
 	}
 }
-/// Implementation of the `setfield` function exported to Lua scripts.
-fn setfield(db: &Connection,
-	(table, key, field, value): (String, String, String, mlua::Value<'_>))
-	->Result<(),mlua::Error> {
-		println!("finding schema for {table}");
-	let schema = match RESOURCES.find_schema(&table) {
-		Some(s) => Ok(s),
-		None => Err(mlua::Error::RuntimeError(format!("unknown table: {table}")))
-	}?;
-	println!("found schema={schema:?}");
-	// TODO: check for appropriateness of value
-	db.execute(&format!(r#"update "{table}" set "{field}"=? where "{primary_key}"='{key}'"#, primary_key = schema.primary_key),
-		(LuaToSql(value),)).to_lua_err()?;
-	Ok(())
-}
+/// mlua does not have a `Result` enum, so here is our own:
+type LuaResult<T> = std::result::Result<T, mlua::Error>;
 /// Passes any Rust error (implementing `Display`) to Lua.
 trait ToLuaError {
-	type LuaResult;
-	fn to_lua_err(self)->Self::LuaResult;
+	type Result;
+	fn to_lua_err(self)->Self::Result;
 }
 impl<T,E: Display+Debug> ToLuaError for std::result::Result<T,E> {
-	type LuaResult = std::result::Result<T,mlua::Error>;
-	fn to_lua_err(self)->Self::LuaResult {
-		self.map_err(|e| { panic!("to_lua_err{e:?}"); mlua::Error::RuntimeError(e.to_string())} )
+	type Result = LuaResult<T>;
+	fn to_lua_err(self)->Self::Result {
+		self.map_err(|e| {
+			panic!("to_lua_err{e:?}");
+			mlua::Error::RuntimeError(e.to_string())
+		})
 	}
+}
+struct LuaError(mlua::Error);
+impl From<mlua::Error> for LuaError {
+	fn from(e: mlua::Error)->Self { Self(e) }
+}
+impl From<rusqlite::Error> for LuaError {
+	fn from(e: rusqlite::Error)->Self {
+		Self(mlua::Error::RuntimeError(e.to_string()))
+	}
+}
+impl LuaError {
+	pub fn extract(self)->mlua::Error { self.0 }
 }
 struct LuaWrapper<T> (T);
-impl mlua::UserData for LuaWrapper<Statement<'_>> {
-	fn add_methods<'lua, M: mlua::UserDataMethods<'lua, Self>>(methods: &mut M) {
-		methods.add_method("column_names",
-		|_lua, LuaWrapper(myself), ()| {
-			println!("column names for statement: {names:?}",
-				names=myself.column_names());
-			Ok(())
-		});
-	}
+impl<T> mlua::UserData for LuaWrapper<T> { }
+use crate::database::Schema;
+fn table_schema(table: &str)->LuaResult<&Schema<'_>> {
+	RESOURCES.table_schema(table).ok_or_else(||
+		mlua::Error::RuntimeError(format!("unknown table: {table}")))
 }
-impl<T> mlua::UserData for LuaWrapper<RefCell<T>> { }
-use std::cell::{RefCell};
-fn meta_prepare<'a>(_lua: &Lua, LuaWrapper(myself): &LuaWrapper<&'a Connection>, (query,): (String,))->mlua::Result<LuaWrapper<RefCell<Statement<'a>>>> {
-	Ok(LuaWrapper(RefCell::new(myself.prepare(&query).to_lua_err()?)))
+/// Lists all possible primary keys for one of the resource tables.
+fn allkeys(db: &Connection, (table,): (String,))->LuaResult<Vec<String>> {
+	table_schema(&table)?.all_keys(db).to_lua_err()
 }
+/// Implementation of the `getrow` function exported to Lua scripts.
+///
+/// Reads a full row from one of the resource tables and returns it as a
+/// Lua table.
+fn getrow<'lua>(db: &Connection, lua: &'lua Lua, (table, key): (String, String))->LuaResult<mlua::Table<'lua>> {
+	let schema = table_schema(&table)?;
+	let tbl = lua.create_table_with_capacity(0,
+		schema.fields.len() as std::ffi::c_int)?;
+	db.query_row_and_then(&format!(
+		r#"select {cols} from "{table}" where "{primary_key}"=?"#,
+		cols = schema.columns(""), primary_key = schema.primary_key), (&key,),
+	|row| {
+		for (i, col) in schema.fields.iter().enumerate() {
+			tbl.set(col.fieldname, row.get::<_,String>(i)?)?;
+		}
+		Ok::<_,LuaError>(tbl)
+	}).map_err(|e| e.extract())
+}
+/// Implementation of the `setfield` function exported to Lua scripts.
+///
+/// Updates a single field in one of the resource tables.
+/// The type of value is not checked (TODO: do this either here or as a SQL
+/// constraint when creating the tables?).
+fn setfield(db: &Connection, (table, key, field, value): (String, String, String, mlua::Value<'_>)) ->LuaResult<()> {
+		println!("finding schema for {table}");
+	let schema = table_schema(&table)?;
+	println!("found schema={schema:?}");
+	db.execute(&format!(
+		r#"update "{table}" set "{field}"=? where "{primary_key}"='{key}'"#,
+		primary_key = schema.primary_key), (LuaToSql(value),))
+		.to_lua_err()?;
+	Ok(())
+}
+
+// impl mlua::UserData for LuaWrapper<Statement<'_>> {
+// 	fn add_methods<'lua, M: mlua::UserDataMethods<'lua, Self>>(methods: &mut M) {
+// 		methods.add_method("column_names",
+// 		|_lua, LuaWrapper(myself), ()| {
+// 			println!("column names for statement: {names:?}",
+// 				names=myself.column_names());
+// 			Ok(())
+// 		});
+// 	}
+// }
+// impl<T> mlua::UserData for LuaWrapper<RefCell<T>> { }
+// use std::cell::{RefCell};
+// fn meta_prepare<'a>(_lua: &Lua, LuaWrapper(myself): &LuaWrapper<&'a Connection>, (query,): (String,))->mlua::Result<LuaWrapper<RefCell<Statement<'a>>>> {
+// 	Ok(LuaWrapper(RefCell::new(myself.prepare(&query).to_lua_err()?)))
+// }
 
 // impl<'a> mlua::UserData for LuaWrapper<&'a Connection> {
 // 	fn add_methods<'lua, M: mlua::UserDataMethods<'lua, Self>>(methods: &mut M)
@@ -1383,6 +1442,17 @@ fn meta_prepare<'a>(_lua: &Lua, LuaWrapper(myself): &LuaWrapper<&'a Connection>,
 fn add_prep<'a>(db: &'a Connection, _lua: Lua, query: &str)->Statement<'a> {
 	db.prepare(query).unwrap()
 }
+fn test_case<'lua,'scope,'conn>(lua: &'lua Lua, scope: &'scope &'scope mlua::Scope<'lua, 'scope>,
+		db: &'conn Connection) where 'conn: 'lua, 'lua: 'scope{
+	let globals = lua.globals();
+	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
+	let f = |_lua: &Lua, (query,): (String,)| {
+		let st = LuaWrapper(db.prepare("foo").to_lua_err()?);
+		let ud = scope.create_nonstatic_userdata(st)?;
+		Ok::<_,mlua::Error>(ud)
+	};
+	let ff = scope.create_function(f);
+}
 /// Runs the lua script for adding a mod component to the database.
 ///
 /// We provide the lua instance with a `db` object implementing
@@ -1402,30 +1472,33 @@ fn command_add(db: Connection, _target: &str)->Result<()> {
 // 	let c = RefCell::new(db);
 	{ // scope lua shorter than db
 	let lua = Lua::new();
+	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
 
-	// We need to wrap the rusqlite calls in a Lua scope to preserve the
+	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
+// 	lua.scope(|scope| { test_case(&lua, &scope, &db); Ok(()) });
 	lua.scope(|scope| {
 		let globals = lua.globals();
-		let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
-// 		let exec = scope.create_function(
-// 		|_lua, (query,): (String,)| {
-// 			println!("lua told me this: '{query}'");
-// 			let mut stmt = db.prepare(&query).to_lua_err()?;
-// 			let mut rows = stmt.query(()).to_lua_err()?;
-// 			while let Some(row) = rows.next().unwrap() {
-// 				row.dump();
-// 			}
-// 			Ok::<_,mlua::Error>(())
-// 		})?;
-// 		let prepare = scope.create_function_mut(
-// 		|_lua, (db1, query,): (String,)| {
-// 			vs.push(db.prepare(&query).to_lua_err()?);
-// 		})?;
+		let exec = scope.create_function(
+		|_lua, (query,): (String,)| {
+			println!("lua told me this: '{query}'");
+			let mut stmt = db.prepare(&query).to_lua_err()?;
+			let mut rows = stmt.query(()).to_lua_err()?;
+			while let Some(row) = rows.next().unwrap() {
+				row.dump();
+			}
+			Ok::<_,mlua::Error>(())
+		})?;
+// 		let prepare = |_lua: &Lua, (query,): (String,)| {
+// 			let stmt = LuaWrapper(db.prepare(&query).to_lua_err()?);
+// 			let userdata = scope.create_nonstatic_userdata(stmt)?;
+// 			Ok::<_,mlua::Error>(userdata)
+// 		};
+// 		let ff = scope.create_function(prepare);
 
 		// Store the API in a lua table:
 		let simod = lua.create_table()?;
-// 		simod.set("exec", exec)?;
+		simod.set("exec", exec)?;
 // 		simod.set("setfield", scope.create_function(
 // 		|_lua, p: (String, String, String, mlua::Value)| setfield(&db, p))?)?;
 		globals.set("simod", simod)?;

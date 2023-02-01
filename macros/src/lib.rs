@@ -328,7 +328,7 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 	let mut map = pm2::TokenStream::new();
 	let mut map_mut = pm2::TokenStream::new();
 	let mut data = pm2::TokenStream::new();
-	let mut find_schema = pm2::TokenStream::new();
+	let mut table_schema = pm2::TokenStream::new();
 	let mut n = 0usize;
 	RESOURCES.with(|v| {
 		use pm2::{Span,Ident};
@@ -345,7 +345,7 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 		quote!{ #field: (), }.to_tokens(&mut data);
 		quote!{ let sch = &<#ty as crate::database::Table>::SCHEMA;
 			if s == sch.table_name { return Some(sch) } }
-			.to_tokens(&mut find_schema);
+			.to_tokens(&mut table_schema);
 	}
 	});
 
@@ -372,8 +372,9 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 			pub fn map_mut<U: Debug,E,F:FnMut(&crate::database::Schema,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources<U>,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map_mut })
 			}
-			pub fn find_schema(&self, s: &str)->Option<&'static crate::database::Schema> {
-				#find_schema; None }
+			/// Given a SQL table name, returns the schema for this table.
+			pub fn table_schema(&self, s: &str)->Option<&'static crate::database::Schema> {
+				#table_schema; None }
 		}
 	};
 	code.into()
