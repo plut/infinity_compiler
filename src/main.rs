@@ -1,11 +1,11 @@
 //! Compiler between IE game files and a SQLite database.
 #![allow(
 	unused_attributes,
-	unused_imports,
-	dead_code,
-	unreachable_code,
+// 	unused_imports,
+// 	dead_code,
+// 	unreachable_code,
 // 	unused_macros,
-	unused_variables,
+// 	unused_variables,
 // 	unused_must_use,
 // 	unused_mut,
 )]
@@ -23,13 +23,13 @@
 	missing_copy_implementations,
 	missing_debug_implementations,
 	elided_lifetimes_in_paths,
-// 	missing_docs,
+	missing_docs,
 )]
 // #![feature(trace_macros)]
 // trace_macros!(false);
 const BACKUP_DIR: &str = "simod-backup";
 
-pub (crate) mod prelude {
+pub(crate) mod prelude {
 //! The set of symbols we want accessible from everywhere in the crate.
 pub(crate) use anyhow::{Result,Context};
 #[allow(unused_imports)]
@@ -46,7 +46,7 @@ pub(crate) use std::path::{Path, PathBuf};
 pub(crate) use crate::gamefiles::{Resref,Strref};
 pub(crate) use macros::{Pack,Table};
 }
-pub (crate) mod gamefiles {
+pub(crate) mod gamefiles {
 //! Access to the KEY/BIF side of the database.
 //!
 //! Main interface:
@@ -152,7 +152,7 @@ pub trait Pack: Sized {
 	fn unpack(f: &mut impl Read)->io::Result<Self>;
 	/// Writes this objects to a binary sink.
 	fn pack(&self, _f: &mut impl Write)->io::Result<()> {
-		println!("Pack for type: {}", crate::type_of(&self));
+		error!("Missing Pack for type: {}", crate::type_of(&self));
 		unimplemented!() }
 	/// Reads a vector of objects (of known size) from a binary source.
 	fn vecunpack(mut f: &mut impl Read, n: usize)->io::Result<Vec<Self>> {
@@ -522,7 +522,7 @@ fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->
 	Ok(o.as_ref().unwrap())
 }
 } // mod gamefiles
-pub (crate) mod database {
+pub(crate) mod database {
 //! Access to the SQL side of the database.
 //!
 //! Main exports are:
@@ -805,9 +805,9 @@ impl<'schema> Schema<'schema> {
 	}
 	// Step 2: populating tables
 	/// The SQL code for populating the database from game files.
-	pub fn insert_statement(&self)->String {
+	pub fn insert_statement(&self, prefix: impl Display)->String {
 		let table_name = &self.table_name;
-		let mut s = format!("insert into \"res_{table_name}\" ({}) values (",
+		let mut s = format!("insert into \"{prefix}{table_name}\" ({}) values (",
 			self.columns(""));
 		for c in 0..self.fields.len() {
 			if c > 0 { s.push(','); }
@@ -816,16 +816,24 @@ impl<'schema> Schema<'schema> {
 		s.push(')');
 		s
 	}
-	pub fn all_keys(&self, db: &Connection)->rusqlite::Result<Vec<String>> {
-		let mut stmt = db.prepare(&format!(
-			r#"select "{primary_key}" from "{table}""#,
-			primary_key = self.primary_key, table = self.table_name))?;
-		let mut v = Vec::<String>::new();
+	fn all_keys_gen<T>(&self, db: &Connection, condition: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
+		let s = format!(r#"select "{primary_key}" from "{table}" {condition}"#,
+			primary_key = self.primary_key, table = self.table_name);
+		let mut stmt = db.prepare(&s)
+			.context("preparing statement")?;
 		let mut rows = stmt.query(())?;
+		let mut v = Vec::<T>::new();
 		while let Some(row) = rows.next()? {
-			v.push(row.get(0)?)
+			v.push(f(row.get_ref(self.primary_key)?)?);
 		}
 		Ok(v)
+	}
+	pub fn all_keys<T>(&self, db: &Connection, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
+		self.all_keys_gen::<T>(db, "", f)
+	}
+	pub fn all_keys_with_parent<T>(&self, db: &Connection, value: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
+		self.all_keys_gen(db, format!(r#"where "{parent_key}"='{value}'"#,
+			parent_key = self.parent_key), f)
 	}
 }
 
@@ -948,7 +956,7 @@ impl<T: Table> Iterator for TypedRows<'_,T> {
 	}
 }
 } // mod resources
-pub (crate) mod progress {
+pub(crate) mod progress {
 //! Generic useful functions for user interaction.
 //!
 //! This contains among other:
@@ -1011,7 +1019,7 @@ pub fn transaction<T>(db: &mut Connection, mut f: impl FnMut(&rusqlite::Transact
 }
 
 } // mod progress
-pub mod gamestrings {
+pub(crate) mod gamestrings {
 //! Access to game strings in database.
 use crate::prelude::*;
 use crate::progress::{Progress};
@@ -1167,12 +1175,203 @@ pub fn save(db: &Connection, game: &GameIndex)->Result<()> {
 	Ok(())
 }
 }
+pub(crate) mod lua_api {
+//! Loads mod-supplied Lua files.
+//!
+//! The API for this module is pretty limited to the [`command_add`]
+//! function.
+use mlua::{Lua,ExternalResult};
+
+use crate::prelude::*;
+use crate::database::{Schema};
+use crate::gametypes::RESOURCES;
+#[derive(Debug)] struct WrappedAnyhow(anyhow::Error);
+impl std::error::Error for WrappedAnyhow{ }
+impl Display for WrappedAnyhow {
+	fn fmt(&self, f: &mut Formatter<'_>)->std::fmt::Result {
+		Display::fmt(&self.0, f)
+	}
+}
+/// Runtime errors during interface between SQL and Lua.
+#[derive(Debug)] enum Error{
+	UnknownTable(String),
+// 	BadType(String),
+// 	BadArgumentNumber(usize, &'static str),
+	MissingArgument,
+	ExtraArgument,
+}
+impl Display for Error {
+	fn fmt(&self, f: &mut Formatter<'_>)->std::fmt::Result {
+		std::fmt::Debug::fmt(&self, f)
+	}
+}
+impl std::error::Error for Error { }
+
+/// A simple wrapper allowing `mlua::Value` to be converted to SQL.
+struct LuaToSql<'a>(mlua::Value<'a>);
+impl rusqlite::ToSql for LuaToSql<'_> {
+	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+		use rusqlite::types::{ToSqlOutput::Owned,Value as SqlValue};
+		let LuaToSql(value,) = self;
+		match value {
+		mlua::Value::Nil => Ok(Owned(SqlValue::Null)),
+		mlua::Value::Boolean(b) => Ok(Owned(SqlValue::Integer(*b as i64))),
+		mlua::Value::Integer(n) => Ok(Owned(SqlValue::Integer(*n))),
+		mlua::Value::Number(x) => Ok(Owned(SqlValue::Real(*x))),
+		mlua::Value::String(ref s) =>
+			Ok(Owned(SqlValue::from(s.to_str().unwrap().to_owned()))),
+		e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
+		}
+	}
+}
+impl<'lua> mlua::FromLua<'lua> for LuaToSql<'lua> {
+	fn from_lua(v: mlua::Value<'lua>, _lua: &'lua Lua)->mlua::Result<Self> {
+		Ok(Self(v))
+	}
+}
+fn sql_to_lua<'lua>(v: rusqlite::types::ValueRef<'_>, lua: &'lua Lua)->Result<mlua::Value<'lua>> {
+	use rusqlite::types::{ValueRef::*};
+	match v {
+		Null => Ok(mlua::Value::Nil),
+		Integer(n) => Ok(mlua::Value::Integer(n)),
+		Real(x) => Ok(mlua::Value::Number(x)),
+		Text(s) => Ok(mlua::Value::String(lua.create_string(&s)?)),
+		_ => Err(rusqlite::types::FromSqlError::InvalidType.into()),
+	}
+}
+/// Returns the table schema for a given table (indexed by the base name
+/// for this resource), or throws a Lua-compatible error.
+fn table_schema(table: &str)->Result<&Schema<'_>> {
+	RESOURCES.table_schema(table)
+		.ok_or_else(|| Error::UnknownTable(table.to_owned()).into())
+}
+fn pop_arg_as<'lua, T: mlua::FromLua<'lua>>(args: &mut mlua::MultiValue<'lua>, lua:&'lua Lua)->Result<T> {
+	let arg0 = args.pop_front().ok_or(Error::MissingArgument)?;
+	let r = T::from_lua(arg0, lua).with_context(||
+		format!("cannot convert argument to type {}", std::any::type_name::<T>()))?;
+	Ok(r)
+}
+/// Lists all possible primary keys for one of the resource tables.
+// fn list_keys(db: &Connection, (table,): (String,))->Result<Vec<String>> {
+// 	Ok(table_schema(&table)?.all_keys(db)?)
+// }
+fn list_keys<'lua>(db: &Connection, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Vec<mlua::Value<'lua>>> {
+	trace!("callback 'simod.list' invoked with: {args:?}");
+	let table_name = pop_arg_as::<String>(&mut args, lua)
+		.context("'simod.list' callback")?;
+	trace!(r#"  first argument is "{table_name}""#);
+	let schema = table_schema(&table_name)?;
+	match args.len() {
+		0 => Ok(schema.all_keys(db, |v| sql_to_lua(v, lua))?),
+		1 => {
+			let key = pop_arg_as::<String>(&mut args, lua)
+				.context("'simod.list' callback")?;
+			trace!(r#"  second argument is "{key}""#);
+			Ok(schema.all_keys_with_parent(db, key, |v| sql_to_lua(v,lua))?)
+		},
+		_ => Err(Error::ExtraArgument.into()),
+	}
+}
+/// Implementation of the `simod.select` function exported to Lua scripts.
+///
+/// Reads a full row from one of the resource tables and returns it as a
+/// Lua table.
+fn select<'lua>(db: &Connection, lua: &'lua Lua, (table, key): (String, String))->Result<mlua::Table<'lua>> {
+	let schema = table_schema(&table)?;
+	let tbl = lua.create_table_with_capacity(0,
+		schema.fields.len() as std::ffi::c_int)?;
+	let s = format!(r#"select {cols} from "{table}" where "{primary_key}"=?"#,
+		cols = schema.columns(""), primary_key = schema.primary_key);
+	trace!("query: {s}; {key}");
+	db.query_row_and_then(&s, (&key,), |row| {
+		for (i, col) in schema.fields.iter().enumerate() {
+			let key = col.fieldname;
+			let val = row.get_ref(i)?;
+			trace!("row {i}, got value {val:?}, expected {:?}", col.fieldtype);
+			tbl.set(key, sql_to_lua(val, lua)
+				.with_context(|| format!("cannot convert value {val:?} to Lua"))?)
+				.with_context(|| format!("cannot set entry for {key} to {val:?}"))?;
+		}
+		Ok(tbl)
+	})
+}
+/// Implementation of the `simod.update` function exported to Lua scripts.
+///
+/// Updates a single field in one of the resource tables.
+/// The type of value is not checked (TODO: do this either here or as a SQL
+/// constraint when creating the tables?).
+fn update(db: &Connection, (table, key, field, value): (String, String, String, mlua::Value<'_>))->Result<()> {
+	let schema = table_schema(&table)?;
+	let s = format!(
+		r#"update "{table}" set "{field}"=? where "{primary_key}"='{key}'"#,
+		primary_key = schema.primary_key);
+	db.execute(&s, (LuaToSql(value),))
+		.with_context(|| format!("failed SQL query: {s}"))?;
+	Ok(())
+}
+/// Implementation of `simod.insert` exported to Lua.
+fn insert(db: &Connection, (key, vals): (String, mlua::Table<'_>))->Result<()> {
+	use crate::database::Column;
+	let schema = table_schema(&key)?;
+	let mut stmt = db.prepare(&schema.insert_statement(""))?;
+	let mut fields = Vec::<LuaToSql<'_>>::with_capacity(schema.fields.len());
+	for Column { fieldname, .. } in schema.fields.iter() {
+		fields.push(vals.get(*fieldname)?);
+	}
+	stmt.execute(rusqlite::params_from_iter(fields))?;
+	Ok(())
+}
+/// Runs the lua script for adding a mod component to the database.
+///
+/// We provide the lua side with a minimal low-level interface:
+///  - update("items", "sw1h34", "field", "value")
+///  - select("items", "sw1h34")
+///  - insert("items", ...)
+///  - list("items")
+///  - list("item_abilities", "sw1h34") etc.
+/// All code with a higher level is written in lua and loaded from the
+/// "init.lua" file.
+pub fn command_add(db: Connection, _target: &str)->Result<()> {
+	use crate::database::RowExt;
+	let lua = Lua::new();
+	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
+
+	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
+	// lifetimes of the references therein:
+	lua.scope(|scope| {
+		let simod = lua.create_table()?;
+		simod.set("dump", scope.create_function(
+		|_lua, (query,): (String,)| {
+			debug!("lua called exec with query {query}");
+			let mut stmt = db.prepare(&query).to_lua_err()?;
+			let mut rows = stmt.query(()).to_lua_err()?;
+			while let Some(row) = rows.next().unwrap() {
+				row.dump();
+			}
+			Ok::<_,mlua::Error>(())
+		})?)?;
+		simod.set("list", scope.create_function(
+			|_lua, args| list_keys(&db, &lua, args).to_lua_err())?)?;
+		simod.set("select", scope.create_function(
+			|_lua, args| select(&db, &lua, args).to_lua_err())?)?;
+		simod.set("update", scope.create_function(
+			|_lua, args| update(&db, args).to_lua_err())?)?;
+		simod.set("insert", scope.create_function(
+			|_lua, args| insert(&db, args).to_lua_err())?)?;
+		lua.globals().set("simod", simod)?;
+
+		info!("loading file {lua_file:?}");
+		lua.load(lua_file).exec()?;
+		Ok(())
+	})?;
+	Ok(())
+}
+} // mod lua_api
 
 pub mod gametypes;
 
 use crate::prelude::*;
 use clap::Parser;
-use mlua::{Lua};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
@@ -1187,12 +1386,10 @@ use gametypes::*;
 /// This creates all relevant tables and views in the database
 /// (but does not fill them).
 ///
-/// There are global tables, per-resource tables, and per-language
-/// tables.
+/// There are global tables, per-resource tables, and per-language tables.
 /// The per-resource tables are described in the
 /// [`database::Schema::create_tables_and_views`] function.
-/// The per-language tables are described in
-/// [`create_language_tables`].
+/// The per-language tables are described in [`create_language_tables`].
 /// The global tables are the following:
 ///
 /// - `global`: a single-row table holding the global variables:
@@ -1213,7 +1410,7 @@ use gametypes::*;
 pub fn create_db(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Connection> {
 	use std::fmt::Write;
 	let db_file = db_file.as_ref();
-	println!("creating file {db_file:?}");
+	info!("creating file {db_file:?}");
 	if Path::new(&db_file).exists() {
 		fs::remove_file(db_file)
 		.with_context(|| format!("cannot remove DB file: {db_file:?}"))?;
@@ -1251,7 +1448,7 @@ end;
 					)?;
 			}
 		}
-// 		println!("  creating for resource {}", schema.table_name);
+		info!("  creating tables for resource {}", schema.table_name);
 		schema.create_tables_and_views(db)?; Result::<()>::Ok(())
 	})?;
 	db.exec(new_strings)?; Ok(())
@@ -1308,207 +1505,6 @@ fn load(db: Connection, game: &GameIndex)->Result<()> {
 	Ok(())
 }
 // II add
-// Interface accessible from Lua side:
-//  - foo = item("foo")
-//  - items() — returns a vector of improved strings
-//  - foo.field = value
-// i.e. we need:
-//  - setfield("items", "sw1h34", "field", "value")
-//  - getrow("items", "sw1h34")
-//  - allkeys("items")
-/// A simple wrapper allowing `mlua::Value` to be converted to SQL.
-struct LuaToSql<'a>(mlua::Value<'a>);
-impl rusqlite::ToSql for LuaToSql<'_> {
-	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-		use rusqlite::types::{ToSqlOutput::Owned,Value as SqlValue};
-		let LuaToSql(value,) = self;
-		match value {
-		mlua::Value::Nil => Ok(Owned(SqlValue::Null)),
-		mlua::Value::Boolean(b) => Ok(Owned(SqlValue::Integer(*b as i64))),
-		mlua::Value::Integer(n) => Ok(Owned(SqlValue::Integer(*n))),
-		mlua::Value::Number(x) => Ok(Owned(SqlValue::Real(*x))),
-		mlua::Value::String(ref s) =>
-			Ok(Owned(SqlValue::from(s.to_str().unwrap().to_owned()))),
-		e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
-		}
-	}
-}
-/// mlua does not have a `Result` enum, so here is our own:
-type LuaResult<T> = std::result::Result<T, mlua::Error>;
-/// Passes any Rust error (implementing `Display`) to Lua.
-trait ToLuaError {
-	type Result;
-	fn to_lua_err(self)->Self::Result;
-}
-impl<T,E: Display+Debug> ToLuaError for std::result::Result<T,E> {
-	type Result = LuaResult<T>;
-	fn to_lua_err(self)->Self::Result {
-		self.map_err(|e| {
-			panic!("to_lua_err{e:?}");
-			mlua::Error::RuntimeError(e.to_string())
-		})
-	}
-}
-struct LuaError(mlua::Error);
-impl From<mlua::Error> for LuaError {
-	fn from(e: mlua::Error)->Self { Self(e) }
-}
-impl From<rusqlite::Error> for LuaError {
-	fn from(e: rusqlite::Error)->Self {
-		Self(mlua::Error::RuntimeError(e.to_string()))
-	}
-}
-impl LuaError {
-	pub fn extract(self)->mlua::Error { self.0 }
-}
-struct LuaWrapper<T> (T);
-impl<T> mlua::UserData for LuaWrapper<T> { }
-use crate::database::Schema;
-fn table_schema(table: &str)->LuaResult<&Schema<'_>> {
-	RESOURCES.table_schema(table).ok_or_else(||
-		mlua::Error::RuntimeError(format!("unknown table: {table}")))
-}
-/// Lists all possible primary keys for one of the resource tables.
-fn allkeys(db: &Connection, (table,): (String,))->LuaResult<Vec<String>> {
-	table_schema(&table)?.all_keys(db).to_lua_err()
-}
-/// Implementation of the `getrow` function exported to Lua scripts.
-///
-/// Reads a full row from one of the resource tables and returns it as a
-/// Lua table.
-fn getrow<'lua>(db: &Connection, lua: &'lua Lua, (table, key): (String, String))->LuaResult<mlua::Table<'lua>> {
-	let schema = table_schema(&table)?;
-	let tbl = lua.create_table_with_capacity(0,
-		schema.fields.len() as std::ffi::c_int)?;
-	db.query_row_and_then(&format!(
-		r#"select {cols} from "{table}" where "{primary_key}"=?"#,
-		cols = schema.columns(""), primary_key = schema.primary_key), (&key,),
-	|row| {
-		for (i, col) in schema.fields.iter().enumerate() {
-			tbl.set(col.fieldname, row.get::<_,String>(i)?)?;
-		}
-		Ok::<_,LuaError>(tbl)
-	}).map_err(|e| e.extract())
-}
-/// Implementation of the `setfield` function exported to Lua scripts.
-///
-/// Updates a single field in one of the resource tables.
-/// The type of value is not checked (TODO: do this either here or as a SQL
-/// constraint when creating the tables?).
-fn setfield(db: &Connection, (table, key, field, value): (String, String, String, mlua::Value<'_>)) ->LuaResult<()> {
-		println!("finding schema for {table}");
-	let schema = table_schema(&table)?;
-	println!("found schema={schema:?}");
-	db.execute(&format!(
-		r#"update "{table}" set "{field}"=? where "{primary_key}"='{key}'"#,
-		primary_key = schema.primary_key), (LuaToSql(value),))
-		.to_lua_err()?;
-	Ok(())
-}
-
-// impl mlua::UserData for LuaWrapper<Statement<'_>> {
-// 	fn add_methods<'lua, M: mlua::UserDataMethods<'lua, Self>>(methods: &mut M) {
-// 		methods.add_method("column_names",
-// 		|_lua, LuaWrapper(myself), ()| {
-// 			println!("column names for statement: {names:?}",
-// 				names=myself.column_names());
-// 			Ok(())
-// 		});
-// 	}
-// }
-// impl<T> mlua::UserData for LuaWrapper<RefCell<T>> { }
-// use std::cell::{RefCell};
-// fn meta_prepare<'a>(_lua: &Lua, LuaWrapper(myself): &LuaWrapper<&'a Connection>, (query,): (String,))->mlua::Result<LuaWrapper<RefCell<Statement<'a>>>> {
-// 	Ok(LuaWrapper(RefCell::new(myself.prepare(&query).to_lua_err()?)))
-// }
-
-// impl<'a> mlua::UserData for LuaWrapper<&'a Connection> {
-// 	fn add_methods<'lua, M: mlua::UserDataMethods<'lua, Self>>(methods: &mut M)
-// 		{
-// 		methods.add_method("prepare",
-// 		|_lua, LuaWrapper(myself), (query,):(String,)| {
-// 			Ok(LuaWrapper(myself.prepare(&query).unwrap()))
-// 		});
-// 	}
-// }
-// 	fn add_methods<'lua, M: mlua::UserDataMethods<'lua, Self>>(methods: &mut M) {
-// 		methods.add_method("prepare",
-// 		|_lua, LuaWrapper(myself), (query,): (String,)| {
-// 			Ok(LuaWrapper(myself.prepare(&query).unwrap()))
-// 		});
-// 	}
-// }
-
-fn add_prep<'a>(db: &'a Connection, _lua: Lua, query: &str)->Statement<'a> {
-	db.prepare(query).unwrap()
-}
-fn test_case<'lua,'scope,'conn>(lua: &'lua Lua, scope: &'scope &'scope mlua::Scope<'lua, 'scope>,
-		db: &'conn Connection) where 'conn: 'lua, 'lua: 'scope{
-	let globals = lua.globals();
-	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
-	let f = |_lua: &Lua, (query,): (String,)| {
-		let st = LuaWrapper(db.prepare("foo").to_lua_err()?);
-		let ud = scope.create_nonstatic_userdata(st)?;
-		Ok::<_,mlua::Error>(ud)
-	};
-	let ff = scope.create_function(f);
-}
-/// Runs the lua script for adding a mod component to the database.
-///
-/// We provide the lua instance with a `db` object implementing
-/// a subset of `lsqlite3`'s API:
-/// [`http://lua.sqlite.org/index.cgi/doc/tip/doc/lsqlite3.wiki`]
-/// This avoids loading sqlite twice (since we already have
-/// rusqlite on-hand here).
-///
-/// Namely, the following functions are implemented:
-///  - `db:exec` directly executes a Lua query;
-///
-/// For simplicity, all code which is strictly higher-level than this is
-/// written in Lua and read from the config file "init.lua".
-fn command_add(db: Connection, _target: &str)->Result<()> {
-	use crate::database::RowExt;
-	use std::cell::{Cell,RefCell};
-// 	let c = RefCell::new(db);
-	{ // scope lua shorter than db
-	let lua = Lua::new();
-	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
-
-	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
-	// lifetimes of the references therein:
-// 	lua.scope(|scope| { test_case(&lua, &scope, &db); Ok(()) });
-	lua.scope(|scope| {
-		let globals = lua.globals();
-		let exec = scope.create_function(
-		|_lua, (query,): (String,)| {
-			println!("lua told me this: '{query}'");
-			let mut stmt = db.prepare(&query).to_lua_err()?;
-			let mut rows = stmt.query(()).to_lua_err()?;
-			while let Some(row) = rows.next().unwrap() {
-				row.dump();
-			}
-			Ok::<_,mlua::Error>(())
-		})?;
-// 		let prepare = |_lua: &Lua, (query,): (String,)| {
-// 			let stmt = LuaWrapper(db.prepare(&query).to_lua_err()?);
-// 			let userdata = scope.create_nonstatic_userdata(stmt)?;
-// 			Ok::<_,mlua::Error>(userdata)
-// 		};
-// 		let ff = scope.create_function(prepare);
-
-		// Store the API in a lua table:
-		let simod = lua.create_table()?;
-		simod.set("exec", exec)?;
-// 		simod.set("setfield", scope.create_function(
-// 		|_lua, p: (String, String, String, mlua::Value)| setfield(&db, p))?)?;
-		globals.set("simod", simod)?;
-
-		lua.load(lua_file).exec()?;
-		Ok(())
-	})?;
-	}
-	Ok(())
-}
 // III compile
 /// Before saving: fills the resref translation table.
 fn translate_resrefs(db: &mut Connection)->Result<()> {
@@ -1581,7 +1577,7 @@ fn command_show(db: Connection, target: impl AsRef<str>)->Result<()> {
 	};
 	match resext.to_lowercase().as_ref() {
 		"itm" => Item::show_all(&db, resref),
-		x => { println!("unknown resource type: {x}"); Ok(()) },
+		x => { warn!("unknown resource type: {x}"); Ok(()) },
 	}
 }
 /// Restores all backed up files.
@@ -1678,8 +1674,10 @@ fn main() -> Result<()> {
 		Command::Init => load(create_db(&db_file, &game)?, &game)?,
 		Command::Save => command_save(&game, database::open(db_file)?)?,
 		Command::Restore => command_restore(&game)?,
-		Command::Show{ target, .. } => command_show(database::open(db_file)?, target)?,
-		Command::Add{ target, .. } => command_add(database::open(db_file)?, &target)?,
+		Command::Show{ target, .. } =>
+			command_show(database::open(db_file)?, target)?,
+		Command::Add{ target, .. } =>
+			lua_api::command_add(database::open(db_file)?, &target)?,
 		_ => todo!(),
 	};
 	info!("execution terminated with flying colors");

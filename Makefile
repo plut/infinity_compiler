@@ -22,5 +22,6 @@ test:
 	rm -rf $(BG)/simod_out
 	$(RUN) -O init.log init
 	echo "update \"items\" set price=5,name='A new name for Albruin' where itemref='sw1h34';" | sqlite3 $(DB)
-	$(RUN) -O show.log show sw1h03.itm
+	$(RUN) -O show.log show sw1h34.itm
+	$(RUN) -O add.log add target
 	$(RUN) -O save.log save

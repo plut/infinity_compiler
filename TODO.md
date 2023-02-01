@@ -12,10 +12,11 @@
  - check type of value passed
  - determine primitive ops:
   + `setfield`
-  - `getrow`
-  - `allrows`
-  - `insert`
- - primitive ops for subresources: get list, insert, delete etc.
+  + `getrow`
+  + `allrows`
+  + `insert`
+ - check arguments from Rust side (make them variadic) and allow two
+   forms for `list` call
  - build something intelligent to derive a resource accessor
    from Rust side
  - each mod component is stored in a normalized table containing
@@ -33,8 +34,8 @@
 # Rust side:
  + move all `*_item` etc. functions to `gametypes`
   + define a `ToplevelResource` trait for this...
-  - and un-`pub` all fields...
- - add a module holding common functions for game strings
+  + and un-`pub` all fields...
+ + add a module holding common functions for game strings
  - show: add a flag to keep original resref and a language selector
  - we can probably replace TypedStatement by some trait StructuredRead<T>
    (or even better, include this in Table trait)

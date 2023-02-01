@@ -76,6 +76,7 @@ pub trait ToplevelResource: NamedTable {
 #[derive(Debug,Pack,Table)]
 #[allow(missing_copy_implementations)]
 #[resource(item_effects,itemref,items)] pub struct ItemEffect {
+#[column(effectref, auto, "primary key")]
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
 #[column(abref, Option<i64>, r#"references "item_abilities"("abref")"#)]
 	opcode: u16, //opcode,
@@ -259,7 +260,7 @@ impl ToplevelResource for Item {
 			}
 			for x in sel_item_eff.iter((&itemref,))? {
 				if x.is_db_malformed() { continue }
-				let (eff, (_, parent)) = x?;
+				let (eff, (_, _, parent)) = x?;
 				let ab_id = match abilities.iter().position(|&(_, abref)| Some(abref) == parent) {
 					Some(i) => { abilities[i].0.effect_count+= 1; i },
 					None    => { item.equip_effect_count+= 1; usize::MAX},
@@ -313,7 +314,7 @@ impl<'a> DbInserter<'a> {
 	/// resources.
 	pub fn new(db: &'a Connection)->Result<Self> {
 		Ok(Self { db,
-		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_statement()) )?,
+		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_statement("res_")) )?,
 		resource_count: RESOURCES.map(|_,_| Ok::<usize,rusqlite::Error>(0))?,
 		add_resref: db.prepare(r#"insert or ignore into "resref_orig" values (?)"#)?
 	}) }
@@ -341,4 +342,5 @@ impl Drop for DbInserter<'_> {
 
 // The constants indicating the various resource types also have their
 // place in this mod:
+/// See iesdp
 pub const RESTYPE_ITM: Restype = Restype { value: 0x03ed };
