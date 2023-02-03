@@ -2,6 +2,11 @@
 //!
 //! This crate makes heavy use of the `Pack` and `Table` derive macros to
 //! automatically interface with game files and the SQL database.
+//!
+//! **Most** of the Lua-side definition of resource schemas is also
+//! derived from here. The exception is the relation between resources
+//! and their subresources. For now, this is inserted by hand by the
+//! `init.lua` file.
 use crate::prelude::*;
 use macros::{produce_resource_list};
 use crate::database::{Table,DbTypeCheck};
@@ -293,9 +298,9 @@ Attack type: {atype}",
 }
 
 // This last invocation closes the list of resources above, generating:
-//  - the `ByResource<T>` type constructor,
-//  - its implementation of `iter()` and an iterator
-//  - and the constant holding the parent resources.
+//  - the `AllResource<T>` type constructor,
+//  - its implementation of `map()`,
+//  - and the constant `RESOURCES`, which holds the parent resources.
 produce_resource_list!();
 
 /// A structure holding insertion statements for all resource types.

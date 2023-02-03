@@ -1,4 +1,6 @@
 # Global
+ - see if primary_key should maybe be renamed as `pk` everywhere for
+   simplifying?
  + the program is named `simod`
  - embed lua into rust (and give sql access through rusqlite)
  + accept subcommands: (PARTLY DONE)
@@ -9,11 +11,14 @@
     simod compile
     simod restore # restores backup files
 # Lua side:
+ + insert sub-resources in schema visible from lua
+  + currently by hand
+ - (optional) call `luac` on init.lua to save a bit of loading time
  - check type of value passed
  - determine primitive ops:
-  + `setfield`
-  + `getrow`
-  + `allrows`
+  + `update`
+  + `select`
+  + `list`
   + `insert`
  - check arguments from Rust side (make them variadic) and allow two
    forms for `list` call
@@ -32,6 +37,9 @@
     the sql table name
  `mlua::Lua::load(Path)` should work
 # Rust side:
+ - insert pre-existing override files in db
+ - backup of (pre-existing) override files when writing them
+ - restore override files
  + move all `*_item` etc. functions to `gametypes`
   + define a `ToplevelResource` trait for this...
   + and un-`pub` all fields...

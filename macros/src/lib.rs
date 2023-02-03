@@ -168,14 +168,13 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	let mut build = TS2::new();
 	let mut ncol = 0usize;
 	let mut primary_key = String::from("rowid");
-	let ty_i64: syn::Type = syn::parse_str("i64").unwrap();
-	let mut add_schema = |fieldname: &str, ty: &syn::Type, extra: &str| {
+// 	let ty_i64: syn::Type = syn::parse_str("i64").unwrap();
+	let add_schema = |fieldname: &str, ty: &syn::Type, extra: &str| {
 		quote!{ crate::database::Column {
 			fieldname: #fieldname,
 			fieldtype: <#ty as crate::database::SqlType>::SQL_TYPE,
 			extra: #extra},
-		}.to_tokens(&mut schema);
-	};
+		} }; //.to_tokens(&mut schema);
 	let DeriveInput{ ident, data, attrs, generics, .. } = parse_macro_input!(tokens);
 	let flist = struct_fields(data);
 	let mut table_name = String::new();
@@ -202,7 +201,8 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 		}
 		let fieldname = ident.as_ref().unwrap().to_string();
 // 		let fieldtype = toks_to_string(&ty);
-		add_schema(fieldname.as_str(), &ty, current.extra.as_str());
+		add_schema(fieldname.as_str(), &ty, current.extra.as_str())
+			.to_tokens(&mut schema);
 		quote!{ self.#ident, }.to_tokens(&mut params);
 		quote!{ #ident: row.get::<_,#ty>(#ncol)?, }.to_tokens(&mut build);
 		ncol+= 1;
@@ -228,21 +228,27 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	let mut key_in = TS2::new();
 	let mut keycol_in = 0;
 	let mut key_out = TS2::new();
-	let mut build2 = TS2::new();
+	let mut build_key = TS2::new();
 	for (fieldname, ty, extra) in fields2 {
 		if toks_to_string(&ty) == "auto" {
 			// we use i64 since this is the return type of last_insert_rowid()
-			add_schema(fieldname.as_str(), &ty_i64, extra.as_str());
+// 			add_schema(fieldname.as_str(), &ty_i64, extra.as_str());
+		quote!{ crate::database::Column {
+			fieldname: #fieldname,
+			fieldtype: crate::database::FieldType::Rowid,
+			extra: #extra},
+		}.to_tokens(&mut schema);
 			quote!{ crate::rusqlite::types::Null, }.to_tokens(&mut params);
-			quote!{ row.get::<_,i64>(#ncol)?, }.to_tokens(&mut build2);
+			quote!{ row.get::<_,i64>(#ncol)?, }.to_tokens(&mut build_key);
 			quote!{ i64, }.to_tokens(&mut key_out);
 		} else {
-			add_schema(fieldname.as_str(), &ty, extra.as_str());
+			add_schema(fieldname.as_str(), &ty, extra.as_str())
+				.to_tokens(&mut schema);
 			let kc = pm2::Literal::isize_unsuffixed(keycol_in);
 			quote!{ #ty, }.to_tokens(&mut key_in);
 			quote!{ k.#kc, }.to_tokens(&mut params);
 			quote!{ #ty, }.to_tokens(&mut key_out);
-			quote!{ row.get_unwrap::<_,#ty>(#ncol), }.to_tokens(&mut build2);
+			quote!{ row.get_unwrap::<_,#ty>(#ncol), }.to_tokens(&mut build_key);
 			keycol_in+= 1;
 		}
 		ncol+= 1;
@@ -260,7 +266,7 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 				s.execute(rusqlite::params![#params])?; Ok(())
 			}
 			fn sel(row: &crate::rusqlite::Row)->crate::rusqlite::Result<(Self, Self::KeyOut)> {
-				Ok((Self{ #build }, (#build2)))
+				Ok((Self{ #build }, (#build_key)))
 			}
 		}
 	};

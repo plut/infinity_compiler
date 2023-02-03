@@ -45,6 +45,8 @@ pub(crate) use std::path::{Path, PathBuf};
 
 pub(crate) use crate::gamefiles::{Resref,Strref};
 pub(crate) use macros::{Pack,Table};
+
+pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
 }
 pub(crate) mod gamefiles {
 //! Access to the KEY/BIF side of the database.
@@ -250,6 +252,7 @@ impl FromSql for Resref {
 impl Resref {
 	// iterates until `test` returns FALSE
 	pub fn fresh(source: &str, mut is_used: impl FnMut(&Resref)->rusqlite::Result<bool> )->rusqlite::Result<Self> {
+		trace!("resref:: fresh({source})");
 // 		let mut n = std::cmp::min(source.len(), 8)-1;
 		let mut l = 0;
 		let mut buf = Self { name: StaticString { bytes: [0u8; 8] } };
@@ -264,6 +267,7 @@ impl Resref {
 				if n >= 8 { break }
 			}
 		}
+		trace!("found n={n}, initial buf.name.bytes = {:?}", buf.name.bytes);
 		n-= 1;
 		for j in 1..111_111_111 {
 			// This panics after all 111_111_111 possibilities have been
@@ -590,19 +594,42 @@ impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
 }
 
 
-#[derive(Debug,Clone,Copy,PartialEq)]
 /// An utility enum defining SQL behaviour for a given resource field type.
 ///
 /// This is somewhat different from [`rusqlite::types::Type`]:
 ///  - not all SQLite types exist here;
 ///  - the `Strref` variant can accept either a string or an integer,
 /// etc.
-pub enum FieldType { Integer, Text, Resref, Strref }
+#[derive(Debug,Clone,Copy,PartialEq)]
+#[non_exhaustive] pub enum FieldType {
+	/// Plain integer.
+	Integer,
+	/// Plain text.
+	Text,
+	/// A resource reference: a string translated using `resref_dict`.
+	Resref,
+	/// A string reference: either an integer or a string translated using
+	/// `strref_dict`.
+	Strref,
+	/// The primary key. This value is not inserted, but recovered via
+	/// [`rusqlite::Connection::last_insert_rowid`].
+	Rowid,
+}
 impl FieldType {
 	pub const fn affinity(self)->&'static str {
 		match self {
+			FieldType::Rowid |
 			FieldType::Integer | FieldType::Strref => r#"integer default 0"#,
 			FieldType::Text | FieldType::Resref => r#"text default """#,
+		}
+	}
+	pub const fn to_lua(self)->&'static str {
+		match self {
+			FieldType::Integer => "integer",
+			FieldType::Text => "text",
+			FieldType::Resref => "resref",
+			FieldType::Strref => "strref",
+			FieldType::Rowid => "auto",
 		}
 	}
 }
@@ -1178,20 +1205,34 @@ pub fn save(db: &Connection, game: &GameIndex)->Result<()> {
 pub(crate) mod lua_api {
 //! Loads mod-supplied Lua files.
 //!
-//! The API for this module is pretty limited to the [`command_add`]
-//! function.
+//! This module supplies the [`command_add`] function, which runs
+//! user-supplied Lua code on the database.
+//!
+//! The Lua interpreter is first equipped with a `simod` table containing
+//! a basic API into the database. **This API is not stabilized yet**.
+//! It currently contains the following functions:
+//!
+//!  - `simod.list(table, [parent])`: returns a list of primary keys in
+//!    the named table (string). If `parent` is given, then only those
+//!    primary keys for rows attached to the named toplevel resource are
+//!    returned.
+//!  - `simod.select(table, key)`: returns a table representing one
+//!    single row in the named table (string); the table keys are the
+//!    column headers.
+//!  - `simod.update(table, key, field, value)`: updates a single field
+//!    in the table.
+//!  - `simod.insert(table, row, context)`: inserts a full row in the
+//!    table. The columns are read from the merge of both tables `row`
+//!    and `context`.
+//!
+//! Any error occurring during execution of one of those functions
+//! (including SQL errors) is passed back to Lua in the form of a
+//! callback error.
 use mlua::{Lua,ExternalResult};
 
 use crate::prelude::*;
 use crate::database::{Schema};
 use crate::gametypes::RESOURCES;
-#[derive(Debug)] struct WrappedAnyhow(anyhow::Error);
-impl std::error::Error for WrappedAnyhow{ }
-impl Display for WrappedAnyhow {
-	fn fmt(&self, f: &mut Formatter<'_>)->std::fmt::Result {
-		Display::fmt(&self.0, f)
-	}
-}
 /// Runtime errors during interface between SQL and Lua.
 #[derive(Debug)] enum Error{
 	UnknownTable(String),
@@ -1208,7 +1249,7 @@ impl Display for Error {
 impl std::error::Error for Error { }
 
 /// A simple wrapper allowing `mlua::Value` to be converted to SQL.
-struct LuaToSql<'a>(mlua::Value<'a>);
+#[derive(Debug)] struct LuaToSql<'a>(mlua::Value<'a>);
 impl rusqlite::ToSql for LuaToSql<'_> {
 	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
 		use rusqlite::types::{ToSqlOutput::Owned,Value as SqlValue};
@@ -1229,6 +1270,10 @@ impl<'lua> mlua::FromLua<'lua> for LuaToSql<'lua> {
 		Ok(Self(v))
 	}
 }
+/// Value conversion in the Sql->Lua direction.
+///
+/// Note that this function needs access to the `[mlua::Lua]` instance so
+/// that it may allocate strings.
 fn sql_to_lua<'lua>(v: rusqlite::types::ValueRef<'_>, lua: &'lua Lua)->Result<mlua::Value<'lua>> {
 	use rusqlite::types::{ValueRef::*};
 	match v {
@@ -1245,13 +1290,17 @@ fn table_schema(table: &str)->Result<&Schema<'_>> {
 	RESOURCES.table_schema(table)
 		.ok_or_else(|| Error::UnknownTable(table.to_owned()).into())
 }
+/// Helper function for reading arguments passed to Lua callbacks.
+///
+/// Reads an argument as the given `FromLua` type and returns it,
+/// wrapped in a `Result`.
 fn pop_arg_as<'lua, T: mlua::FromLua<'lua>>(args: &mut mlua::MultiValue<'lua>, lua:&'lua Lua)->Result<T> {
 	let arg0 = args.pop_front().ok_or(Error::MissingArgument)?;
 	let r = T::from_lua(arg0, lua).with_context(||
 		format!("cannot convert argument to type {}", std::any::type_name::<T>()))?;
 	Ok(r)
 }
-/// Lists all possible primary keys for one of the resource tables.
+/// Implementation of `simod.list`.
 // fn list_keys(db: &Connection, (table,): (String,))->Result<Vec<String>> {
 // 	Ok(table_schema(&table)?.all_keys(db)?)
 // }
@@ -1272,7 +1321,7 @@ fn list_keys<'lua>(db: &Connection, lua: &'lua Lua, mut args: mlua::MultiValue<'
 		_ => Err(Error::ExtraArgument.into()),
 	}
 }
-/// Implementation of the `simod.select` function exported to Lua scripts.
+/// Implementation of `simod.select`.
 ///
 /// Reads a full row from one of the resource tables and returns it as a
 /// Lua table.
@@ -1292,10 +1341,10 @@ fn select<'lua>(db: &Connection, lua: &'lua Lua, (table, key): (String, String))
 				.with_context(|| format!("cannot convert value {val:?} to Lua"))?)
 				.with_context(|| format!("cannot set entry for {key} to {val:?}"))?;
 		}
-		Ok(tbl)
-	})
+		any_ok(tbl)
+	}).with_context(|| format!(r#"failed to query row '{key}' in "{table}""#))
 }
-/// Implementation of the `simod.update` function exported to Lua scripts.
+/// Implementation of `simod.update`.
 ///
 /// Updates a single field in one of the resource tables.
 /// The type of value is not checked (TODO: do this either here or as a SQL
@@ -1309,16 +1358,42 @@ fn update(db: &Connection, (table, key, field, value): (String, String, String, 
 		.with_context(|| format!("failed SQL query: {s}"))?;
 	Ok(())
 }
-/// Implementation of `simod.insert` exported to Lua.
-fn insert(db: &Connection, (key, vals): (String, mlua::Table<'_>))->Result<()> {
-	use crate::database::Column;
-	let schema = table_schema(&key)?;
+/// Implementation of `simod.insert`.
+fn insert(db: &Connection, (table, vals, context): (String, mlua::Table<'_>, mlua::Table<'_>))->Result<()> {
+	use crate::database::{Column,FieldType};
+	let schema = table_schema(&table)?;
+	trace!("schema for {table}: {schema:?}");
 	let mut stmt = db.prepare(&schema.insert_statement(""))?;
 	let mut fields = Vec::<LuaToSql<'_>>::with_capacity(schema.fields.len());
-	for Column { fieldname, .. } in schema.fields.iter() {
-		fields.push(vals.get(*fieldname)?);
+	for Column { fieldname, fieldtype, .. } in schema.fields.iter() {
+		if *fieldtype == FieldType::Rowid {
+			// don't insert the primary key! instead, let sqlite determine it
+			// and later fix the table with the correct key:
+			fields.push(LuaToSql(mlua::Value::Nil));
+			continue;
+		}
+		let x = vals.get::<_,LuaToSql<'_>>(*fieldname)?;
+		let y = if let LuaToSql(mlua::Value::Nil) = x {
+			context.get(*fieldname)?
+		} else { x };
+		trace!("insert: {fieldname} = {y:?}");
+		if let LuaToSql(mlua::Value::String(ref s)) = y {
+			trace!("   (string is {})", s.to_str()?);
+		}
+		fields.push(y);
 	}
+	trace!("insert called on {table} with values: {fields:?}");
 	stmt.execute(rusqlite::params_from_iter(fields))?;
+	// fix the primary key if needed
+	for Column { fieldname, fieldtype, .. } in schema.fields.iter() {
+		if *fieldtype != FieldType::Rowid {
+			continue;
+		}
+		let n = db.last_insert_rowid();
+		trace!("setting field {fieldname} to {n}");
+		context.set(*fieldname, n)?;
+		break;
+	}
 	Ok(())
 }
 /// Runs the lua script for adding a mod component to the database.
@@ -1340,6 +1415,19 @@ pub fn command_add(db: Connection, _target: &str)->Result<()> {
 	// lifetimes of the references therein:
 	lua.scope(|scope| {
 		let simod = lua.create_table()?;
+		let lua_schema = lua.create_table()?;
+		RESOURCES.map(|schema, _| {
+			let fields = lua.create_table()?;
+			for col in schema.fields {
+				fields.set(col.fieldname, col.fieldtype.to_lua())?;
+			}
+			let res_schema = lua.create_table()?;
+			res_schema.set("fields", fields)?;
+			res_schema.set("primary", schema.primary_key)?;
+			lua_schema.set(schema.table_name, res_schema)?;
+			Ok::<_,mlua::Error>(())
+		})?;
+		simod.set("schema", lua_schema)?;
 		simod.set("dump", scope.create_function(
 		|_lua, (query,): (String,)| {
 			debug!("lua called exec with query {query}");
@@ -1517,6 +1605,7 @@ fn translate_resrefs(db: &mut Connection)->Result<()> {
 	while let Some(row) = enum_rows.next()? {
 		let longref = row.get::<_,String>(0)?;
 		// TODO: remove spaces etc.
+		trace!("generate fresh resref from '{longref}'");
 		let resref = Resref::fresh(&longref, |r| find.exists((r,)))?;
 		update.execute((&longref, &resref))?;
 		n_resrefs+= 1;
