@@ -30,4 +30,7 @@ x:
 	echo "delete from add_items" | sqlite3 game.sqlite
 	echo "delete from add_item_abilities" | sqlite3 game.sqlite
 	echo "delete from add_item_effects" | sqlite3 game.sqlite
+	echo "delete from edit_items" | sqlite3 game.sqlite
+	echo "delete from edit_item_abilities" | sqlite3 game.sqlite
+	echo "delete from edit_item_effects" | sqlite3 game.sqlite
 	$(RUN) -O add.log add target

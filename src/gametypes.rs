@@ -7,6 +7,19 @@
 //! derived from here. The exception is the relation between resources
 //! and their subresources. For now, this is inserted by hand by the
 //! `init.lua` file.
+//!
+//! The tables share the following common structure:
+//! 1. Payload fields: these carry actual game information and
+//!    and are defined in game resources. These always come as the first
+//!    columns so that `select` statements can load resource fields from
+//!    predictible column indices.
+//! 2. Context fields: these identify in which game resource, and where,
+//!    this information is located. The first context field is always
+//!    the resref for the main resource.
+//!    These fields also carry a `unique` constraint.
+//! 3. For subresources: a `rowid` alias (`integer primary key`).
+//!    (Top-level resources don't need this:
+//!    they have the resref as their primary key).
 use crate::prelude::*;
 use macros::{produce_resource_list};
 use crate::database::{Table,DbTypeCheck};
@@ -80,10 +93,10 @@ pub trait ToplevelResource: NamedTable {
 /// An effect inside a .itm file (either global or in an ability).
 #[derive(Debug,Pack,Table)]
 #[allow(missing_copy_implementations)]
-#[resource(item_effects,itemref,items)] pub struct ItemEffect {
-#[column(effectref, auto, "primary key")]
+#[resource(item_effects)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
-#[column(abref, Option<i64>, r#"references "item_abilities"("abref")"#)]
+#[column(abref, usize, r#"references "item_abilities"("abref")"#)]
+#[column(effectref, usize)]
 	opcode: u16, //opcode,
 	target: u8, // EffectTarget,
 	power: u8,
@@ -104,9 +117,9 @@ pub trait ToplevelResource: NamedTable {
 /// An ability inside a .itm file.
 #[derive(Debug,Pack,Table)]
 #[allow(missing_copy_implementations)]
-#[resource(item_abilities,itemref,items)] pub struct ItemAbility {
+#[resource(item_abilities)] pub struct ItemAbility {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
-#[column(abref, auto, "primary key")]
+#[column(abref, usize)]
 	attack_type: u8, // AttackType,
 	must_identify: u8,
 	location: u8,
@@ -142,9 +155,9 @@ pub trait ToplevelResource: NamedTable {
 /// An item effect, corresponding to a .itm file.
 #[derive(Debug,Pack,Table)]
 #[allow(missing_copy_implementations)]
-#[resource(items,itemref,items)] pub struct Item {
+#[resource(items)] pub struct Item {
 #[header("ITM V1  ")]
-#[column(itemref, Resref, "primary key")]
+#[column(itemref, Resref)]
 	unidentified_name: Strref,
 	name: Strref,
 	replacement: Resref,
@@ -183,33 +196,34 @@ pub trait ToplevelResource: NamedTable {
 }
 impl ToplevelResource for Item {
 	const EXTENSION: &'static str = "itm";
-	type Subresources<'a> = (&'a mut [(ItemAbility,i64)], &'a mut[(ItemEffect,usize)]);
+	type Subresources<'a> = (&'a mut [ItemAbility], &'a mut[(ItemEffect,usize)]);
 	/// load an item from cursor
 	fn load(db: &mut DbInserter<'_>, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
 		let item = Item::unpack(&mut cursor)?;
-		item.ins(&mut db.tables.items, &(resref,))?;
+		item.ins(&mut db.tables.items, &(resref,))
+			.context("inserting into 'items'")?;
 
 		cursor.seek(SeekFrom::Start(item.abilities_offset as u64))?;
 		// TODO zip those vectors
 		let mut ab_n = Vec::<u16>::with_capacity(item.abilities_count as usize);
 		let mut ab_i = Vec::<i64>::with_capacity(item.abilities_count as usize);
-		for _ in 0..item.abilities_count {
+		for abref in 0..item.abilities_count {
 			let ab = ItemAbility::unpack(&mut cursor)?;
-			ab.ins(&mut db.tables.item_abilities, &(resref,))?;
+			ab.ins(&mut db.tables.item_abilities, &(resref, 1+abref as usize))
+				.context("inserting into 'item_abilities'")?;
 			ab_n.push(ab.effect_count);
 			ab_i.push(db.db.last_insert_rowid());
 		}
-	// 	println!("inserting item {resref}: {ab_n:?} {ab_i:?}");
+		trace!("inserting item {resref}: {ab_n:?} {ab_i:?}");
 		cursor.seek(SeekFrom::Start(item.effect_offset as u64))?;
-		for _ in 0..item.equip_effect_count { // on-equip effects
+		for j in 0..item.equip_effect_count { // on-equip effects
 			let eff = ItemEffect::unpack(&mut cursor)?;
-			// TODO swap with Some above!!
-			eff.ins(&mut db.tables.item_effects, &(resref, None))?;
+			eff.ins(&mut db.tables.item_effects, &(resref, 0, 1+j as usize))?;
 		}
 		for (i, n) in ab_n.iter().enumerate() {
-			for _ in 0..*n {
+			for j in 0..*n {
 				let eff = ItemEffect::unpack(&mut cursor)?;
-				eff.ins(&mut db.tables.item_effects, &(resref, Some(ab_i[i])))?;
+				eff.ins(&mut db.tables.item_effects, &(resref, 1+i, 1+j as usize))?;
 			}
 		}
 	Ok(())
@@ -217,7 +231,7 @@ impl ToplevelResource for Item {
 	///
 	fn save(&mut self, mut file: impl Write+Debug, (abilities, effects): Self::Subresources<'_>) ->Result<()> {
 		let mut current_effect_idx = self.equip_effect_count;
-		for (a, _) in abilities.iter_mut() {
+		for a in abilities.iter_mut() {
 			a.effect_index = current_effect_idx;
 			current_effect_idx+= a.effect_count;
 		}
@@ -228,7 +242,7 @@ impl ToplevelResource for Item {
 		self.pack(&mut file)
 			.with_context(|| format!("cannot pack item to {file:?}"))?;
 		// pack abilities:
-		for (a, _) in abilities.iter() {
+		for a in abilities.iter() {
 			a.pack(&mut file)
 			.with_context(|| format!("cannot pack item ability to {file:?}"))?;
 		}
@@ -255,21 +269,22 @@ impl ToplevelResource for Item {
 			// we store item effects & abilities in two vectors:
 			//  - abilities = (ability, abref)
 			//  - effect = (effect, ability index)
-			let mut abilities = Vec::<(ItemAbility, i64)>::new();
+			let mut abilities = Vec::<ItemAbility>::new();
 			let mut effects = Vec::<(ItemEffect, usize)>::new();
 			for x in sel_item_ab.iter((&itemref,))? {
 				if x.is_db_malformed() { continue }
-				let (ab, (_, abref)) = x?;
-				abilities.push((ab, abref));
+				let (ab, _) = x?;
+				abilities.push(ab);
 				item.abilities_count+= 1;
 			}
 			for x in sel_item_eff.iter((&itemref,))? {
 				if x.is_db_malformed() { continue }
-				let (eff, (_, _, parent)) = x?;
-				let ab_id = match abilities.iter().position(|&(_, abref)| Some(abref) == parent) {
-					Some(i) => { abilities[i].0.effect_count+= 1; i },
-					None    => { item.equip_effect_count+= 1; usize::MAX},
-				};
+				let (eff, (_parent, ab_id, _eff_id)) = x?;
+				if ab_id > 0 {
+					abilities[ab_id-1].effect_count+=1;
+				} else {
+					item.equip_effect_count+= 1;
+				}
 				effects.push((eff, ab_id));
 			}
 			f(itemref, &mut item, (&mut abilities, &mut effects))?;
@@ -289,7 +304,7 @@ Proficiency: {prof}
 	dx=self.min_dexterity, co=self.min_constitution,
 	wi=self.min_wisdom, in=self.min_intelligence, ch=self.min_charisma,
 	prof=self.proficiency);
-		for (ability, _) in abilities {
+		for ability in abilities {
 			println!("
 Attack type: {atype}",
 			atype=ability.attack_type);
@@ -319,7 +334,11 @@ impl<'a> DbInserter<'a> {
 	/// resources.
 	pub fn new(db: &'a Connection)->Result<Self> {
 		Ok(Self { db,
-		tables: RESOURCES.map(|schema, _| db.prepare(&schema.insert_statement("res_")) )?,
+		tables: RESOURCES.map(|schema, _|
+			any_ok(db.prepare(&schema.insert_statement("res_"))
+			.with_context(|| format!("insert statement for table '{table}'",
+				table = schema.table_name))?)
+		)?,
 		resource_count: RESOURCES.map(|_,_| Ok::<usize,rusqlite::Error>(0))?,
 		add_resref: db.prepare(r#"insert or ignore into "resref_orig" values (?)"#)?
 	}) }

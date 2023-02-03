@@ -1,8 +1,10 @@
 # Global
- - see if primary_key should maybe be renamed as `pk` everywhere for
+ + item_abilities: make (itemref, ability#) the primary key
+ + see if primary_key should maybe be renamed as `pk` everywhere for
    simplifying?
+  - do we need to expose 'id' to lua?
  + the program is named `simod`
- - embed lua into rust (and give sql access through rusqlite)
+ + embed lua into rust (and give sql access through rusqlite)
  + accept subcommands: (PARTLY DONE)
     simod select <file.lua> <component>
     simod select <file.lua> # opens a menu
@@ -13,6 +15,7 @@
 # Lua side:
  + insert sub-resources in schema visible from lua
   + currently by hand
+  + remains by hand (no way to guess that item has both abilities & effects)
  - (optional) call `luac` on init.lua to save a bit of loading time
  - check type of value passed
  - determine primitive ops:
@@ -20,10 +23,9 @@
   + `select`
   + `list`
   + `insert`
- - check arguments from Rust side (make them variadic) and allow two
+ ± check arguments from Rust side (make them variadic) and allow two
    forms for `list` call
- - build something intelligent to derive a resource accessor
-   from Rust side
+ - build something intelligent to derive a resource accessor from Rust side
  - each mod component is stored in a normalized table containing
    metadata: name, categorization, description, code (function or string),
    compatibility
@@ -37,6 +39,7 @@
     the sql table name
  `mlua::Lua::load(Path)` should work
 # Rust side:
+ - resref fresh for empty string fix
  - insert pre-existing override files in db
  - backup of (pre-existing) override files when writing them
  - restore override files

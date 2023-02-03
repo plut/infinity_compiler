@@ -657,8 +657,11 @@ sqltype_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
 // only as SQL strings).
 /// Description of a field in a game resource.
 #[derive(Debug)] pub struct Column<'a> {
+	/// Name of this column.
 	pub fieldname: &'a str,
+	/// Content type of this column.
 	pub fieldtype: FieldType,
+	/// Any extra information given to SQLite when creating the table.
 	pub extra: &'a str,
 }
 /// The full database description of a game resource.
@@ -669,16 +672,17 @@ sqltype_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
 /// In practice there exists exactly one [`Schema`] instance per
 /// resource, and it is compiled by the [`Table`] derive macro.
 #[derive(Debug)] pub struct Schema<'a> {
-	/// The stem for the SQL table name associated with this structure.
-	pub table_name: &'a str,
-	/// The SQL primary key of this table.
-	pub primary_key: &'a str,
-	/// The field pointing to the top-level resource.
-	pub parent_key: &'a str,
-	/// The table holding the top-level resource.
-	pub parent_table: &'a str,
 	/// Descriptions for all the fields of this struct.
 	pub fields: &'a[Column<'a>],
+	/// The stem for the SQL table name associated with this structure.
+	pub table_name: &'a str,
+	/// The index of the primary key field.
+	pub primary_key: usize,
+	/// The index of the field pointing to top-level resource resref.
+	/// This is also (always) the first context column.
+	pub resref_key: usize,
+	/// The name of the table holding the top-level resource.
+	pub parent_table: &'a str,
 }
 impl<'schema> Schema<'schema> {
 	// Step 0: a few useful functions
@@ -687,8 +691,20 @@ impl<'schema> Schema<'schema> {
 	///
 	/// Each column may be preceded by a prefix; this is used for e.g.
 	/// `"new"."column"`.
-	pub fn columns<T: Display>(&'schema self, s: T)->ColumnWriter<'schema, T> {
-		ColumnWriter { schema: self, prefix: s }
+	pub fn columns<T: Display>(&'schema self, t: ColumnSelect, s: T)->ColumnWriter<'schema, T> {
+		ColumnWriter { schema: self, prefix: s, select: t }
+	}
+	/// The resref for this schema (as a string).
+	pub fn resref(&'schema self)->&'schema str {
+		self.fields[self.resref_key].fieldname
+	}
+	/// The primary key for this schema (as a string).
+	pub fn primary(&'schema self)->&'schema str {
+		self.fields[self.primary_key].fieldname
+	}
+	/// Is this a subresource?
+	pub fn has_id(&'schema self)->bool {
+		self.primary_key > self.resref_key
 	}
 	// Step 1: creating tables
 	/// Returns the SQL statement creating a given table with this schema.
@@ -699,12 +715,13 @@ impl<'schema> Schema<'schema> {
 		use std::fmt::Write;
 		let mut s = format!("create table \"{name}\" (");
 		let mut isfirst = true;
-		for Column { fieldname, fieldtype, extra } in self.fields.iter() {
+		for Column { fieldname, fieldtype, extra, .. } in self.fields.iter() {
 			if isfirst { isfirst = false; }
 			else { s.push(','); }
 			write!(&mut s, "\n \"{fieldname}\" {} {extra}", fieldtype.affinity()).unwrap();
 		}
-		write!(&mut s, "{more})").unwrap();
+		write!(&mut s, "{more},\n unique ({context}))",
+			context = self.columns(ColumnSelect::Context, "")).unwrap();
 		s
 	}
 	/// Creates all tables and views in the database associated with a
@@ -721,9 +738,9 @@ impl<'schema> Schema<'schema> {
 	/// game files.
 	pub fn create_tables_and_views(&self, db: &Connection)->Result<()> {
 		let name = &self.table_name;
-		let parent_key = &self.parent_key;
+		let parent_key = self.resref();
 		let parent_table = &self.parent_table;
-		let key = &self.primary_key;
+		let key = self.primary();
 
 		use std::fmt::Write;
 		db.exec(self.create_table(format!("res_{name}").as_str(), ""))?;
@@ -732,10 +749,10 @@ impl<'schema> Schema<'schema> {
 		db.exec(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str())?;
 		{ // create main view
 		let mut view = format!(r#"create view "{name}" as
-	with "u" as (select {0} from "res_{name}" union select {0} from "add_{name}") select "#, self.columns(""));
+	with "u" as (select {0} from "res_{name}" union select {0} from "add_{name}") select "#, self.columns(ColumnSelect::Full, ""));
 		for (i, Column {fieldname, ..}) in self.fields.iter().enumerate(){
 			if i > 0 { writeln!(&mut view, ",").unwrap(); }
-			if fieldname == key {
+			if *fieldname == key {
 				write!(&mut view, r#""{fieldname}""#).unwrap();
 			} else {
 				write!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{key}" and "field"='{fieldname}' order by rowid desc limit 1), "{fieldname}") as "{fieldname}" "#).unwrap();
@@ -746,9 +763,13 @@ impl<'schema> Schema<'schema> {
 		}
 		let dirtytable = format!("dirty_{parent_table}");
 		db.exec(format!(r#"create table if not exists "{dirtytable}" ("name" text primary key)"#))?;
-		let mut trans_edit = String::new();
-		for Column {fieldname, fieldtype, ..} in self.fields.iter() {
+		let mut trans_insert = String::new();
+		for (i, Column {fieldname, fieldtype, ..}) in self.fields.iter().enumerate() {
 			// populate resref_dict or strref_dict as needed:
+			// There are two triggers which edit "resref_dict"; we build both
+			// of them from resref fields at once, by storing the text in
+			// `trans` (for update triggers) and `trans_insert` (for insert
+			// trigger).
 			let trans = match fieldtype {
 			FieldType::Resref => format!(
 	r#"insert or ignore into "resref_dict" values (new."{fieldname}", null);"#),
@@ -756,8 +777,8 @@ impl<'schema> Schema<'schema> {
 // 	r#"insert or ignore into "strref_dict" values (new."{fieldname}", null);"#),
 			_ => String::new()
 			};
-			trans_edit.push_str(&trans);
-			if fieldname == key { continue }
+			trans_insert.push_str(&trans);
+			if i == self.primary_key { continue }
 			let trig = format!(
 	r#"create trigger "update_{name}_{fieldname}"
 	instead of update on "{name}" when new."{fieldname}" is not null
@@ -777,10 +798,12 @@ impl<'schema> Schema<'schema> {
 	r#"create trigger "insert_{name}"
 	instead of insert on "{name}"
 	begin
-		{trans_edit}
-		insert into "add_{name}" ({0}) values ({1});
+		{trans_insert}
+		insert into "add_{name}" ({cols}) values ({newcols});
 		insert or ignore into "{dirtytable}" values (new."{parent_key}");
-	end"#, self.columns(""), self.columns("new."));
+	end"#,
+		cols = self.columns(ColumnSelect::Full, ""),
+		newcols = self.columns(ColumnSelect::Full, "new."));
 		db.exec(trig)?;
 		let trig = format!(
 	r#"create trigger "delete_{name}"
@@ -807,7 +830,7 @@ impl<'schema> Schema<'schema> {
 		let n = '\n';
 		use std::fmt::Write;
 		let name = &self.table_name;
-		let Self { parent_key, .. } = self;
+		let parent_key = self.resref();
 		let mut select = format!(r#"create view "out_{name}" as select{n}  "#);
 		let mut source = format!(r#"{n}from "{name}" as "a"{n}"#);
 		for Column { fieldname: f, fieldtype, .. } in self.fields.iter() {
@@ -831,12 +854,17 @@ impl<'schema> Schema<'schema> {
 		select
 	}
 	// Step 2: populating tables
+	pub fn select_statement(&self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
+		format!(r#"select {cols} from "{n1}{n2}" {condition} order by {sort}"#,
+			cols = self.columns(ColumnSelect::Payload, ""),
+			sort = self.columns(ColumnSelect::Context, ""))
+	}
 	/// The SQL code for populating the database from game files.
 	pub fn insert_statement(&self, prefix: impl Display)->String {
 		let table_name = &self.table_name;
 		let mut s = format!("insert into \"{prefix}{table_name}\" ({}) values (",
-			self.columns(""));
-		for c in 0..self.fields.len() {
+			self.columns(ColumnSelect::Payload, ""));
+		for c in 0..self.fields.len()-(self.has_id() as usize)  {
 			if c > 0 { s.push(','); }
 			s.push('?');
 		}
@@ -845,13 +873,13 @@ impl<'schema> Schema<'schema> {
 	}
 	fn all_keys_gen<T>(&self, db: &Connection, condition: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
 		let s = format!(r#"select "{primary_key}" from "{table}" {condition}"#,
-			primary_key = self.primary_key, table = self.table_name);
+			primary_key = self.primary(), table = self.table_name);
 		let mut stmt = db.prepare(&s)
 			.context("preparing statement")?;
 		let mut rows = stmt.query(())?;
 		let mut v = Vec::<T>::new();
 		while let Some(row) = rows.next()? {
-			v.push(f(row.get_ref(self.primary_key)?)?);
+			v.push(f(row.get_ref(0)?)?);
 		}
 		Ok(v)
 	}
@@ -860,23 +888,44 @@ impl<'schema> Schema<'schema> {
 	}
 	pub fn all_keys_with_parent<T>(&self, db: &Connection, value: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
 		self.all_keys_gen(db, format!(r#"where "{parent_key}"='{value}'"#,
-			parent_key = self.parent_key), f)
+			parent_key = self.resref()), f)
 	}
 }
 
+#[derive(Debug,Clone,Copy)] pub enum ColumnSelect {
+	Payload, // payload + context -id
+	Full, // payload + context + id
+	Context, // context - id
+}
 /// A utility type for inserting column headers from a schema in a string.
 ///
 /// This type implements [`std::fmt::Display`], which simplifies writing
 /// some SELECT statements.
+///
+/// If the field `context_only` is set then we write only primary keys.
 #[derive(Debug)] pub struct ColumnWriter<'a,T: Display> {
 	prefix: T,
 	schema: &'a Schema<'a>,
+	select: ColumnSelect,
 }
 impl<T: Display> Display for ColumnWriter<'_,T> {
 	fn fmt(&self, mut f: &mut Formatter<'_>)->std::result::Result<(),std::fmt::Error>{
+		// Which kinds of columns do we want to display?
+		// load (insert): payload + context - id
+		// view: payload + context + id
+		// save (select): payload + context - id
+		// sort: context - id
+		// unique: context - id
 		use std::fmt::Write;
 		let mut isfirst = true;
-		for Column { fieldname, .. } in self.schema.fields.iter() {
+		let n = self.schema.fields.len();
+		let c = self.schema.resref_key;
+		let (start, end) = match self.select {
+			ColumnSelect::Full => (0, n),
+			ColumnSelect::Payload => (0, n-(self.schema.has_id() as usize)),
+			ColumnSelect::Context => (c, n-(self.schema.has_id() as usize)),
+		};
+		for Column { fieldname, .. } in self.schema.fields[start..end].iter() {
 			if isfirst { isfirst = false; } else { write!(f, ",")?; }
 			write!(&mut f, r#" {}"{fieldname}""#, self.prefix)?;
 		}
@@ -895,23 +944,14 @@ impl<T: Display> Display for ColumnWriter<'_,T> {
 pub trait Table: Sized {
 	/// Additional data saved in the same row as a game object; usually
 	/// some identifier for the object (e.g. its resref).
-	type KeyIn;
-	/// Additional data read in the same row as a game object.
-	///
-	/// This is almost the same as `KeyIn`, except that any `Option` types
-	/// will have been unwrapped (by SQL) to the `Some` variant.
-	type KeyOut;
-	/// always == `anyhow::Result<(Self, Self::KeyOut)>`.
-	///
-	/// TODO: Res is more useful than KeyOut, replace KeyOut by Res
-	type Res;
+	type Context;
 	/// The internal description of the fields of this structure, as used
 	/// to produce SQL statements.
 	const SCHEMA: Schema<'static>;
 	/// The low-level insert function for an object to a database row.
-	fn ins(&self, s: &mut Statement<'_>, key: &Self::KeyIn)->rusqlite::Result<()>;
+	fn ins(&self, s: &mut Statement<'_>, key: &Self::Context)->rusqlite::Result<()>;
 	/// The low-level select function from a database row to an object.
-	fn sel(r: &Row<'_>)->rusqlite::Result<(Self, Self::KeyOut)>;
+	fn sel(r: &Row<'_>)->rusqlite::Result<(Self, Self::Context)>;
 	/// The select [`rusqlite::Statement`] for an object.
 	///
 	/// The name of the table is `{n1}{n2}`; since many tables are built in
@@ -920,10 +960,8 @@ pub trait Table: Sized {
 	///
 	/// This returns a [`Result<TypedStatement>`]: it is possible to iterate
 	/// over the result and recover structures of the original type.
-	fn select_query_gen(db: &Connection, n1: impl Display,
-		n2: impl Display, cond: impl Display)->rusqlite::Result<TypedStatement<'_,Self>> {
-		let s = format!(r#"select {cols} from "{n1}{n2}" {cond}"#,
-			cols=Self::SCHEMA.columns(""));
+	fn select_query_gen(db: &Connection, n1: impl Display, n2: impl Display, cond: impl Display)->rusqlite::Result<TypedStatement<'_,Self>> {
+		let s = Self::SCHEMA.select_statement(n1, n2, cond);
 		debug!("running SQL query: {s}");
 		Ok(TypedStatement(db.prepare(&s)?, PhantomData::<Self>))
 	}
@@ -961,7 +999,7 @@ pub struct TypedRows<'stmt,T: Table> {
 	index: usize,
 }
 impl<T: Table> Iterator for TypedRows<'_,T> {
-	type Item = Result<(T, T::KeyOut)>;
+	type Item = Result<(T, T::Context)>;
 	fn next(&mut self)->Option<Self::Item> {
 		loop {
 			let row = match self.rows.next() {
@@ -1284,6 +1322,18 @@ fn sql_to_lua<'lua>(v: rusqlite::types::ValueRef<'_>, lua: &'lua Lua)->Result<ml
 		_ => Err(rusqlite::types::FromSqlError::InvalidType.into()),
 	}
 }
+fn lua_to_sql<'lua>(v: &'lua mlua::Value<'lua>)->rusqlite::Result<rusqlite::types::Value> {
+	use rusqlite::types::{Value as SqlValue};
+	match v {
+	mlua::Value::Nil => Ok(SqlValue::Null),
+	mlua::Value::Boolean(b) => Ok(SqlValue::Integer(*b as i64)),
+	mlua::Value::Integer(n) => Ok(SqlValue::Integer(*n)),
+	mlua::Value::Number(x) => Ok(SqlValue::Real(*x)),
+	mlua::Value::String(ref s) =>
+		Ok(SqlValue::from(s.to_str().unwrap().to_owned())),
+	e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
+	}
+}
 /// Returns the table schema for a given table (indexed by the base name
 /// for this resource), or throws a Lua-compatible error.
 fn table_schema(table: &str)->Result<&Schema<'_>> {
@@ -1325,24 +1375,30 @@ fn list_keys<'lua>(db: &Connection, lua: &'lua Lua, mut args: mlua::MultiValue<'
 ///
 /// Reads a full row from one of the resource tables and returns it as a
 /// Lua table.
-fn select<'lua>(db: &Connection, lua: &'lua Lua, (table, key): (String, String))->Result<mlua::Table<'lua>> {
+fn select<'lua>(db: &Connection, lua: &'lua Lua, (table, rowid): (String, mlua::Value<'_>))->Result<mlua::Table<'lua>> {
 	let schema = table_schema(&table)?;
 	let tbl = lua.create_table_with_capacity(0,
 		schema.fields.len() as std::ffi::c_int)?;
-	let s = format!(r#"select {cols} from "{table}" where "{primary_key}"=?"#,
-		cols = schema.columns(""), primary_key = schema.primary_key);
-	trace!("query: {s}; {key}");
-	db.query_row_and_then(&s, (&key,), |row| {
+	let s = schema.select_statement("", &table,
+		format!(r#"where "{primary}"=?"#, primary = schema.primary()));
+	trace!("query: {s}; {rowid:?}");
+	let sqlrowid = lua_to_sql(&rowid)?;
+	let srowid = format!("{rowid:?}");
+	tbl.set(schema.primary(), rowid)?;
+	db.query_row_and_then(&s, (&sqlrowid,), |row| {
 		for (i, col) in schema.fields.iter().enumerate() {
-			let key = col.fieldname;
-			let val = row.get_ref(i)?;
-			trace!("row {i}, got value {val:?}, expected {:?}", col.fieldtype);
-			tbl.set(key, sql_to_lua(val, lua)
+			if i == schema.primary_key { continue }
+			let fieldname = col.fieldname;
+			let val = row.get_ref(i)
+				.with_context(|| format!("cannot read field {i} in row"))?;
+// 			trace!("fieldd {i}/{n}, got value {val:?}, expected {ft:?}",
+// 				ft = col.fieldtype, n = schema.fields.len());
+			tbl.set(fieldname, sql_to_lua(val, lua)
 				.with_context(|| format!("cannot convert value {val:?} to Lua"))?)
-				.with_context(|| format!("cannot set entry for {key} to {val:?}"))?;
+				.with_context(|| format!("cannot set entry for {fieldname:?} to {val:?}"))?;
 		}
 		any_ok(tbl)
-	}).with_context(|| format!(r#"failed to query row '{key}' in "{table}""#))
+	}).with_context(|| format!(r#"failed to query row '{srowid}' in "{table}""#))
 }
 /// Implementation of `simod.update`.
 ///
@@ -1418,12 +1474,16 @@ pub fn command_add(db: Connection, _target: &str)->Result<()> {
 		let lua_schema = lua.create_table()?;
 		RESOURCES.map(|schema, _| {
 			let fields = lua.create_table()?;
-			for col in schema.fields {
+			let context = lua.create_table()?;
+			for (i, col) in schema.fields.iter().enumerate() {
 				fields.set(col.fieldname, col.fieldtype.to_lua())?;
+				if i >= schema.resref_key {
+					context.push(col.fieldname)?;
+				}
 			}
 			let res_schema = lua.create_table()?;
 			res_schema.set("fields", fields)?;
-			res_schema.set("primary", schema.primary_key)?;
+			res_schema.set("context", context)?;
 			lua_schema.set(schema.table_name, res_schema)?;
 			Ok::<_,mlua::Error>(())
 		})?;
@@ -1578,6 +1638,7 @@ fn load(db: Connection, game: &GameIndex)->Result<()> {
 	gamestrings::load(&db, game)
 		.with_context(|| format!("cannot read game strings from game directory {:?}", game.root))?;
 	pb.inc(1);
+	debug!("loading game resources");
 	db.exec("begin transaction")?;
 	let mut base = DbInserter::new(&db)?;
 	game.for_each(|restype, handle| {

@@ -460,6 +460,9 @@ function test()
 	assert(carsomyr2.weight == 200)
 	assert(carsomyr2.abilities[0]._context.itemref == carsomyr2.itemref)
 end
+dump(simod.list("item_effects", "sw1h34"))
+dump(simod.select("items", "sw1h34"))
+dump(simod.select("item_effects", 5876))
 test()
 -- print("==============")
 -- sword.abilities:push { range = 9, use_icon="!!new!!",

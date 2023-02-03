@@ -162,37 +162,34 @@ struct RowCurrent {
 
 #[proc_macro_derive(Table, attributes(column,resource))]
 pub fn derive_table(tokens: TokenStream) -> TokenStream {
-	let mut fields2 = Vec::<(String, syn::Type, String)>::new();
+	let mut context = Vec::<(String, syn::Type, String)>::new();
 	let mut schema = TS2::new();
 	let mut params = TS2::new();
 	let mut build = TS2::new();
 	let mut ncol = 0usize;
-	let mut primary_key = String::from("rowid");
+	let mut primary_key = 0usize;
 // 	let ty_i64: syn::Type = syn::parse_str("i64").unwrap();
 	let add_schema = |fieldname: &str, ty: &syn::Type, extra: &str| {
 		quote!{ crate::database::Column {
 			fieldname: #fieldname,
 			fieldtype: <#ty as crate::database::SqlType>::SQL_TYPE,
-			extra: #extra},
+			extra: #extra },
 		} }; //.to_tokens(&mut schema);
 	let DeriveInput{ ident, data, attrs, generics, .. } = parse_macro_input!(tokens);
-	let flist = struct_fields(data);
+	let payload = struct_fields(data);
 	let mut table_name = String::new();
-	let type_name = toks_to_string(&ident);
-	let mut parent_key = String::new();
-	let mut parent = String::new();
 // 	println!("parsing attributes: {:?}", attrs.iter().map(toks_to_string).collect::<Vec<_>>());
 	for (name, mut args) in attrs.into_iter().map(parse_attr) {
 		match &name[..] {
-			"resource" => table_attr_resource(&mut args, &mut table_name, &mut parent,
-				&mut parent_key),
+			"resource" => table_attr_resource(&mut args, &mut table_name),
 			_ => () };
 	}
-	for Field { attrs, ident, ty, .. } in flist {
+	// Build the payload part of the schema from the struct fields:
+	for Field { attrs, ident, ty, .. } in payload {
 		let mut current = RowCurrent::default();
 		for (name, mut args) in attrs.into_iter().map(parse_attr) {
 			match name.as_str() {
-				"column" => table_attr_column(&mut fields2, &mut current, &mut args),
+				"column" => table_attr_column(&mut context, &mut current, &mut args),
 				_ => () }
 		}
 		if current.no_column {
@@ -207,73 +204,67 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 		quote!{ #ident: row.get::<_,#ty>(#ncol)?, }.to_tokens(&mut build);
 		ncol+= 1;
 	}
-	for (fieldname, _, attr) in &fields2 {
-		if attr.contains("primary key") {
-			primary_key = fieldname.to_owned(); break
-		}
-	}
-	let re: regex::Regex=Regex::new(r#"references\s*"?(\w+)"?\s*\("#).unwrap();
-	if parent.is_empty() {
-		for (fieldname, _, attr) in &fields2 {
-			let c = match re.captures(attr) { None => continue, Some(c) => c };
-			parent = String::from(c.get(1).unwrap().as_str());
-			parent_key = String::from(fieldname);
-			break
-		}
-		if parent.is_empty() {
-			parent = toks_to_string(&ident);
-			parent_key = String::from(&primary_key);
-		}
-	}
-	let mut key_in = TS2::new();
-	let mut keycol_in = 0;
-	let mut key_out = TS2::new();
+	let payload_len = ncol;
+	// Build the context part of the schema from the attributes:
+	let mut ctx = TS2::new();
 	let mut build_key = TS2::new();
-	for (fieldname, ty, extra) in fields2 {
-		if toks_to_string(&ty) == "auto" {
-			// we use i64 since this is the return type of last_insert_rowid()
-// 			add_schema(fieldname.as_str(), &ty_i64, extra.as_str());
-		quote!{ crate::database::Column {
-			fieldname: #fieldname,
-			fieldtype: crate::database::FieldType::Rowid,
-			extra: #extra},
-		}.to_tokens(&mut schema);
-			quote!{ crate::rusqlite::types::Null, }.to_tokens(&mut params);
-			quote!{ row.get::<_,i64>(#ncol)?, }.to_tokens(&mut build_key);
-			quote!{ i64, }.to_tokens(&mut key_out);
-		} else {
-			add_schema(fieldname.as_str(), &ty, extra.as_str())
-				.to_tokens(&mut schema);
-			let kc = pm2::Literal::isize_unsuffixed(keycol_in);
-			quote!{ #ty, }.to_tokens(&mut key_in);
-			quote!{ k.#kc, }.to_tokens(&mut params);
-			quote!{ #ty, }.to_tokens(&mut key_out);
-			quote!{ row.get_unwrap::<_,#ty>(#ncol), }.to_tokens(&mut build_key);
-			keycol_in+= 1;
-		}
+	for (keycol_in, (fieldname, ty, extra)) in context.iter().enumerate() {
+		add_schema(fieldname.as_str(), ty, extra.as_str()).to_tokens(&mut schema);
+		let kc = pm2::Literal::isize_unsuffixed(keycol_in as isize);
+		quote!{ #ty, }.to_tokens(&mut ctx);
+		quote!{ k.#kc, }.to_tokens(&mut params);
+		quote!{ row.get_unwrap::<_,#ty>(#ncol), }.to_tokens(&mut build_key);
 		ncol+= 1;
+	}
+	// Search through foreign key constraints to locate the parent resource:
+	let mut parent = String::new();
+	let mut parent_key = 0;
+	let foreign_key = Regex::new(r#"references\s*"?(\w+)"?\s*\("#).unwrap();
+	for (i, (_, _, attr)) in context.iter().enumerate() {
+		let c = match foreign_key.captures(attr) { None => continue, Some(c) => c };
+		// We successfully identified this resource as a sub-resource.
+		// We now insert the parent key, parent table, and primary key.
+		parent = String::from(c.get(1).unwrap().as_str());
+		parent_key = payload_len + i;
+		primary_key = payload_len + context.len();
+		quote!{ crate::database::Column {
+			fieldname: "id", fieldtype: crate::database::FieldType::Integer,
+			extra: "primary key" },
+		} .to_tokens(&mut schema);
+		break
+	}
+	// Default case: we assume that this is a top-level resource.
+	// The parent table is then this table itself, while the parent key
+	// is the primary key, i.e. the first (and only) context column.
+	if parent.is_empty() {
+		parent = toks_to_string(&ident);
+		parent_key = payload_len;
+		primary_key = parent_key;
 	}
 	let mut code = quote! {
 		impl #generics crate::database::Table for #ident #generics {
-			type KeyIn = (#key_in);
-			type KeyOut = (#key_out);
-			type Res = anyhow::Result<(Self, Self::KeyOut)>;
+			type Context = (#ctx);
 			const SCHEMA: crate::database::Schema<'static> = crate::database::Schema{
 				table_name: #table_name, primary_key: #primary_key,
-				parent_key: #parent_key, parent_table: #parent,
+				resref_key: #parent_key, parent_table: #parent,
 				fields: &[#schema]};
-			fn ins(&self, s: &mut crate::rusqlite::Statement, k: &Self::KeyIn)->crate::rusqlite::Result<()> {
+			fn ins(&self, s: &mut crate::rusqlite::Statement, k: &Self::Context)->crate::rusqlite::Result<()> {
 				s.execute(rusqlite::params![#params])?; Ok(())
 			}
-			fn sel(row: &crate::rusqlite::Row)->crate::rusqlite::Result<(Self, Self::KeyOut)> {
+			fn sel(row: &crate::rusqlite::Row)->crate::rusqlite::Result<(Self, Self::Context)> {
 				Ok((Self{ #build }, (#build_key)))
 			}
 		}
 	};
+// 	println!("\x1b[31m Context for {}: {}\x1b[m",
+// 		toks_to_string(&ident), toks_to_string(&ctx));
 	if table_name.is_empty() {
 // 		println!("\x1b[36m{}\x1b[m", code);
 	}
 	if !table_name.is_empty() {
+		// The type name as a string:
+		let type_name = toks_to_string(&ident);
+		// which field of `AllResources` we are attached to:
 		let field = pm2::Ident::new(&table_name, pm2::Span::call_site());
 		push_resource(ResourceDef(type_name, table_name));
 		quote! {
@@ -285,10 +276,10 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	}
 	code.into()
 } // Table
+/// Column attribute:
+/// `[column(itemref, i32, "references items", etc.)]` pushes on table
+/// `[column(false)]` suppresses next column
 fn table_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut RowCurrent, args: &mut AttrParser) {
-	//! Column attribute:
-	//! `[column(itemref, i32, "references items", etc.)]` pushes on table
-	//! `[column(false)]~ suppresses next column
 	use AttrArg::{Ident, Str};
 	let a = match args.get::<syn::Expr>() { None=>return, Some(a)=> a};
 	match a {
@@ -306,26 +297,26 @@ fn table_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut
 		_ => ()
 	}
 }
-fn table_attr_resource(args: &mut AttrParser, table_name: &mut String, parent: &mut String, parent_key: &mut String) {
-	//! `[table]` attribute:
-	//! - `[table("")]` prevents storing this table in the global [default]
-	//! RESOURCES constant,
-	//! - `[table(item_abilities, "itemref", "items")]` stores with a
-	//! relation to the parent resource,
-	//! - `[table(items, "itemref")]` stores as a parent table (using given
-	//! primary key);
-	//! - `[table(items)]` tries to guess the link to parent resource
-	//! (either use a key reference if there is one, or take this table as
-	//! a root resource if not).
+/// `[table]` attribute:
+/// - `[table("")]` prevents storing this table in the global [default]
+/// RESOURCES constant,
+/// - `[table(item_abilities, "itemref", "items")]` stores with a
+/// relation to the parent resource,
+/// - `[table(items, "itemref")]` stores as a parent table (using given
+/// primary key);
+/// - `[table(items)]` tries to guess the link to parent resource
+/// (either use a key reference if there is one, or take this table as
+/// a root resource if not).
+fn table_attr_resource(args: &mut AttrParser, table_name: &mut String) {
 	let i = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
 		Some(AttrArg::Str(s)) => s, _ => return };
 	*table_name = i;
-	let pk = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
-		Some(AttrArg::Str(s)) => s, _ => return };
-	*parent_key = pk;
-	let pn = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
-		Some(AttrArg::Str(s)) => s, _ => { *parent = table_name.clone(); return }};
-	*parent = pn;
+// 	let pk = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
+// 		Some(AttrArg::Str(s)) => s, _ => return };
+// 	*parent_key = pk;
+// 	let pn = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
+// 		Some(AttrArg::Str(s)) => s, _ => { *parent = table_name.clone(); return }};
+// 	*parent = pn;
 }
 
 #[proc_macro]
