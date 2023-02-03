@@ -167,7 +167,6 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	let mut params = TS2::new();
 	let mut build = TS2::new();
 	let mut ncol = 0usize;
-	let mut primary_key = 0usize;
 // 	let ty_i64: syn::Type = syn::parse_str("i64").unwrap();
 	let add_schema = |fieldname: &str, ty: &syn::Type, extra: &str| {
 		quote!{ crate::database::Column {
@@ -217,8 +216,8 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 		ncol+= 1;
 	}
 	// Search through foreign key constraints to locate the parent resource:
-	let mut parent = String::new();
-	let mut parent_key = 0;
+	let mut parent = toks_to_string(&ident);
+	let mut parent_key = payload_len;
 	let foreign_key = Regex::new(r#"references\s*"?(\w+)"?\s*\("#).unwrap();
 	for (i, (_, _, attr)) in context.iter().enumerate() {
 		let c = match foreign_key.captures(attr) { None => continue, Some(c) => c };
@@ -226,26 +225,21 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 		// We now insert the parent key, parent table, and primary key.
 		parent = String::from(c.get(1).unwrap().as_str());
 		parent_key = payload_len + i;
-		primary_key = payload_len + context.len();
+		assert!(i == 0);
+		break
+	}
+	if context.len() > 1 {
+		// we are dealing with a subresource: insert the "id" key
 		quote!{ crate::database::Column {
 			fieldname: "id", fieldtype: crate::database::FieldType::Integer,
 			extra: "primary key" },
 		} .to_tokens(&mut schema);
-		break
-	}
-	// Default case: we assume that this is a top-level resource.
-	// The parent table is then this table itself, while the parent key
-	// is the primary key, i.e. the first (and only) context column.
-	if parent.is_empty() {
-		parent = toks_to_string(&ident);
-		parent_key = payload_len;
-		primary_key = parent_key;
 	}
 	let mut code = quote! {
 		impl #generics crate::database::Table for #ident #generics {
 			type Context = (#ctx);
 			const SCHEMA: crate::database::Schema<'static> = crate::database::Schema{
-				table_name: #table_name, primary_key: #primary_key,
+				table_name: #table_name,
 				resref_key: #parent_key, parent_table: #parent,
 				fields: &[#schema]};
 			fn ins(&self, s: &mut crate::rusqlite::Statement, k: &Self::Context)->crate::rusqlite::Result<()> {

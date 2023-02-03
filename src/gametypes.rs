@@ -80,8 +80,7 @@ pub trait ToplevelResource: NamedTable {
 	fn show(&self, resref: impl Display, subresources: Self::Subresources<'_>);
 	/// Shows on stdout the resource with given resref, or returns an error.
 	fn show_all(db: &Connection, resref: impl Display)->Result<()> {
-		Self::for_each(db, format!(r#"where "{key}"='{resref}'"#,
-			key=<Self as Table>::SCHEMA.primary_key),
+		Self::for_each(db, format!(r#"where "id"='{resref}'"#),
 		|resref, resource, subresources| {
 			resource.show(resref, subresources);
 			Ok(())

@@ -394,7 +394,6 @@ function create_resvec_mt(prop)
 	return prop
 end
 --««1 Individual resource types
-dump(simod.schema.item_effects)
 -- Each call to `create_resource_mt` recursively creates the metatables
 -- for all subresources as well.
 item_mt = create_resource_mt { table = "items" }
@@ -422,14 +421,9 @@ function item(resref)
 	end
 	for t in select_all("item_effects", resref) do
 		t.itemref = nil
-		local abref = t.abref; t.abref = nil
-		if abref ~= nil then
-			local j
-			for i,a in ipairs(ab) do
-				if a.abref == abref then j = i end
-			end
-			if j == nil then error("ability "..abref.." not found in this item!") end
-			table.insert(ab[j].effects, t)
+		local i = t.abref; t.abref = nil
+		if i ~= 0 then
+			table.insert(ab[i].effects, t)
 		else
 			table.insert(eff, t)
 		end
@@ -441,16 +435,20 @@ end
 
 --««1 Test code
 function test()
+	-- show schema
+	for k, v in pairs(simod.schema) do
+		print(k, v.primary, strdump(v.context))
+	end
 	-- test item cloning
 	sword = item("sw1h34")
-	d"sword"
 	sword.weight = 18
+-- 	d"sword"
 	assert(sword.weight == 18)
-	d"sword.abilities[1].use_icon"
+-- 	d"sword.abilities[1].use_icon"
 	sword.abilities[1].use_icon="spwi101b"
 	if true then return end
 	carsomyr1 = sword("crasomyr")
-	d"crasomyr1"
+-- 	d"crasomyr1"
 	assert(carsomyr1.itemref == "crasomyr")
 	assert(carsomyr1.name == "crasomyr")
 	assert(carsomyr1.abilities[0]._context.itemref == carsomyr1.itemref)
@@ -460,9 +458,6 @@ function test()
 	assert(carsomyr2.weight == 200)
 	assert(carsomyr2.abilities[0]._context.itemref == carsomyr2.itemref)
 end
-dump(simod.list("item_effects", "sw1h34"))
-dump(simod.select("items", "sw1h34"))
-dump(simod.select("item_effects", 5876))
 test()
 -- print("==============")
 -- sword.abilities:push { range = 9, use_icon="!!new!!",
