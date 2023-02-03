@@ -252,11 +252,11 @@ impl FromSql for Resref {
 impl Resref {
 	// iterates until `test` returns FALSE
 	pub fn fresh(source: &str, mut is_used: impl FnMut(&Resref)->rusqlite::Result<bool> )->rusqlite::Result<Self> {
-		trace!("resref:: fresh({source})");
-// 		let mut n = std::cmp::min(source.len(), 8)-1;
+		// we write additional numbers of l digits in the positions [n-l:n-1]
+		// (where n ∈ [0,7] and l ∈ [0,7]):
 		let mut l = 0;
-		let mut buf = Self { name: StaticString { bytes: [0u8; 8] } };
 		let mut n = 0;
+		let mut buf = Self { name: StaticString { bytes: [0u8; 8] } };
 		// truncate to 8 bytes, keeping only allowed characters, and lowercase
 		// (note: this might be slightly too restrictive — e.g. parentheses
 		// are likely allowed)
@@ -267,8 +267,7 @@ impl Resref {
 				if n >= 8 { break }
 			}
 		}
-		trace!("found n={n}, initial buf.name.bytes = {:?}", buf.name.bytes);
-		n-= 1;
+		trace!("resref::fresh({source}), used {n} letters");
 		for j in 1..111_111_111 {
 			// This panics after all 111_111_111 possibilities have been
 			// exhausted. Unlikely to happen irl (and then we cannot do much
@@ -276,14 +275,17 @@ impl Resref {
 			// The last number written at any length is always (9*);
 			// we detect this to increase the length.
 			let mut s = j+888_888_888;
+			// we start inserting right-to-left from position n-1
+			// (note: the decrement at the *beginning* of the loop prevents an
+			// usize underflow)
 			let mut i = n;
 			let mut is_nines = true;
 			for _ in 0..l {
+				i-= 1;
 				let c = (s % 10) as u8;
 				s/= 10;
 				is_nines = is_nines && (c == 9);
 				buf.name.bytes[i] = 48u8 + c;
-				i-= 1;
 			}
 			if !is_used(&buf)? { return Ok(buf) }
 			if is_nines { if n < 7 { n+= 1; } l+= 1; }
