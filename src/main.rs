@@ -357,6 +357,59 @@ impl BifIndex {
 }
 
 // IV. Game index main structure:
+/// Abstract, higher-level representation of a BIF file.
+#[derive(Debug)]
+pub struct BifFile {
+	contents: Option<(BufReader<File>,Vec<BifResource>)>,
+	path: PathBuf,
+}
+impl BifFile {
+	/// Opens a BIF file (to cache) if not already open.
+	///
+	/// This converts a `None` option to a `Some()` where the BIF file is
+	/// loaded to memory. This avoids opening several times the same file,
+	/// or opening it when we have nothing to read in it.
+	fn init(&mut self)->Result<()> {
+		if self.contents.is_none() {
+			let file = File::open(&self.path)
+				.with_context(|| format!("cannot open BIF file: {:?}", self.path))?;
+			let mut buf = BufReader::new(file);
+			let hdr = BifHdr::unpack(&mut buf)
+				.context("cannot open BIF header")?;
+			buf.seek(SeekFrom::Start(hdr.offset as u64))?;
+			let resources = BifResource::vecunpack(&mut buf, hdr.nres as usize)
+				.with_context(|| format!("cannot read BIF resources from {:?}",
+					self.path))?;
+			self.contents = Some((buf, resources));
+		}
+		Ok(())
+	}
+	/// Reads a resource from the file.
+	pub fn read(&mut self, resource_index: usize, restype1: Restype)->Result<Cursor<Vec<u8>>> {
+		self.init()?;
+		let (buf, resources) = self.contents.as_mut().unwrap();
+		let BifResource { offset, size, restype, .. } = resources[resource_index];
+		assert_eq!(restype1, restype);
+		buf.seek(SeekFrom::Start(offset as u64))?;
+		Ok(Cursor::new(BifHdr::read_bytes(buf, size as usize)?))
+	}
+	pub fn new(path: PathBuf)->Self { Self { contents: None, path } }
+}
+/// A (lazy) accessor to a game resource.
+///
+/// This opens the BIF file only when its [`ResHandle::open`] method is invoked.
+#[derive(Debug)]
+pub enum ResHandle<'a> {
+	Bif(&'a mut BifFile, BifIndex, Restype),
+}
+impl ResHandle<'_> {
+	pub fn open(&mut self)->Result<Cursor<Vec<u8>>> {
+		match self {
+			Self::Bif(bif, location, restype) =>
+				bif.read(location.resourceindex(), *restype),
+		}
+	}
+}
 /// The main structure accessing game files.
 #[derive(Debug)] pub struct GameIndex {
 	/// The root directory (containing "chitin.key").
@@ -426,12 +479,11 @@ impl GameIndex {
 		let pb = Progress::new(self.resources.len(), "resources");
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
 			let path = self.root.join(filename);
-			let mut bif = Option::<BifFile>::default();
+			let mut bif = BifFile::new(path);
 			let pb1 = Progress::new(self.resources.len(), filename);
 			for res in self.resources.iter() {
-				let rread = ResHandle{ bif: &mut bif, path: &path,
-					location: res.location, restype: res.restype, };
 				if res.location.sourcefile() != sourcefile { continue }
+				let rread = ResHandle::Bif(&mut bif, res.location, res.restype,);
 				pb.inc(1);
 				pb1.inc(1);
 				f(res.restype, res.resref, rread)?
@@ -469,61 +521,6 @@ impl GameIndex {
 	pub fn backup(&self, file: impl AsRef<Path>)->Result<()> {
 		self.backup_as(&file, file.as_ref().file_name().unwrap())
 	}
-}
-/// A (lazy) accessor to a game resource.
-///
-/// This opens the BIF file only when its [`ResHandle::open`] method is invoked.
-/// TODO: convert this into a trait, and add an implementation which
-/// looks in override files instead.
-#[derive(Debug)]
-pub struct ResHandle<'a> {
-	bif: &'a mut Option<BifFile>,
-	path: &'a PathBuf,
-	location: BifIndex,
-	restype: Restype,
-}
-impl ResHandle<'_> {
-	pub fn open(&mut self)->Result<Cursor<Vec<u8>>> {
-		biffile(self.bif, &self.path)
-			.context("cannot open BIF file")?;
-		let biffile = self.bif.as_mut().unwrap();
-		let j = self.location.resourceindex();
-		let BifResource{ offset, size, restype, .. } = &biffile.resources[j];
-		assert_eq!(restype, &self.restype);
-		biffile.buf.seek(SeekFrom::Start(*offset as u64))?;
-		Ok(Cursor::new(BifHdr::read_bytes(&mut biffile.buf, *size as usize)?))
-	}
-}
-
-/// Unpacks the list of resources present in a given BIF file.
-fn bifresources(mut file: impl Read+Seek)->Result<Vec<BifResource>> {
-	let hdr = BifHdr::unpack(&mut file)
-		.context("cannot open BIF header")?;
-	file.seek(SeekFrom::Start(hdr.offset as u64))?;
-	BifResource::vecunpack(&mut file, hdr.nres as usize)
-		.map_err(|e| e.into())
-}
-/// Abstract, higher-level representation of a BIF file.
-#[derive(Debug)]
-struct BifFile {
-	buf: BufReader<File>,
-	resources: Vec<BifResource>,
-}
-/// Opens a BIF file (to cache) if not already open.
-///
-/// This converts a `None` option to a `Some()` where the BIF file is
-/// loaded to memory. This avoids opening several times the same file,
-/// or opening it when we have nothing to read in it.
-fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->Result<()> {
-	if o.is_none() {
-		let file = File::open(path)
-			.with_context(|| format!("cannot open BIF file: {path:?}"))?;
-		let mut buf = BufReader::new(file);
-		let resources = bifresources(&mut buf)
-			.with_context(|| format!("cannot read BIF resources from {path:?}"))?;
-		*o = Some(BifFile{buf, resources});
-	}
-	Ok(())
 }
 } // mod gamefiles
 pub(crate) mod database {
