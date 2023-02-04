@@ -422,7 +422,7 @@ impl GameIndex {
 	/// We cannot be a true `Iterator` because of the “streaming iterator”
 	/// problem (aka cannot return references to iterator-owned data),
 	/// so we perform internal iteration by this `for_each` method:
-	pub fn for_each<F>(&self, mut f: F)->Result<()> where F: (FnMut(Restype, ResHandle<'_>)->Result<()>) {
+	pub fn for_each<F>(&self, mut f: F)->Result<()> where F: (FnMut(Restype, Resref, ResHandle<'_>)->Result<()>) {
 		let pb = Progress::new(self.resources.len(), "resources");
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
 			let path = self.root.join(filename);
@@ -430,11 +430,11 @@ impl GameIndex {
 			let pb1 = Progress::new(self.resources.len(), filename);
 			for res in self.resources.iter() {
 				let rread = ResHandle{ bif: &mut bif, path: &path,
-					location: res.location, restype: res.restype, resref: res.resref, };
+					location: res.location, restype: res.restype, };
 				if res.location.sourcefile() != sourcefile { continue }
 				pb.inc(1);
 				pb1.inc(1);
-				f(res.restype, rread)?
+				f(res.restype, res.resref, rread)?
 			}
 		}
 		Ok(())
@@ -481,9 +481,6 @@ pub struct ResHandle<'a> {
 	path: &'a PathBuf,
 	location: BifIndex,
 	restype: Restype,
-	/// The name associated to this buffer, either as an index in bif file,
-	/// or as (TODO) the name of an override file.
-	pub resref: Resref,
 }
 impl ResHandle<'_> {
 	pub fn open(&mut self)->Result<Cursor<Vec<u8>>> {
@@ -499,13 +496,11 @@ impl ResHandle<'_> {
 }
 
 /// Unpacks the list of resources present in a given BIF file.
-fn bifresources(file: impl AsRef<Path>+Debug)->Result<Vec<BifResource>> {
-	let mut f = File::open(&file)
-		.with_context(|| format!("cannot open bifresources in {file:?}"))?;
-	let hdr = BifHdr::unpack(&mut f)
-		.with_context(|| format!("cannot open BIF header in {file:?}"))?;
-	f.seek(SeekFrom::Start(hdr.offset as u64))?;
-	BifResource::vecunpack(&mut f, hdr.nres as usize)
+fn bifresources(mut file: impl Read+Seek)->Result<Vec<BifResource>> {
+	let hdr = BifHdr::unpack(&mut file)
+		.context("cannot open BIF header")?;
+	file.seek(SeekFrom::Start(hdr.offset as u64))?;
+	BifResource::vecunpack(&mut file, hdr.nres as usize)
 		.map_err(|e| e.into())
 }
 /// Abstract, higher-level representation of a BIF file.
@@ -519,13 +514,16 @@ struct BifFile {
 /// This converts a `None` option to a `Some()` where the BIF file is
 /// loaded to memory. This avoids opening several times the same file,
 /// or opening it when we have nothing to read in it.
-fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->Result<&'a BifFile> {
+fn biffile<'a>(o: &'a mut Option<BifFile>, path: &'a (impl AsRef<Path>+Debug))->Result<()> {
 	if o.is_none() {
-		let resources = bifresources(path).context("cannot read BIF resources")?;
-		let buf = BufReader::new(File::open(path)?);
+		let file = File::open(path)
+			.with_context(|| format!("cannot open BIF file: {path:?}"))?;
+		let mut buf = BufReader::new(file);
+		let resources = bifresources(&mut buf)
+			.with_context(|| format!("cannot read BIF resources from {path:?}"))?;
 		*o = Some(BifFile{buf, resources});
 	}
-	Ok(o.as_ref().unwrap())
+	Ok(())
 }
 } // mod gamefiles
 pub(crate) mod database {
@@ -1633,11 +1631,11 @@ fn load(db: Connection, game: &GameIndex)->Result<()> {
 	debug!("loading game resources");
 	db.exec("begin transaction")?;
 	let mut base = DbInserter::new(&db)?;
-	game.for_each(|restype, handle| {
-		trace!("found resource {}.{:#04x}", &handle.resref, restype.value);
-		base.register(&handle.resref)?;
+	game.for_each(|restype, resref,  handle| {
+		trace!("found resource {}.{:#04x}", resref, restype.value);
+		base.register(&resref)?;
 		match restype {
-		RESTYPE_ITM => base.load::<Item>(handle),
+		RESTYPE_ITM => base.load::<Item>(resref, handle),
 		_ => Ok(())
 		}
 	})?;

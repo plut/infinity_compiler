@@ -1,10 +1,14 @@
 # Override
+ - [ ] replace `ResHandle` by `LazyCursor`
  - [ ] atomic save to override
+ - [ ] they need to be read as resource handles
 ## Pre-existing overrides
  - [ ] insert pre-existing override files in db
  - [ ] backup of (pre-existing) override files when writing them
  - [ ] restore override files
 ## Interface for pre-existing overrides
+ - when writing to a pr.ex file we need to backup it if possible
+ - resources can go to main table as long as we have a list of pr.ex.ov.
 # Lua side
 ## Primitive operations
  - [x] `update`
@@ -21,9 +25,6 @@
  - [ ] expand `current` to add file+line reference to Lua code
  - [ ] see if need to split bitfields
 ## Strings
- - [ ] write a minimal Lua lexer to identify all `_(str)` calls
- - [ ] just like we did in Julia, have `_(str)` put stuff in a normalized
-   table
  - [x] fill language strings tables
  - [ ] decide how to convert `.po` to sql
 	- the {M} and {F} markers work in this conversion (sql treats all
@@ -44,6 +45,12 @@
    metadata: name, categorization, description, code (function or string),
    compatibility
 # Other functions
+ - add a few functions:
+  - [ ] `translate`: lua to .po
+   - [ ] write a minimal Lua lexer to identify all `_(str)` calls
+   - [ ] just like we did in Julia, have `_(str)` put stuff in a normalized
+     table
+  - [ ] adding a mod reads the .po strings
  - [ ] show: add a flag to keep original resref and a language selector
  - [ ] clarify views:
  - [ ] human-readable vs. compiled

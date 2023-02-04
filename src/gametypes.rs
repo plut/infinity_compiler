@@ -203,17 +203,15 @@ impl ToplevelResource for Item {
 			.context("inserting into 'items'")?;
 
 		cursor.seek(SeekFrom::Start(item.abilities_offset as u64))?;
-		// TODO zip those vectors
+		// effect count per ability
 		let mut ab_n = Vec::<u16>::with_capacity(item.abilities_count as usize);
-		let mut ab_i = Vec::<i64>::with_capacity(item.abilities_count as usize);
 		for abref in 0..item.abilities_count {
 			let ab = ItemAbility::unpack(&mut cursor)?;
 			ab.ins(&mut db.tables.item_abilities, &(resref, 1+abref as usize))
 				.context("inserting into 'item_abilities'")?;
 			ab_n.push(ab.effect_count);
-			ab_i.push(db.db.last_insert_rowid());
 		}
-		trace!("inserting item {resref}: {ab_n:?} {ab_i:?}");
+		trace!("inserting item {resref}; effects per abilities: {ab_n:?}");
 		cursor.seek(SeekFrom::Start(item.effect_offset as u64))?;
 		for j in 0..item.equip_effect_count { // on-equip effects
 			let eff = ItemEffect::unpack(&mut cursor)?;
@@ -323,7 +321,7 @@ produce_resource_list!();
 /// It also contains a statement for storing original resrefs.
 #[derive(Debug)]
 pub struct DbInserter<'a> {
-	db: &'a Connection,
+// 	db: &'a Connection,
 	add_resref: Statement<'a>,
 	tables: AllResources<Statement<'a>>,
 	resource_count: AllResources<usize>,
@@ -332,7 +330,7 @@ impl<'a> DbInserter<'a> {
 	/// Creates a new `DbInserter` from a database and the list of all
 	/// resources.
 	pub fn new(db: &'a Connection)->Result<Self> {
-		Ok(Self { db,
+		Ok(Self { // db,
 		tables: RESOURCES.map(|schema, _|
 			any_ok(db.prepare(&schema.insert_statement("res_"))
 			.with_context(|| format!("insert statement for table '{table}'",
@@ -346,8 +344,8 @@ impl<'a> DbInserter<'a> {
 		self.add_resref.execute((resref,))
 	}
 	/// Loads a new top-level resource
-	pub fn load<T: ToplevelResource>(&mut self, mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
-		T::load(self, handle.open()?, handle.resref)?;
+	pub fn load<T: ToplevelResource>(&mut self, resref: Resref, mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
+		T::load(self, handle.open()?, resref)?;
 		*(<T as NamedTable>::find_field_mut(&mut self.resource_count))+=1;
 		Ok(())
 	}
