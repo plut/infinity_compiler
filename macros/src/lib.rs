@@ -317,7 +317,6 @@ fn table_attr_resource(args: &mut AttrParser, table_name: &mut String) {
 pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 	let mut fields = pm2::TokenStream::new();
 	let mut map = pm2::TokenStream::new();
-	let mut map_mut = pm2::TokenStream::new();
 	let mut data = pm2::TokenStream::new();
 	let mut table_schema = pm2::TokenStream::new();
 	let mut n = 0usize;
@@ -328,11 +327,10 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 
 		let ty = Ident::new(type_name, Span::call_site());
 		let field = Ident::new(table_name, Span::call_site());
-		quote!{ #[allow(missing_docs)] pub #field: T, }.to_tokens(&mut fields);
+		let q = quote!{ #[allow(missing_docs)] pub #field: T, };
+		q.to_tokens(&mut fields);
 		quote!{ #field: f(&<#ty as crate::database::Table>::SCHEMA,&self.#field)?, }
 			.to_tokens(&mut map);
-		quote!{ #field: f(&<#ty as crate::database::Table>::SCHEMA,&self.#field)?, }
-			.to_tokens(&mut map_mut);
 		quote!{ #field: (), }.to_tokens(&mut data);
 		quote!{ let sch = &<#ty as crate::database::Table>::SCHEMA;
 			if s == sch.table_name { return Some(sch) } }
@@ -345,7 +343,7 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 ///
 /// This is used for iterating similar code for each resources.
 		#[derive(Debug)] #[allow(clippy::missing_docs)]
-		pub struct AllResources<T:Debug > {
+		pub struct AllResources<T: Debug> {
 #[allow(clippy::missing_docs)]
 			_marker: std::marker::PhantomData<T>, #fields }
 /// An heterogeneous iterator over the constant list of all game resource types.
@@ -361,7 +359,7 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 			}
 			/// Calls a closure for each resource type in the game.
 			pub fn map_mut<U: Debug,E,F:FnMut(&crate::database::Schema,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources<U>,E> {
-				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map_mut })
+				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map })
 			}
 			/// Given a SQL table name, returns the schema for this table.
 			pub fn table_schema(&self, s: &str)->Option<&'static crate::database::Schema> {

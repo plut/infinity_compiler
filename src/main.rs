@@ -397,16 +397,22 @@ impl BifFile {
 }
 /// A (lazy) accessor to a game resource.
 ///
-/// This opens the BIF file only when its [`ResHandle::open`] method is invoked.
+/// This encapsulates both the case of an override game resource and a
+/// BIF game resource. In the second case, access to the BIF file is
+/// lazy: this file is loaded only when [`ResHandle::open`] is called.
 #[derive(Debug)]
 pub enum ResHandle<'a> {
 	Bif(&'a mut BifFile, BifIndex, Restype),
+	Override(&'a Path),
 }
 impl ResHandle<'_> {
+	pub fn is_override(&self)->bool { matches!(self, Self::Override(_)) }
 	pub fn open(&mut self)->Result<Cursor<Vec<u8>>> {
 		match self {
-			Self::Bif(bif, location, restype) =>
-				bif.read(location.resourceindex(), *restype),
+		Self::Bif(bif, location, restype) =>
+			bif.read(location.resourceindex(), *restype),
+		Self::Override(path) => Ok(Cursor::new(std::fs::read(&path)
+				.with_context(|| format!("cannot open override file: {path:?}"))?)),
 		}
 	}
 }
@@ -426,7 +432,7 @@ impl ResHandle<'_> {
 }
 impl GameIndex {
 	/// Initializes the structure from the path containing "chitin.key".
-	pub fn open(gamedir: impl AsRef<Path>)->Result<Self> {
+	pub fn new(gamedir: impl AsRef<Path>)->Result<Self> {
 		let gamedir = gamedir.as_ref().to_path_buf();
 		let indexfile = Path::new(&gamedir).join("chitin.key");
 		let mut f = File::open(&indexfile)
@@ -475,8 +481,29 @@ impl GameIndex {
 	/// We cannot be a true `Iterator` because of the “streaming iterator”
 	/// problem (aka cannot return references to iterator-owned data),
 	/// so we perform internal iteration by this `for_each` method:
+	///
+	/// Resources are read first from override files, then from BIF files.
+	/// This (and the use of a well-placed `INSERT OR IGNORE` SQL
+	/// statement) allows ignoring of BIF resources masked by an override
+	/// file.
 	pub fn for_each<F>(&self, mut f: F)->Result<()> where F: (FnMut(Restype, Resref, ResHandle<'_>)->Result<()>) {
 		let pb = Progress::new(self.resources.len(), "resources");
+		let over_dir = self.root.join("override"); // "override" is a reserved kw
+		if over_dir.is_dir() {
+			for e in over_dir.read_dir()
+				.with_context(|| format!("cannot read directory {over_dir:?}"))? {
+				let entry = e?;
+				let name = match entry.file_name().into_string() { Err(_) => continue,
+					Ok(s) => s };
+				let pos = match name.find('.') { None => continue, Some(p) => p };
+				if pos > 8 { continue }
+				let resref = Resref { name: StaticString::<8>::from(&name[..pos]), };
+				let ext = &name[pos+1..];
+				let restype = crate::gametypes::restype_from_extension(ext);
+				trace!("reading override file: {name}; restype={restype:?}");
+				f(restype, resref, ResHandle::Override(&entry.path()))?
+			}
+		}
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
 			let path = self.root.join(filename);
 			let mut bif = BifFile::new(path);
@@ -884,11 +911,18 @@ impl<'schema> Schema<'schema> {
 		format!(r#"select {cols} from "{n1}{n2}" {condition} order by {sort}"#,
 			cols = self.columns(""), sort = self.context(""))
 	}
-	/// The SQL code for populating the database from game files.
-	pub fn insert_statement(&self, prefix: impl Display)->String {
+	/// The SQL code for inserting into a table.
+	///
+	/// This is used for both initial populating of the database from game
+	/// files and for `simod.insert`.
+	///
+	/// The `or` parameter allows calling SQL `INSERT OR IGNORE`;
+	/// this is used when initializing the database to ignore resources
+	/// which are superseded by override files.
+	pub fn insert_statement(&self, or: impl Display, prefix: impl Display)->String {
 		let table_name = &self.table_name;
 		let cols = self.columns("");
-		let mut s = format!("insert into \"{prefix}{table_name}\" ({cols}) values (");
+		let mut s = format!("insert {or} into \"{prefix}{table_name}\" ({cols}) values (");
 		for c in 0..cols.len()  {
 			if c > 0 { s.push(','); }
 			s.push('?');
@@ -1405,7 +1439,7 @@ fn insert(db: &Connection, (table, vals, context): (String, mlua::Table<'_>, mlu
 	use crate::database::{Column,FieldType};
 	let schema = table_schema(&table)?;
 	trace!("schema for {table}: {schema:?}");
-	let mut stmt = db.prepare(&schema.insert_statement(""))?;
+	let mut stmt = db.prepare(&schema.insert_statement("", ""))?;
 	let mut fields = Vec::<LuaToSql<'_>>::with_capacity(schema.fields.len());
 	for Column { fieldname, fieldtype, .. } in schema.fields.iter() {
 		if *fieldtype == FieldType::Rowid {
@@ -1557,6 +1591,7 @@ pub fn create_db(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Connection
 	db.execute_batch(r#"
 create table "global" ("component" text, "strref_count" integer);
 insert into "global"("component") values (null);
+create table "override" ("resref" text, "ext" text);
 create table "resref_orig" ("resref" text primary key on conflict ignore);
 create table "resref_dict" ("key" text not null primary key on conflict ignore, "resref" text);
 create table "strref_dict" ("key" text not null primary key on conflict ignore, "strref" integer unique, "flags" integer);
@@ -1632,8 +1667,8 @@ fn load(db: Connection, game: &GameIndex)->Result<()> {
 		trace!("found resource {}.{:#04x}", resref, restype.value);
 		base.register(&resref)?;
 		match restype {
-		RESTYPE_ITM => base.load::<Item>(resref, handle),
-		_ => Ok(())
+			Item::RESTYPE => base.load::<Item>(resref, handle),
+			_ => Ok(())
 		}
 	})?;
 	pb.inc(1);
@@ -1784,7 +1819,7 @@ fn main() -> Result<()> {
 	if options.database.is_none() {
 		options.database = Some(Path::new("game.sqlite").into());
 	}
-	let game = GameIndex::open(&options.gamedir)
+	let game = GameIndex::new(&options.gamedir)
 		.with_context(|| format!("cannot initialize game from directory {:?}",
 		options.gamedir))?;
 	let loglevel = match options.log_level {

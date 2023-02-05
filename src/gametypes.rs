@@ -37,6 +37,8 @@ pub trait NamedTable: Table {
 pub trait ToplevelResource: NamedTable {
 	/// The file extension associated with this resource.
 	const EXTENSION: &'static str;
+	/// The resource type (as encoded in bif files).
+	const RESTYPE: Restype;
 	/// Subresources for this resource (together with linking info.).
 	///
 	/// This should be a tuple of all subresources, each of them stored in
@@ -88,6 +90,11 @@ pub trait ToplevelResource: NamedTable {
 		Ok(())
 	}
 } // trait ToplevelResource
+/// When provided with a file extension, return the corresponding Restype.
+pub fn restype_from_extension(ext: &str)->Restype {
+	if ext.eq_ignore_ascii_case(Item::EXTENSION) { return Item::RESTYPE }
+	Restype { value: 0 }
+}
 
 /// An effect inside a .itm file (either global or in an ability).
 #[derive(Debug,Pack,Table)]
@@ -195,6 +202,7 @@ pub trait ToplevelResource: NamedTable {
 }
 impl ToplevelResource for Item {
 	const EXTENSION: &'static str = "itm";
+	const RESTYPE: Restype = Restype { value: 0x03ed };
 	type Subresources<'a> = (&'a mut [ItemAbility], &'a mut[(ItemEffect,usize)]);
 	/// load an item from cursor
 	fn load(db: &mut DbInserter<'_>, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
@@ -324,6 +332,7 @@ pub struct DbInserter<'a> {
 // 	db: &'a Connection,
 	add_resref: Statement<'a>,
 	tables: AllResources<Statement<'a>>,
+	add_override: Statement<'a>,
 	resource_count: AllResources<usize>,
 }
 impl<'a> DbInserter<'a> {
@@ -332,12 +341,15 @@ impl<'a> DbInserter<'a> {
 	pub fn new(db: &'a Connection)->Result<Self> {
 		Ok(Self { // db,
 		tables: RESOURCES.map(|schema, _|
-			any_ok(db.prepare(&schema.insert_statement("res_"))
+			db.prepare(&schema.insert_statement("or ignore", "res_"))
 			.with_context(|| format!("insert statement for table '{table}'",
-				table = schema.table_name))?)
+				table = schema.table_name))
 		)?,
 		resource_count: RESOURCES.map(|_,_| Ok::<usize,rusqlite::Error>(0))?,
-		add_resref: db.prepare(r#"insert or ignore into "resref_orig" values (?)"#)?
+		add_resref: db.prepare(
+			r#"insert or ignore into "resref_orig" values (?)"#)?,
+		add_override: db.prepare(
+			r#"insert or ignore into "override" values (?,?)"#)?,
 	}) }
 	/// Adds a new [`Resref`] to the table of original resrefs.
 	pub fn register(&mut self, resref: &Resref)->rusqlite::Result<usize> {
@@ -346,6 +358,9 @@ impl<'a> DbInserter<'a> {
 	/// Loads a new top-level resource
 	pub fn load<T: ToplevelResource>(&mut self, resref: Resref, mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
 		T::load(self, handle.open()?, resref)?;
+		if handle.is_override() {
+			self.add_override.execute((resref, T::EXTENSION))?;
+		}
 		*(<T as NamedTable>::find_field_mut(&mut self.resource_count))+=1;
 		Ok(())
 	}
@@ -360,8 +375,3 @@ impl Drop for DbInserter<'_> {
 		}).unwrap();
 	}
 }
-
-// The constants indicating the various resource types also have their
-// place in this mod:
-/// See iesdp
-pub const RESTYPE_ITM: Restype = Restype { value: 0x03ed };

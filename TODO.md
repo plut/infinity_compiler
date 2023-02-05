@@ -1,14 +1,11 @@
 # Override
- - [ ] replace `ResHandle` by `LazyCursor`
  - [ ] atomic save to override
- - [ ] they need to be read as resource handles
+ - [+] they need to be read as resource handles
 ## Pre-existing overrides
- - [ ] insert pre-existing override files in db
+ - [+] insert pre-existing override files in db
+  - [+] and mark them somehow, so that they can be backed up as needed
  - [ ] backup of (pre-existing) override files when writing them
  - [ ] restore override files
-## Interface for pre-existing overrides
- - when writing to a pr.ex file we need to backup it if possible
- - resources can go to main table as long as we have a list of pr.ex.ov.
 # Lua side
 ## Primitive operations
  - [x] `update`
@@ -45,6 +42,7 @@
    metadata: name, categorization, description, code (function or string),
    compatibility
 # Other functions
+ - [ ] debug output is a bit of a mess: clean it
  - add a few functions:
   - [ ] `translate`: lua to .po
    - [ ] write a minimal Lua lexer to identify all `_(str)` calls
