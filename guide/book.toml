@@ -1,6 +1,0 @@
-[book]
-authors = ["Jérôme Plût"]
-language = "en"
-multilingual = false
-src = "src"
-title = "`simod` user documentation"

@@ -1,0 +1,398 @@
+<!DOCTYPE HTML>
+<html lang="en" class="sidebar-visible no-js light">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>&#x60;simod&#x60; user documentation</title>
+        <meta name="robots" content="noindex" />
+        <!-- Custom HTML head -->
+        <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff" />
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+    </head>
+    <body>
+        <!-- Provide site root to javascript -->
+        <script type="text/javascript">
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script type="text/javascript">
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script type="text/javascript">
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('no-js')
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add('js');
+        </script>
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script type="text/javascript">
+            var html = document.querySelector('html');
+            var sidebar = 'hidden';
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            }
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky bordered">
+                    <div class="left-buttons">
+                        <button id="sidebar-toggle" class="icon-button" type="button" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </button>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light (default)</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">&#x60;simod&#x60; user documentation</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script type="text/javascript">
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="workflow-for-mod-installation"><a class="header" href="#workflow-for-mod-installation">Workflow for mod installation</a></h1>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="api-for-modders"><a class="header" href="#api-for-modders">API for modders</a></h1>
+<p>TODO.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="why-a-new-modding-tool"><a class="header" href="#why-a-new-modding-tool">Why a new modding tool?</a></h1>
+<p>This should offer the following advantages over WeiDU mods,
+either in terms of robustness or in ease-of-use for mod authors.</p>
+<h2 id="replacing-the-mod-stack-by-a-proper-database"><a class="header" href="#replacing-the-mod-stack-by-a-proper-database">Replacing the mod stack by a proper database</a></h2>
+<p>The database offers at any given time a coherent view of all
+currently-installed mods. Uninstalling a single mod can be done by
+running a somewhat simple (set of) SQL <code>DELETE</code> statement(s).
+In particular, this is very fast (quasi-constant time w.r.t the number of
+mods installed) compared to WeiDU's stack model (when modifying a mod
+deep down the stack requires recomputing the whole stack, which has O(n)
+cost).</p>
+<h2 id="easier-conflict-detection-between-mods"><a class="header" href="#easier-conflict-detection-between-mods">Easier conflict detection between mods</a></h2>
+<p>With whole access to the database it becomes trivial to detect when two
+mods are trying to access the same resource.</p>
+<p>(This is still <strong>TODO</strong> however; mostly, we need to fix an interface
+about what to do in the case of conflict).</p>
+<h2 id="namespacing"><a class="header" href="#namespacing">Namespacing</a></h2>
+<p>Identifiers for game resources and strings are abstracted as strings
+and namespaced per mod component.
+This completely removes the need for using mod prefixes
+and fitting names in 8 bytes (minus the prefix).
+(On the other hand, the namespace model still allow access to original
+game resources, and even resources from other mods, when this is really
+needed).</p>
+<p>Moreover, this also circumvents
+a number of “bad behaviours” by mod authors,
+such as fully overwriting a game file
+or using inconsistent case for file names.</p>
+<h2 id="translations"><a class="header" href="#translations">Translations</a></h2>
+<p>This tool uses <a href="https://www.gnu.org/software/gettext/manual/html_node/PO-Files.html"><code>.po</code>
+files</a>
+for string translations.
+This format is easy to edit; a number of free and open source tools
+exist, and even a plain text editor will work in most cases.
+This format has also proven to be quite robust e.g. when strings evolve
+between versions of software.
+(This is in contrast with WeiDU's <code>.tra</code> files, which are very brittle:
+a single missing translation when a mod is updating will crash the
+component).</p>
+<p><strong>TODO:</strong>
+the translation manager also contains a number of features
+making it easy to annotate syntactically ambiguous sentences
+(e.g. “Guard” may be either a verb or a noun in English;
+both cases have different translations in most languages).</p>
+<h2 id="mod-writing-in-sql-or-lua"><a class="header" href="#mod-writing-in-sql-or-lua">Mod writing in SQL or Lua</a></h2>
+<p>This tool offers two levels of API for accessing the database.
+The first level is plain SQL given by the description of the database;
+for instance, <code>UPDATE &quot;items&quot; SET &quot;enchantment&quot;=5 WHERE &quot;itemref&quot;='sw1h34'</code> is a perfectly valid mod and will update Albruin's
+enchantment.</p>
+<p>However, it is expected that most of mods will use
+the higher level represented as <a href="https://www.lua.org/">Lua</a> scripts.
+Indeed, this tools offer the option to run a Lua script in an environment
+where a simplified API to the database is exposed.
+For example, the following code has the same effect as the SQL statement
+above:</p>
+<pre><code class="language-lua">albruin = simod.item(&quot;sw1h34&quot;)
+albruin.enchantment = 5
+</code></pre>
+<p>Lua is a easy-to-use programming language
+(and definitely easier to handle for a beginner than WeiDU);
+moreover, it is already the language used in some parts of the games
+themselves.</p>
+<p>The SQL interface also allows authors to write mods in any language
+containing a library for SQL access.</p>
+<h2 id="mod-manager"><a class="header" href="#mod-manager">Mod manager</a></h2>
+<p><strong>TODO</strong>: define a common API from the Lua side for describing a mod +
+metadata (author, description, compatibility list)
+and write on the an interactive mod selection tool which uses this mod
+database.</p>
+<h2 id="portability-and-robustness"><a class="header" href="#portability-and-robustness">Portability and robustness</a></h2>
+<p>The tool is mostly written in Rust, which takes great pains to be as
+portable as possible; and mod scripts written in Lua should be portable
+by construction.</p>
+<p>In particular, it is a design goal to prevent mod authors from needing to
+run shell scripts or batch files (which is a nightmare from a maintenance
+POV).</p>
+<h2 id="performance"><a class="header" href="#performance">Performance</a></h2>
+<p>Any single mod installation only accesses the SQLite database;
+thus all work is deferred to SQLite, which is quite fast.
+Access to the game files is done only once when compiling the full mod
+database to the override directory.
+Moreover, this tool supports differential compilation:
+only those files which did change since the previous compilation
+will be regenerated.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="internals-database-structure"><a class="header" href="#internals-database-structure">Internals: Database structure</a></h1>
+<p><strong>ALL STRINGS ARE UTF-8</strong>. No exceptions; we live in the 21st century.</p>
+<p>The exposed interface for accessing game objects is through a number of
+views:</p>
+<ul>
+<li><code>items</code>, <code>item_abilities</code>, <code>item_effects</code> for game items,</li>
+<li>(other views are <strong>TODO</strong>: we are building high rather than wide for
+now).</li>
+</ul>
+<p>These views implement all the infrastructure necessary for inserting and
+updating game objects; in case more detail is needed, see the
+“Internals” section below.</p>
+<p>This implies that game modding can be performed directly as SQL queries
+on a small number of tables with structure mirroring that of game files.
+An ad-hoc library is also being built to make this comfortable for mod
+authors (TODO).</p>
+<h2 id="resource-view"><a class="header" href="#resource-view">Resource view</a></h2>
+<p>For each resource <code>X</code>:</p>
+<ul>
+<li><code>X</code> is the user-facing view of all resources (original and modded).
+This is the</li>
+<li><code>res_X</code> is the table of all original resources;</li>
+<li><code>add_X</code> is the table of all mod-inserted resources;</li>
+<li><code>edit_X</code> is the table of all mod changes on this resource;</li>
+</ul>
+<p>For top-level resources, a few additional tables are used to mark their
+status in the database with respect to the override directory:</p>
+<ul>
+<li><code>dirty_X</code> is the table listing all resources which have been modified
+and which need to be recompiled to <code>override</code>;</li>
+<li><code>orphan_X</code> is the list of all resources which have been removed from
+the database, but not yet from the <code>override</code> directory.</li>
+</ul>
+<p>A (large) number of triggers are attached to the main view <code>X</code>:</p>
+<ul>
+<li>attempts at modifying <code>X</code> are propagated back to the appropriate table
+(either <code>add_X</code> or <code>edit_X</code>);</li>
+<li>at the same time, modifying <code>X</code> records the resource as dirty in
+<code>dirty_X</code>;</li>
+<li>deleting entries from <code>X</code> marks resources as orphan in <code>orphan_X</code>.
+The <code>res_X</code> table always contains exactly the resources found in
+<code>key/bif</code> and pre-existing override files.
+This table is never touched again after it is built by <code>simod init</code>.</li>
+</ul>
+<h2 id="game-lists-ids-files"><a class="header" href="#game-lists-ids-files">Game lists (<code>IDS</code> files)</a></h2>
+<p>TODO.</p>
+<h2 id="game-tables-2da-files"><a class="header" href="#game-tables-2da-files">Game tables (<code>2DA</code> files)</a></h2>
+<p>TODO.</p>
+<h2 id="scripts"><a class="header" href="#scripts">Scripts</a></h2>
+<p>TODO.</p>
+<h2 id="binary-resources"><a class="header" href="#binary-resources">Binary resources</a></h2>
+<p><strong>TODO:</strong></p>
+<p>Binary resources generally do not need concurrent access between various
+mods and are not handled by the database.
+Where a resref pointing to a binary resource is expected,
+the database uses instead a string referring to a file in the filesystem.</p>
+<p>When the database is saved to the filesystem,
+the filename for these resources is translated to a resref
+using the general algorithm;
+this resref in turn gives the name of the override file
+under which the resource will be saved.</p>
+<h2 id="resources-namespacing-and-translation"><a class="header" href="#resources-namespacing-and-translation">Resources namespacing and translation</a></h2>
+<p>In-game resources are identified by “resrefs”, which are 8-byte ASCII
+strings.
+These resrefs are also used as file names in the override directory,
+which puts a number of additional constraints on allowed characters:
+namely, the characters <code>&quot;+&lt;&gt;/\|?*:</code> are forbidden.</p>
+<h3 id="namespacing-1"><a class="header" href="#namespacing-1">Namespacing</a></h3>
+<p>To each mod component is attached a <em>namespace</em>, in the form of a string.
+The first stage of translation is the mapping of resource names (as
+expressed by the mod) to global resource names. This is done in the
+following way: when a mod with namespace <code>N</code> accesses resource <code>R</code>,</p>
+<ol>
+<li>if the name <code>R</code> does not contain a slash character, then
+the namespace <code>N</code> is prepended: the full resource name is thus
+<code>&quot;N/R&quot;</code>;</li>
+<li>if <code>R</code> contains a slash, then it is assumed to be a fully-qualified
+resource identifier.</li>
+<li>as a special case, resources from the base game are accessible
+using the empty namespace, e.g. as <code>&quot;/sw1h01&quot;</code>.</li>
+</ol>
+<p>These rules allow referring to either a base game resource (case 1)
+or a resource from another mod (case 3), while still providing namespace
+separation by default (case 2).</p>
+<h3 id="implicit-resref-access"><a class="header" href="#implicit-resref-access">Implicit resref access</a></h3>
+<p><strong>TODO:</strong> the Lua interface has the following feature:
+whenever a structure field is of the “resref” type,
+it is possible to assign a full structure to this field;
+this will result in the assignment being made
+with the reference to this structure instead.</p>
+<p>For instance,</p>
+<pre><code class="language-lua">small_sword = simod.item(&quot;/sw1h01&quot;);
+store.inventory:push(small_sword); -- only pushes the resref &quot;/sw1h01&quot;
+</code></pre>
+<h3 id="translation-to-game-format"><a class="header" href="#translation-to-game-format">Translation to game format</a></h3>
+<p>These strings are then converted to the resref format when the database
+is saved to the filesystem.</p>
+<p>More precisely, the <code>resref_dict</code> table contains a dictionary between
+mod-facing (long) resource names and game-facing resrefs.
+This table is filled by triggers: when a new resource field is inserted,
+the values <code>(&quot;long_resource_name&quot;, null)</code> are inserted.
+The compiler takes care of replacing all <code>null</code> fields by
+game-unique resref as needed.</p>
+<p>(These resrefs are deduced from the long resource name by truncating and
+enumerating).</p>
+<p>The <code>resref_dict</code> table is persistent.</p>
+<h2 id="translating-strings"><a class="header" href="#translating-strings">Translating strings</a></h2>
+<p>In-game strings are collected in one or two files, <code>dialog.tlk</code> and
+(depending on user language) <code>dialogF.tlk</code>,
+and referred to by 4-byte integers (“strrefs”) in game structures.
+In the database, the female form <code>dialogF.tlk</code>, where it exists, is
+handled as a (almost) completely separate language from the male form.
+Languages are represented by their 5-letter name (as in <code>&quot;en_US&quot;</code>);
+female variants have a 6-letter name (as in <code>&quot;fr_FRF&quot;</code>).</p>
+<p>Since game strings are not used as references, namespacing rules do not
+apply here; the only rule is that strings from different namespaces will
+never be merged. The way to set a game string (e.g. to set the name of an
+item) is to just use the <em>native string</em> itself,
+i.e. usually the string as written in the mod's native language.</p>
+<h3 id="strings-translations"><a class="header" href="#strings-translations">Strings translations</a></h3>
+<p>String translation is handled through the use of the <code>translations_X</code>
+table, where <code>X</code> is the 5- or 6- letter name of one of the game
+languages. This table contains data similar to the game's <code>.tlk</code> file,
+except that it is indexed by native strings instead of strrefs.</p>
+<p>Any native string absent from this dictionary is left untranslated.
+This is intended as a sane default value where the player,
+when a string has not (yet) been translated, will see the string in the
+original language, which is most often English.</p>
+<h3 id="conversion-to-strref"><a class="header" href="#conversion-to-strref">Conversion to strref</a></h3>
+<p>Conversion between native strings and strref is performed iby the
+<code>strref_dict</code> table in a way similar to the <code>resref_dict</code> table.
+The algorithm for generating new strrefs is of course different (the
+lowest available value is used).</p>
+<h2 id="todo"><a class="header" href="#todo">TODO</a></h2>
+<p>Special cases:</p>
+<ul>
+<li>dialog,</li>
+<li>IDs,</li>
+<li>2da,</li>
+<li>script (de)compiling,</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+            </nav>
+
+        </div>
+
+        <script type="text/javascript">
+            window.playground_copyable = true;
+        </script>
+        <script src="elasticlunr.min.js" type="text/javascript" charset="utf-8"></script>
+        <script src="mark.min.js" type="text/javascript" charset="utf-8"></script>
+        <script src="searcher.js" type="text/javascript" charset="utf-8"></script>
+        <script src="clipboard.min.js" type="text/javascript" charset="utf-8"></script>
+        <script src="highlight.js" type="text/javascript" charset="utf-8"></script>
+        <script src="book.js" type="text/javascript" charset="utf-8"></script>
+
+        <!-- Custom JS scripts -->
+        <script type="text/javascript">
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+    </body>
+</html>
