@@ -135,6 +135,24 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="workflow-for-mod-installation"><a class="header" href="#workflow-for-mod-installation">Workflow for mod installation</a></h1>
+<h2 id="rough-workflow"><a class="header" href="#rough-workflow">Rough workflow</a></h2>
+<ol>
+<li><code>simod init</code> (run this only once): creates the database and fills it
+using data from the Infinity Engine files (key/bif and existing
+override files).</li>
+<li><code>simod add *target*</code> (run this one for each mod component): installs a
+mod component by running the mod script to modify the database.</li>
+<li><code>simod save</code> (run this once the database has been modified): compiles
+the changes from the database back to the game directory.</li>
+</ol>
+<p>See <code>simod --help</code> for (slightly) more details.</p>
+<h2 id="current-status"><a class="header" href="#current-status">Current status</a></h2>
+<blockquote>
+<p>This tool is at the “proof-of-concept” stage.</p>
+<p>Since a lot of the infrastructure is still being built,
+its capabilities are very restricted: it can only access and edit game
+items.</p>
+</blockquote>
 
                     </main>
 
