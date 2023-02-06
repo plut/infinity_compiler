@@ -147,7 +147,7 @@ use crate::prelude::*;
 use rusqlite::types::{FromSql,ToSql, ValueRef};
 
 use std::cmp::min;
-use std::io::{self, BufReader};
+use io::BufReader;
 
 use crate::progress::{Progress};
 use crate::database::{SqlType,FieldType};
@@ -198,7 +198,7 @@ impl<const N: usize> AsRef<str> for StaticString<N> {
 }
 impl<const N: usize> Debug for StaticString<N> {
 	fn fmt(&self, f:&mut Formatter<'_>) -> fmt::Result {
-		use std::fmt::Write;
+		use fmt::Write;
 		f.write_char('"')?;
 		for c in &self.bytes {
 			if *c == 0u8 { break }
@@ -381,8 +381,8 @@ impl Resref {
 /// A string reference as used by the game: 32-bit integer.
 #[derive(Debug,Pack,Clone,Copy)] pub struct Strref { value: i32, }
 impl Display for Strref {
-	fn fmt(&self, mut f: &mut Formatter<'_>)->std::result::Result<(),std::fmt::Error>{
-		use std::fmt::Write;
+	fn fmt(&self, mut f: &mut Formatter<'_>)->std::result::Result<(),fmt::Error>{
+		use fmt::Write;
 		write!(&mut f, "@{}", self.value)
 	}
 }
@@ -496,7 +496,7 @@ impl ResHandle<'_> {
 		match self {
 		Self::Bif(bif, location, restype) =>
 			bif.read(location.resourceindex(), *restype),
-		Self::Override(path) => Ok(Cursor::new(std::fs::read(&path)
+		Self::Override(path) => Ok(Cursor::new(fs::read(&path)
 				.with_context(|| format!("cannot open override file: {path:?}"))?)),
 		}
 	}
@@ -517,9 +517,9 @@ impl ResHandle<'_> {
 	pub backup_dir: PathBuf,
 }
 /// Creates the directory unless it exists
-fn create_dir(path: impl AsRef<Path>)->std::io::Result<()> {
+fn create_dir(path: impl AsRef<Path>)->io::Result<()> {
 	let path = path.as_ref();
-	match std::fs::create_dir(path) {
+	match fs::create_dir(path) {
 		Ok(_) => { info!("creating directory {path:?}"); Ok(()) }
 		Err(e) => match e.kind() {
 			io::ErrorKind::AlreadyExists =>
@@ -695,13 +695,14 @@ impl GameIndex {
 			if ext.eq_ignore_ascii_case("tlk") {
 				let mut lang = &name[..pos];
 				let mut filename = String::from("dialog");
-				if pos == 6 && lang.as_bytes()[lang.len()-1] == b'F' {
-					lang = &lang[..lang.len()-1];
+				// change "fr_FRF" to "fr_FR" + "dialogF.tlk":
+				if pos == 6 && lang.as_bytes()[5] == b'F' {
+					lang = &lang[..5];
 					filename.push('F');
 				}
 				filename.push_str(".tlk");
-				trace!(r#"this is a tlk file, pushing {filename}"#);
-				tlk_files.push((entry.path(), 
+				trace!(r#"this is a tlk file, pushing {name} -> {filename}"#);
+				tlk_files.push((override_dir.join(&name),
 					self.root.join("lang").join(lang).join(filename)));
 				continue;
 			}
@@ -710,14 +711,16 @@ impl GameIndex {
 		// it is not possible to do it atomically since we are moving to
 		// several directories, so we group all move operations together
 		// instead:
-		for (source, dest) in tlk_files {
-			fs::rename(&source, &dest)
-				.with_context(|| format!("cannot install saved language file {source:?} to {dest:?}"))?;
-		}
 		fs::rename(&override_dir, out_dir.path())
 			.with_context(|| format!("cannot displace old override directory {override_dir:?} to {out_dir:?}"))?;
 		fs::rename(source, &override_dir)
 			.with_context(|| format!("cannot displace old override directory {override_dir:?} to {out_dir:?}"))?;
+		// once the “dangerous” step of overwriting override is completed,
+		// we can move the tlk files from the new override:
+		for (source, dest) in tlk_files {
+			fs::rename(&source, &dest)
+				.with_context(|| format!("cannot install saved language file {source:?} to {dest:?}"))?;
+		}
 		// TODO: in case of failure of either rename operation, use (slower)
 		// file-by-file copy instead
 		Ok(())
@@ -872,7 +875,7 @@ impl<T> Columns<'_, T> {
 	pub fn len(&self)->usize { self.0.len() }
 }
 impl<T: Display> Display for Columns<'_,T> {
-	fn fmt(&self, f: &mut Formatter<'_>)->std::fmt::Result {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		let mut isfirst = true;
 		for Column { fieldname, .. } in self.0.iter() {
 			if isfirst { isfirst = false; } else { write!(f, ",")?; }
@@ -942,7 +945,7 @@ impl<'schema> Schema<'schema> {
 	/// The parameters are the table name (not necessarily matching the
 	/// name of the schema) and the string defining extra columns, if any.
 	fn create_table(&self, name: &str, more: &str)->String {
-		use std::fmt::Write;
+		use fmt::Write;
 		let mut s = format!("create table \"{name}\" (");
 		let mut isfirst = true;
 		for Column { fieldname, fieldtype, extra, .. } in self.fields.iter() {
@@ -972,7 +975,7 @@ impl<'schema> Schema<'schema> {
 		let parent_table = &self.parent_table;
 		let primary = self.primary();
 
-		use std::fmt::Write;
+		use fmt::Write;
 		db.exec(self.create_table(format!("res_{name}").as_str(), ""))?;
 		db.exec(self.create_table(format!("add_{name}").as_str(),
 			r#", "source" text"#))?;
@@ -1055,7 +1058,7 @@ impl<'schema> Schema<'schema> {
 	/// This is a (large) part of [`Self::create_tables_and_views`].
 	fn create_output_view(&self)->String {
 		let n = '\n';
-		use std::fmt::Write;
+		use fmt::Write;
 		let name = &self.table_name;
 		let parent_key = self.resref();
 		let mut select = format!(r#"create view "out_{name}" as select{n}  "#);
@@ -1402,8 +1405,8 @@ use crate::gametypes::RESOURCES;
 	ExtraArgument,
 }
 impl Display for Error {
-	fn fmt(&self, f: &mut Formatter<'_>)->std::fmt::Result {
-		std::fmt::Debug::fmt(&self, f)
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+		fmt::Debug::fmt(&self, f)
 	}
 }
 impl std::error::Error for Error { }
@@ -1462,6 +1465,17 @@ fn table_schema(table: &str)->Result<&Schema<'_>> {
 	RESOURCES.table_schema(table)
 		.ok_or_else(|| Error::UnknownTable(table.to_owned()).into())
 }
+/// A trivial wrapper giving a slightly better [`Debug`] implementation
+/// for Lua values (displaying the actual contents of strings).
+struct LuaInspect<'lua>(&'lua mlua::Value<'lua>);
+impl<'lua> Debug for LuaInspect<'lua> {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+		match self.0 {
+			mlua::Value::String(s) => f.write_str(&s.to_string_lossy()),
+			x => write!(f, "{x:?}"),
+		}
+	}
+}
 /// Helper function for reading arguments passed to Lua callbacks.
 ///
 /// Reads an argument as the given `FromLua` type and returns it,
@@ -1499,7 +1513,7 @@ fn list_keys<'lua>(db: &Connection, lua: &'lua Lua, mut args: mlua::MultiValue<'
 /// Lua table.
 fn select<'lua>(db: &Connection, lua: &'lua Lua, (table, rowid): (String, mlua::Value<'_>))->Result<mlua::Table<'lua>> {
 	scope_trace!("callback 'simod.select' invoked with: '{}' '{:?}'", table,
-		rowid);
+		LuaInspect(&rowid));
 	let schema = table_schema(&table)?;
 	let tbl = lua.create_table_with_capacity(0,
 		schema.fields.len() as std::ffi::c_int)?;
@@ -1532,6 +1546,8 @@ fn select<'lua>(db: &Connection, lua: &'lua Lua, (table, rowid): (String, mlua::
 /// The type of value is not checked (TODO: do this either here or as a SQL
 /// constraint when creating the tables?).
 fn update(db: &Connection, (table, key, field, value): (String, String, String, mlua::Value<'_>))->Result<()> {
+	scope_trace!("callback 'simod.update' invoked with: '{}' '{}' '{} '{:?}'",
+		table, key, field, LuaInspect(&value));
 	let s = format!(
 		r#"update "{table}" set "{field}"=? where "{primary}"='{key}'"#,
 		primary = table_schema(&table)?.primary());
@@ -1683,7 +1699,7 @@ use gametypes::*;
 ///   of the string translation process.
 ///
 pub fn create_db(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Connection> {
-	use std::fmt::Write;
+	use fmt::Write;
 	let db_file = db_file.as_ref();
 	info!("creating file {db_file:?}");
 	if Path::new(&db_file).exists() {

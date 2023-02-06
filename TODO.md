@@ -1,4 +1,8 @@
 # Override
+ - [ ] deleted resources
+  - [ ] we need to know which resources have been deleted since last save
+  - [ ] this needs to be updated even when deleting from underlying
+        tables (e.g. `add_items`)
  - [ ] differential compilation
   - [ ] incompatible with atomicity, a choice must be done (pass an option and do differential by default)
  - [+] atomic save to override
@@ -16,6 +20,7 @@
  - [x] `select`
  - [x] `list`
  - [x] `insert`
+ - [ ] `delete`
 ## Argument checking
  - [ ] arguments to function calls
  - [ ] values for filling db

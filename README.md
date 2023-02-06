@@ -46,7 +46,9 @@ about what to do in the case of conflict).
 Identifiers for game resources and strings are abstracted as strings
 and namespaced per mod component.
 This completely removes the need for using mod prefixes
-and fitting names in 8 bytes (minus the prefix).
+and fitting names in 8 bytes (minus the prefix);
+conversion is done automatically by the database.
+
 (On the other hand, the namespace model still allow access to original
 game resources, and even resources from other mods, when this is really
 needed).
