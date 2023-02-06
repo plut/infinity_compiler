@@ -36,6 +36,7 @@ pub(crate) use log::{trace,debug,info,warn,error};
 pub(crate) use rusqlite::{self,Connection,Statement};
 
 #[allow(unused_imports)]
+pub(crate) use std::ops::{Deref};
 pub(crate) use std::fmt::{self,Display,Debug,Formatter};
 pub(crate) use std::fs::{self,File};
 #[allow(unused_imports)]
@@ -44,7 +45,8 @@ pub(crate) use std::path::{Path, PathBuf};
 
 pub(crate) use macros::{Pack,Resource};
 pub(crate) use crate::gamefiles::{Resref,Strref};
-pub(crate) use crate::progress::scope_trace;
+pub(crate) use crate::database::{GameDB,DbInterface};
+pub(crate) use crate::progress::{Progress,scope_trace};
 
 pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
 
@@ -100,16 +102,6 @@ impl Progress {
 	pub fn inc(&self, n: u64) { self.as_ref().inc(n) }
 }
 
-/// Wraps a closure inside a game transaction.
-///
-/// The transaction aborts if the closure returns an `Err` variant, and
-/// commits if it returns an `Ok` variant.
-pub fn transaction<T>(db: &mut Connection, mut f: impl FnMut(&rusqlite::Transaction<'_>)->Result<T>)->Result<T> {
-	let t = db.transaction().context("create new transaction")?;
-	let r = f(&t)?; // automatic rollback if Err
-	t.commit()?;
-	Ok(r)
-}
 /// A struct producing balanced, foldable log messages.
 ///
 /// This produces a log message with a `««` marker when created and the
@@ -736,19 +728,9 @@ pub(crate) mod database {
 use crate::prelude::*;
 use rusqlite::{Row};
 use std::marker::PhantomData;
+use crate::gametypes::RESOURCES;
 
 // I. Low-level stuff: basic types and extensions for `rusqlite` traits.
-pub trait ConnectionExt {
-	fn exec(&self, s: impl AsRef<str>)->Result<()>;
-}
-impl ConnectionExt for Connection {
-/// Shorthand for execution of a single SQL statement without parameters.
-	fn exec(&self, s: impl AsRef<str>)->Result<()> {
-		self.execute(s.as_ref(), ())
-			.with_context(|| format!("failed SQL statement:\n{}", s.as_ref()))?;
-		Ok(())
-	}
-}
 pub trait RowExt {
 	fn dump(&self);
 }
@@ -766,14 +748,6 @@ impl RowExt for Row<'_> {
 			}
 		}
 	}
-}
-/// Connection::open, but with some extra logging
-pub fn open(f: impl AsRef<Path>)->Result<Connection> {
-	let path = f.as_ref();
-	let db = Connection::open(path)
-		.with_context(|| format!("cannot open database: {path:?}"))?;
-	info!("opened database {path:?}");
-	Ok(db)
 }
 /// Detecting recoverable errors due to incorrect SQL typing.
 pub trait DbTypeCheck {
@@ -979,7 +953,7 @@ impl<'schema> Schema<'schema> {
 	/// propagated to `add_{name}` or `edit_{name}` by triggers as needed).
 	/// - `out_{name}`: the view used to save new or modified values to
 	/// game files.
-	pub fn create_tables_and_views(&self, db: &Connection)->Result<()> {
+	pub fn create_tables_and_views(&self, db: &impl DbInterface)->Result<()> {
 		let Schema { name, parent_table, extension, .. } = self;
 		let parent_key = self.resref();
 		let primary = self.primary();
@@ -1129,11 +1103,10 @@ impl<'schema> Schema<'schema> {
 		s.push(')');
 		s
 	}
-	fn all_keys_gen<T>(&self, db: &Connection, condition: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
+	fn all_keys_gen<T>(&self, db: &impl DbInterface, condition: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
 		let s = format!(r#"select "{primary}" from "{table}" {condition} order by {sort}"#,
 			table = self.name, primary = self.primary(), sort = self.context(""));
-		let mut stmt = db.prepare(&s)
-			.context("preparing statement")?;
+		let mut stmt = db.prepare(&s)?;
 		let mut rows = stmt.query(())?;
 		let mut v = Vec::<T>::new();
 		while let Some(row) = rows.next()? {
@@ -1141,10 +1114,10 @@ impl<'schema> Schema<'schema> {
 		}
 		Ok(v)
 	}
-	pub fn all_keys<T>(&self, db: &Connection, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
+	pub fn all_keys<T>(&self, db: &impl DbInterface, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
 		self.all_keys_gen::<T>(db, "", f)
 	}
-	pub fn all_keys_with_parent<T>(&self, db: &Connection, value: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
+	pub fn all_keys_with_parent<T>(&self, db: &impl DbInterface, value: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
 		self.all_keys_gen(db, format!(r#"where "{parent_key}"='{value}'"#,
 			parent_key = self.resref()), f)
 	}
@@ -1177,13 +1150,12 @@ pub trait Resource: Sized {
 	///
 	/// This returns a [`Result<TypedStatement>`]: it is possible to iterate
 	/// over the result and recover structures of the original type.
-	fn select_query_gen(db: &Connection, n1: impl Display, n2: impl Display, cond: impl Display)->rusqlite::Result<TypedStatement<'_,Self>> {
+	fn select_query_gen(db: &impl DbInterface, n1: impl Display, n2: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
 		let s = Self::SCHEMA.select_statement(n1, n2, cond);
-		debug!("running SQL query: {s}");
 		Ok(TypedStatement(db.prepare(&s)?, PhantomData::<Self>))
 	}
 	/// Particular case of SELECT statement used for saving to game files.
-	fn select_query(db: &Connection, s: impl Display)->rusqlite::Result<TypedStatement<'_, Self>> {
+	fn select_query(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
 		Self::select_query_gen(db, "out_", Self::SCHEMA.name, s)
 	}
 }
@@ -1237,12 +1209,216 @@ impl<T: Resource> Iterator for TypedRows<'_,T> {
 		None
 	}
 }
+use crate::gametypes::*;
+use crate::gamefiles::GameIndex;
+/// A trivial wrapper on [`rusqlite::Connection`];
+/// mainly used for standardizing log messages.
+#[derive(Debug)] pub struct GameDB(Connection);
+impl Deref for GameDB {
+	type Target = Connection;
+	fn deref(&self)->&Self::Target { &self.0 }
+}
+#[derive(Debug)] pub struct GameTransaction<'a>(rusqlite::Transaction<'a>);
+impl Deref for GameTransaction<'_> {
+	type Target = Connection;
+	fn deref(&self)->&Self::Target { self.0.deref() }
+}
+/// A trait for trivial wrappers of [`rusqlite::Connection`].
+pub trait DbInterface {
+	/// Executes a statement without arguments (but with logging).
+	fn exec(&self, s: impl AsRef<str>)->Result<usize>;
+	/// Executes a statement with arguments (and logging).
+	fn execute(&self, s: impl AsRef<str>, params: impl rusqlite::Params+Debug)->Result<usize>;
+	/// Prepares a statement (and logs it).
+	fn prepare(&self, s: impl AsRef<str>)->Result<Statement<'_>>;
+	/// Prepares and executes a statement returning a single row.
+	fn query_row<T>(&self, s: impl AsRef<str>, params: impl rusqlite::Params+Debug, f: impl FnOnce(&Row<'_>)->rusqlite::Result<T>)->Result<T> {
+		self.prepare(s)?.query_row(params, f).map_err(|e| e.into())
+	}
+	fn query_row_and_then<T>(&self, s: impl AsRef<str>, params: impl rusqlite::Params+Debug, f: impl FnOnce(&Row<'_>)->Result<T>) -> Result<T> {
+		let mut stmt = self.prepare(s)?;
+		let mut rows = stmt.query(params)?;
+		let row = match rows.next()? {
+			None => return Err(rusqlite::Error::QueryReturnedNoRows.into()),
+			Some(row) => row };
+		f(row)
+	}
+	fn last_insert_rowid(&self)->i64;
+}
+impl<T: Deref<Target=Connection>>  DbInterface for T {
+	fn execute(&self, s: impl AsRef<str>, params: impl rusqlite::Params+Debug)->Result<usize> {
+		let s = s.as_ref();
+		debug!("executing SQL statement: {s} with parameters {params:?}");
+		self.deref().execute(s, params)
+			.with_context(|| format!("failed SQL statement:\n {s}"))
+	}
+	fn exec(&self, s: impl AsRef<str>)->Result<usize> {
+		let s = s.as_ref();
+		debug!("executing SQL statement: {s}");
+		self.deref().execute(s, ())
+			.with_context(|| format!("failed SQL statement:\n {s}"))
+	}
+	fn prepare(&self, s: impl AsRef<str>)->Result<Statement<'_>> {
+		let s = s.as_ref();
+		debug!("preparing SQL statement: {s}");
+		self.deref().prepare(s)
+			.with_context(|| format!("failed to prepare SQL statement:\n {s}"))
+	}
+	fn last_insert_rowid(&self)->i64 { self.deref().last_insert_rowid() }
+}
+impl GameDB {
+	/// `Connection::open` but with logging.
+	pub fn open(p: impl AsRef<Path>)->Result<Self> {
+		let p = p.as_ref();
+		debug!("opening database from {p:?}");
+		let r = Self(Connection::open(p)
+			.with_context(|| format!("failed to open SQL database:\n {p:?}"))?);
+		info!("opened database: {p:?}");
+		Ok(r)
+	}
+	/// Wraps a closure inside a game transaction.
+	///
+	/// The transaction aborts if the closure returns an `Err` variant, and
+	/// commits if it returns an `Ok` variant.
+	pub fn transaction<T>(&mut self, mut f: impl FnMut(&GameTransaction<'_>)->Result<T>)->Result<T> {
+		let t = GameTransaction(self.0.transaction()
+			.context("create new transaction")?);
+		let r = f(&t)?; // automatic rollback if Err
+		t.0.commit()?;
+		Ok(r)
+	}
+	/// Creates (but does not fill) all per-language tables.
+	///
+	/// The per-language tables are as follows:
+	/// - `translations_XX`: user-filled table containing string translations
+	/// - `strings_XX`: output to fill game strings
+	///   (last column is a bit indicating whether this is untranslated, in
+	///   which case we need to remove all {?..} marks)
+	pub fn create_language_tables(&mut self, game: &GameIndex)->Result<()> {
+		self.transaction(|db| {
+		const SCHEMA: &str = r#"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer)"#;
+		const SCHEMA1: &str = r#"("key" string primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer)"#;
+		for (lang, _) in game.languages.iter() {
+			db.execute_batch(&format!(r#"
+	create table "res_strings_{lang}"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer);
+	create table "translations_{lang}"("key" string primary key, "string" text, "sound" text, "volume" integer, "pitch" integer);
+	create view "strings_{lang}" as
+	select "strref", "string",  "flags", "sound", "volume", "pitch", 0 as "raw" from "res_strings_{lang}" union
+	select "strref", ifnull("string", "key"), "flags", ifnull("sound",''), ifnull("volume",0), ifnull("pitch",0), ("string" is null)
+	from "strref_dict" as "d"
+	left join "translations_{lang}" as "t" using ("key");
+	"#))?;
+		}
+		Ok(())
+		})
+	}
+	/// Creates and initializes the game database.
+	///
+	/// This creates all relevant tables and views in the database
+	/// (but does not fill them).
+	///
+	/// There are global tables, per-resource tables, and per-language tables.
+	/// The per-resource tables are described in the
+	/// [`database::Schema::create_tables_and_views`] function.
+	/// The per-language tables are described in [`create_language_tables`].
+	/// The global tables are the following:
+	///
+	/// - `global`: a single-row table holding the global variables:
+	///   - `component`: current mod component being installed;
+	///   - `strref_count`: number of strings in `"dialog.tlk"` (34000);
+	/// - `resref_orig`: list of all original game resrefs — this is used for
+	///    de-namespacing (all resrefs in this list translate to themselves);
+	/// - `resref_dict`: translations of resrefs (from namespaced to 8 bytes);
+	/// - `strref_dict`: translations of strrefs (from string key to 4-bytes int);
+	///
+	/// - `string_keys`: view of `strref_dict` primarily used for automatic
+	///   strref assignment — inserting into this view calls the appropriate
+	///   trigger selecting the next available strref.
+	/// - `new_strings`: (built in loop below) a view of all strref currently
+	///   introduced by mods. This gets compiled into `string_keys` as part
+	///   of the string translation process.
+	///
+	pub fn create(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Self> {
+		use fmt::Write;
+		let db_file = db_file.as_ref();
+		info!("creating file {db_file:?}");
+		if Path::new(&db_file).exists() {
+			fs::remove_file(db_file)
+			.with_context(|| format!("cannot remove DB file: {db_file:?}"))?;
+		}
+		let mut db = Self::open(db_file)?;
+		db.transaction(|db| {
+		db.execute_batch(r#"
+	create table "global" ("component" text, "strref_count" integer);
+	insert into "global"("component") values (null);
+	create table "override" ("resref" text, "ext" text);
+	create table "resref_orig" ("resref" text primary key on conflict ignore);
+	create table "resref_dict" ("key" text not null primary key on conflict ignore, "resref" text);
+	create table "strref_dict" ("key" text not null primary key on conflict ignore, "strref" integer unique, "flags" integer);
+	create index "strref_dict_reverse" on "strref_dict" ("strref");
+
+	create view "string_keys" as select "key", "flags" from "strref_dict";
+	create trigger "strref_auto" instead of insert on "string_keys"
+	begin
+		insert into "strref_dict"("key", "strref","flags") values
+		(new."key", ifnull((select min("strref")+1 from "strref_dict" where "strref"+1 not in (select "strref" from "strref_dict")), (select "strref_count" from "global")), new."flags");
+	end;
+		"#).context("create strings tables")?;
+		let pb = Progress::new(RESOURCES.len(), "create tables");
+		let mut new_strings = String::from(r#"create view "new_strings"("key","flags") as "#);
+		let mut new_strings_is_first = true;
+		RESOURCES.map_mut(|schema,_| {
+			pb.inc(1);
+			for Column { fieldname, fieldtype, .. } in schema.fields.iter() {
+				if *fieldtype == FieldType::Strref {
+					let name = &schema.name;
+					if new_strings_is_first { new_strings_is_first = false; }
+					else { write!(&mut new_strings, "\nunion\n")?; }
+					write!(&mut new_strings, r#"select "{fieldname}", 1 from "add_{name}" union select "value", 1 from "edit_{name}" where "field" = '{fieldname}'"#,
+						)?;
+				}
+			}
+			debug!("  creating tables for resource '{}'", schema.name);
+			schema.create_tables_and_views(db)?; Result::<()>::Ok(())
+		})?;
+		db.exec(new_strings)?; Ok(())
+		}).context("creating global tables")?;
+		db.create_language_tables(game)?;
+		Ok(db)
+	}
+	/// Fills the database from game files.
+	///
+	/// The database must have been already created and initialized (with
+	/// empty tables).
+	pub fn load(&mut self, game: &GameIndex)->Result<()> {
+		let pb = Progress::new(3, "Fill database"); pb.inc(1);
+		crate::gamestrings::load(self, game)
+			.with_context(|| format!("cannot read game strings from game directory {:?}", game.root))?;
+		pb.inc(1);
+		debug!("loading game resources");
+		// TODO: use progress::transaction here — requires replacing self by
+		// a `db` variable and modifying a few types:
+		self.exec("begin transaction")?;
+		let mut base = DbInserter::new(self)?;
+		// TODO: use progress::transaction here — requires replacing self by
+		// a `db` variable and modifying a few types:
+		game.for_each(|restype, resref,  handle| {
+			trace!("found resource {}.{:#04x}", resref, restype.value);
+			base.register(&resref)?;
+			if restype == Item::SCHEMA.restype { base.load::<Item>(resref, handle) }
+			else { Ok(()) }
+		})?;
+		pb.inc(1);
+		self.exec("commit")?;
+		Ok(())
+	}
+}
 } // mod resources
 pub(crate) mod gamestrings {
 //! Access to game strings in database.
 use crate::prelude::*;
 use crate::progress::{Progress};
-use crate::database::{self,ConnectionExt,Resource};
+use crate::database::{self,Resource,DbInterface};
 use crate::gamefiles::{Pack,GameIndex};
 
 #[derive(Debug,Pack)] struct TlkHeader {
@@ -1330,8 +1506,9 @@ pub fn save_language(vec: &[GameString], path: &impl AsRef<Path>)->Result<()> {
 	Ok(())
 }
 
+use crate::database::GameDB;
 /// Fills all game strings tables from game dialog files.
-pub fn load(db: &Connection, game: &GameIndex)->Result<()> {
+pub fn load(db: &GameDB, game: &GameIndex)->Result<()> {
 	db.exec("begin transaction")?;
 	let pb = Progress::new(game.languages.len(), "languages");
 	for (langname, dialog) in game.languages.iter() {
@@ -1342,7 +1519,7 @@ pub fn load(db: &Connection, game: &GameIndex)->Result<()> {
 	db.exec("commit")?; Ok(())
 }
 /// Fills the database table for a single language.
-fn load_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> + Debug))->Result<()> {
+fn load_language(db: &impl DbInterface, langname: &str, path: &(impl AsRef<Path> + Debug))->Result<()> {
 	let bytes = fs::read(path)
 		.with_context(|| format!("cannot open strings file: {path:?}"))?;
 	let mut q = db.prepare(&format!(r#"insert into "res_strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
@@ -1364,7 +1541,7 @@ fn load_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> + Deb
 ///
 /// This also backups those files if needed (i.e. if no backup exists
 /// yet).
-pub fn save(db: &Connection, game: &GameIndex)->Result<()> {
+pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	use database::DbTypeCheck;
 	let pb = Progress::new(game.languages.len(), "save translations");
 	for (lang, path) in game.languages.iter() {
@@ -1512,7 +1689,7 @@ fn pop_arg_as<'lua, T: mlua::FromLua<'lua>>(args: &mut mlua::MultiValue<'lua>, l
 // fn list_keys(db: &Connection, (table,): (String,))->Result<Vec<String>> {
 // 	Ok(table_schema(&table)?.all_keys(db)?)
 // }
-fn list_keys<'lua>(db: &Connection, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Vec<mlua::Value<'lua>>> {
+fn list_keys<'lua>(db: &impl DbInterface, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Vec<mlua::Value<'lua>>> {
 	scope_trace!("callback 'simod.list' invoked with: {:?}", args);
 	let name = pop_arg_as::<String>(&mut args, lua)
 		.context("'simod.list' callback")?;
@@ -1533,7 +1710,7 @@ fn list_keys<'lua>(db: &Connection, lua: &'lua Lua, mut args: mlua::MultiValue<'
 ///
 /// Reads a full row from one of the resource tables and returns it as a
 /// Lua table.
-fn select<'lua>(db: &Connection, lua: &'lua Lua, (table, rowid): (String, mlua::Value<'_>))->Result<mlua::Table<'lua>> {
+fn select<'lua>(db: &impl DbInterface, lua: &'lua Lua, (table, rowid): (String, mlua::Value<'_>))->Result<mlua::Table<'lua>> {
 	scope_trace!("callback 'simod.select' invoked with: '{}' '{:?}'", table,
 		LuaInspect(&rowid));
 	let schema = table_schema(&table)?;
@@ -1567,19 +1744,18 @@ fn select<'lua>(db: &Connection, lua: &'lua Lua, (table, rowid): (String, mlua::
 /// Updates a single field in one of the resource tables.
 /// The type of value is not checked (TODO: do this either here or as a SQL
 /// constraint when creating the tables?).
-fn update(db: &Connection, (table, key, field, value): (String, String, String, mlua::Value<'_>))->Result<()> {
+fn update(db: &impl DbInterface, (table, key, field, value): (String, String, String, mlua::Value<'_>))->Result<()> {
 	scope_trace!("callback 'simod.update' invoked with: '{}' '{}' '{} '{:?}'",
 		table, key, field, LuaInspect(&value));
 	let s = format!(
 		r#"update "{table}" set "{field}"=? where "{primary}"='{key}'"#,
 		primary = table_schema(&table)?.primary());
 	trace!("executing sql: {s} {:?}", LuaInspect(&value));
-	db.execute(&s, (LuaToSql(value),))
-		.with_context(|| format!("failed SQL query: {s}"))?;
+	db.execute(&s, (LuaToSql(value),))?;
 	Ok(())
 }
 /// Implementation of `simod.insert`.
-fn insert(db: &Connection, (table, vals, context): (String, mlua::Table<'_>, mlua::Table<'_>))->Result<()> {
+fn insert(db: &impl DbInterface, (table, vals, context): (String, mlua::Table<'_>, mlua::Table<'_>))->Result<()> {
 	use crate::database::{Column,FieldType};
 	let schema = table_schema(&table)?;
 	trace!("schema for {table}: {schema:?}");
@@ -1626,7 +1802,7 @@ fn insert(db: &Connection, (table, vals, context): (String, mlua::Table<'_>, mlu
 ///  - list("item_abilities", "sw1h34") etc.
 /// All code with a higher level is written in lua and loaded from the
 /// "init.lua" file.
-pub fn command_add(db: Connection, _target: &str)->Result<()> {
+pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 	use crate::database::RowExt;
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
@@ -1688,141 +1864,16 @@ use clap::Parser;
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
-use database::{ConnectionExt};
 use gamefiles::{GameIndex};
 use progress::{Progress};
 use gametypes::*;
 
 // I init
-/// Creates and initializes the game database.
-///
-/// This creates all relevant tables and views in the database
-/// (but does not fill them).
-///
-/// There are global tables, per-resource tables, and per-language tables.
-/// The per-resource tables are described in the
-/// [`database::Schema::create_tables_and_views`] function.
-/// The per-language tables are described in [`create_language_tables`].
-/// The global tables are the following:
-///
-/// - `global`: a single-row table holding the global variables:
-///   - `component`: current mod component being installed;
-///   - `strref_count`: number of strings in `"dialog.tlk"` (34000);
-/// - `resref_orig`: list of all original game resrefs — this is used for
-///    de-namespacing (all resrefs in this list translate to themselves);
-/// - `resref_dict`: translations of resrefs (from namespaced to 8 bytes);
-/// - `strref_dict`: translations of strrefs (from string key to 4-bytes int);
-///
-/// - `string_keys`: view of `strref_dict` primarily used for automatic
-///   strref assignment — inserting into this view calls the appropriate
-///   trigger selecting the next available strref.
-/// - `new_strings`: (built in loop below) a view of all strref currently
-///   introduced by mods. This gets compiled into `string_keys` as part
-///   of the string translation process.
-///
-pub fn create_db(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Connection> {
-	use fmt::Write;
-	let db_file = db_file.as_ref();
-	info!("creating file {db_file:?}");
-	if Path::new(&db_file).exists() {
-		fs::remove_file(db_file)
-		.with_context(|| format!("cannot remove DB file: {db_file:?}"))?;
-	}
-	let mut db = Connection::open(db_file)
-		.with_context(|| format!("cannot open database: {db_file:?}"))?;
-	info!("opened database {db_file:?}");
-	progress::transaction(&mut db, |db| {
-	db.execute_batch(r#"
-create table "global" ("component" text, "strref_count" integer);
-insert into "global"("component") values (null);
-create table "override" ("resref" text, "ext" text);
-create table "resref_orig" ("resref" text primary key on conflict ignore);
-create table "resref_dict" ("key" text not null primary key on conflict ignore, "resref" text);
-create table "strref_dict" ("key" text not null primary key on conflict ignore, "strref" integer unique, "flags" integer);
-create index "strref_dict_reverse" on "strref_dict" ("strref");
-
-create view "string_keys" as select "key", "flags" from "strref_dict";
-create trigger "strref_auto" instead of insert on "string_keys"
-begin
-	insert into "strref_dict"("key", "strref","flags") values
-	(new."key", ifnull((select min("strref")+1 from "strref_dict" where "strref"+1 not in (select "strref" from "strref_dict")), (select "strref_count" from "global")), new."flags");
-end;
-	"#).context("create strings tables")?;
-	let pb = Progress::new(RESOURCES.len(), "create tables");
-	let mut new_strings = String::from(r#"create view "new_strings"("key","flags") as "#);
-	let mut new_strings_is_first = true;
-	RESOURCES.map_mut(|schema,_| {
-		pb.inc(1);
-		for database::Column { fieldname, fieldtype, .. } in schema.fields.iter() {
-			if *fieldtype == database::FieldType::Strref {
-				let name = &schema.name;
-				if new_strings_is_first { new_strings_is_first = false; }
-				else { write!(&mut new_strings, "\nunion\n")?; }
-				write!(&mut new_strings, r#"select "{fieldname}", 1 from "add_{name}" union select "value", 1 from "edit_{name}" where "field" = '{fieldname}'"#,
-					)?;
-			}
-		}
-		debug!("  creating tables for resource '{}'", schema.name);
-		schema.create_tables_and_views(db)?; Result::<()>::Ok(())
-	})?;
-	db.exec(new_strings)?; Ok(())
-	}).context("creating global tables")?;
-	create_language_tables(&mut db, game)?;
-	Ok(db)
-}
-/// Creates (but does not fill) all per-language tables.
-///
-/// The per-language tables are as follows:
-/// - `translations_XX`: user-filled table containing string translations
-/// - `strings_XX`: output to fill game strings
-///   (last column is a bit indicating whether this is untranslated, in
-///   which case we need to remove all {?..} marks)
-pub fn create_language_tables(db: &mut Connection, game: &GameIndex)->Result<()> {
-	crate::progress::transaction(db, |db| {
-	const SCHEMA: &str = r#"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer)"#;
-	const SCHEMA1: &str = r#"("key" string primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer)"#;
-	for (lang, _) in game.languages.iter() {
-		db.execute_batch(&format!(r#"
-create table "res_strings_{lang}"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer);
-create table "translations_{lang}"("key" string primary key, "string" text, "sound" text, "volume" integer, "pitch" integer);
-create view "strings_{lang}" as
-select "strref", "string",  "flags", "sound", "volume", "pitch", 0 as "raw" from "res_strings_{lang}" union
-select "strref", ifnull("string", "key"), "flags", ifnull("sound",''), ifnull("volume",0), ifnull("pitch",0), ("string" is null)
-from "strref_dict" as "d"
-left join "translations_{lang}" as "t" using ("key");
-"#))?;
-	}
-	Ok(())
-	})
-}
-/// Fills the database from game files.
-///
-/// The database must have been already created and initialized (with
-/// empty tables).
-fn load(db: Connection, game: &GameIndex)->Result<()> {
-	use crate::database::Resource;
-	let pb = Progress::new(3, "Fill database"); pb.inc(1);
-	gamestrings::load(&db, game)
-		.with_context(|| format!("cannot read game strings from game directory {:?}", game.root))?;
-	pb.inc(1);
-	debug!("loading game resources");
-	db.exec("begin transaction")?;
-	let mut base = DbInserter::new(&db)?;
-	game.for_each(|restype, resref,  handle| {
-		trace!("found resource {}.{:#04x}", resref, restype.value);
-		base.register(&resref)?;
-		if restype == Item::SCHEMA.restype { base.load::<Item>(resref, handle) }
-		else { Ok(()) }
-	})?;
-	pb.inc(1);
-	db.exec("commit")?;
-	Ok(())
-}
 // II add
 // III compile
 /// Before saving: fills the resref translation table.
-fn translate_resrefs(db: &mut Connection)->Result<()> {
-	crate::progress::transaction(db, |db|{
+fn translate_resrefs(db: &mut GameDB)->Result<()> {
+	db.transaction(|db| {
 	let mut enum_st = db.prepare(r#"select key from "resref_dict" where "resref" is null"#)?;
 	let mut enum_rows = enum_st.query(())?;
 	let mut find = db.prepare(r#"select 1 from "resref_orig" where "resref"=?1 union select 1 from "resref_dict" where "resref"=?1"#)?;
@@ -1841,8 +1892,8 @@ fn translate_resrefs(db: &mut Connection)->Result<()> {
 	})?; Ok(())
 }
 /// Before saving: fills the strref translation tables.
-fn translate_strrefs(db: &mut Connection)->Result<()> {
-	crate::progress::transaction(db,|db| {
+fn translate_strrefs(db: &mut GameDB)->Result<()> {
+	db.transaction(|db| {
 	db.exec(r#"delete from "strref_dict" where "key" not in (select "key" from "new_strings" where "key" is not null)"#)
 		.context("cannot purge stale string keys")?;
 	db.exec(r#"insert into "string_keys" select "key", "flags" from "new_strings" where "key" is not null"#)
@@ -1856,7 +1907,7 @@ fn translate_strrefs(db: &mut Connection)->Result<()> {
 /// This function saves in the current directory;
 /// a chdir to the appropriate override directory needs to have been done
 /// first.
-fn save_resources(db: &Connection, game: &GameIndex)->Result<()> {
+fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
 	gamestrings::save(db, game)?;
 	pb.inc(1);
@@ -1866,7 +1917,7 @@ fn save_resources(db: &Connection, game: &GameIndex)->Result<()> {
 }
 /// Deletes from current directory all resources marked as 'orphan' in
 /// the database. This also clears the list of orphan resources.
-fn clear_orphan_resources(db: &Connection)->Result<()> {
+fn clear_orphan_resources(db: &impl DbInterface)->Result<()> {
 	RESOURCES.map(|schema, _| {
 		let ext = schema.extension; let name = schema.name;
 		if !ext.is_empty() {
@@ -1888,7 +1939,7 @@ fn clear_orphan_resources(db: &Connection)->Result<()> {
 	Ok(())
 }
 /// Cleans the dirty bit from all resources after saving.
-fn unmark_dirty_resources(db: &Connection)->Result<()> {
+fn unmark_dirty_resources(db: &impl DbInterface)->Result<()> {
 	RESOURCES.map(|schema, _| {
 		if !schema.extension.is_empty() {
 			let name = schema.name;
@@ -1904,7 +1955,7 @@ fn unmark_dirty_resources(db: &Connection)->Result<()> {
 /// This wraps [`save_resources`] so that any
 /// exception throws do not prevent changing back to the previous
 /// directory:
-fn command_save_full(game: &GameIndex, mut db: Connection)->Result<()> {
+fn command_save_full(game: &GameIndex, mut db: GameDB)->Result<()> {
 	// prepare database by translating resrefs and strrefs
 	translate_resrefs(&mut db)?;
 	translate_strrefs(&mut db)?;
@@ -1923,7 +1974,7 @@ fn command_save_full(game: &GameIndex, mut db: Connection)->Result<()> {
 	unmark_dirty_resources(&db)?;
 	Ok(())
 }
-fn command_save_diff(game: &GameIndex, mut db: Connection)->Result<()> {
+fn command_save_diff(game: &GameIndex, mut db: GameDB)->Result<()> {
 	translate_resrefs(&mut db)?;
 	translate_strrefs(&mut db)?;
 	let override_dir = game.root.join("override");
@@ -1944,14 +1995,14 @@ fn command_save_diff(game: &GameIndex, mut db: Connection)->Result<()> {
 	Ok(())
 }
 // IV others: show etc.
-fn command_show(db: Connection, target: impl AsRef<str>)->Result<()> {
+fn command_show(db: &GameDB, target: impl AsRef<str>)->Result<()> {
 	let target = target.as_ref();
 	let (resref, resext) = match target.rfind('.') {
 		None => return Ok(()),
 		Some(i) => (&target[..i], &target[i+1..]),
 	};
 	match resext.to_lowercase().as_ref() {
-		"itm" => Item::show_all(&db, resref),
+		"itm" => Item::show_all(db, resref),
 		x => { warn!("unknown resource type: {x}"); Ok(()) },
 	}
 }
@@ -2023,14 +2074,14 @@ fn main() -> Result<()> {
 	}.context("cannot set up logging")?;
 	let db_file = options.database.unwrap();
 	match options.command {
-		Command::Init => load(create_db(&db_file, &game)?, &game)?,
-		Command::FullSave => command_save_full(&game, database::open(db_file)?)?,
-		Command::Save => command_save_diff(&game, database::open(db_file)?)?,
+		Command::Init => GameDB::create(&db_file,&game)?.load(&game)?,
+		Command::FullSave => command_save_full(&game, GameDB::open(db_file)?)?,
+		Command::Save => command_save_diff(&game, GameDB::open(db_file)?)?,
 		Command::Restore => command_restore(&game)?,
 		Command::Show{ target, .. } =>
-			command_show(database::open(db_file)?, target)?,
+			command_show(&GameDB::open(db_file)?, target)?,
 		Command::Add{ target, .. } =>
-			lua_api::command_add(database::open(db_file)?, &target)?,
+			lua_api::command_add(GameDB::open(db_file)?, &target)?,
 		_ => todo!(),
 	};
 	info!("execution terminated with flying colors");

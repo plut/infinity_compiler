@@ -22,7 +22,7 @@
 //!    they have the resref as their primary key).
 use crate::prelude::*;
 use macros::{produce_resource_list};
-use crate::database::{Resource,DbTypeCheck,Schema};
+use crate::database::{Resource,DbTypeCheck,Schema,DbInterface};
 use crate::gamefiles::{Pack,Restype};
 
 /// Those resources which are associated to a global table.
@@ -174,9 +174,9 @@ pub trait ToplevelResource: NamedTable {
 	///
 	/// It returns the number of rows matched.
 	fn for_each<F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>>
-		(db: &Connection, condition: impl Display, f:F)->Result<i32>;
+		(db: &impl DbInterface, condition: impl Display, f:F)->Result<i32>;
 	/// Saves all toplevel resources of this type.
-	fn save_all(db: &Connection)->Result<()> {
+	fn save_all(db: &impl DbInterface)->Result<()> {
 		let Schema { name, extension, .. } = Self::SCHEMA;
 		scope_trace!("saving resources from '{}'", name);
 		let condition = format!(r#"where "key" in "dirty_{name}""#);
@@ -195,7 +195,7 @@ pub trait ToplevelResource: NamedTable {
 	/// nice user format.
 	fn show(&self, resref: impl Display, subresources: Self::Subresources<'_>);
 	/// Shows on stdout the resource with given resref, or returns an error.
-	fn show_all(db: &Connection, resref: impl Display)->Result<()> {
+	fn show_all(db: &impl DbInterface, resref: impl Display)->Result<()> {
 		Self::for_each(db, format!(r#"where "id"='{resref}'"#),
 		|resref, resource, subresources| {
 			resource.show(resref, subresources);
@@ -257,26 +257,19 @@ impl ToplevelResource for Item {
 		self.pack(&mut file)
 			.with_context(|| format!("cannot pack item to {file:?}"))?;
 		// pack abilities:
-		trace!("saving {}={} abilities; offset is {}",
-			abilities.len(), self.abilities_count, file.stream_position()?);
-		for (i, a) in abilities.iter().enumerate() {
-			trace!("saving ability {}/{} at offset {}", i+1,
-				abilities.len(), file.stream_position()?);
+		for a in abilities.iter() {
 			a.pack(&mut file)
 			.with_context(|| format!("cannot pack item ability to {file:?}"))?;
 		}
 		// pack effects: first on-equip, then grouped by ability
 		for (e, j) in effects.iter() {
 			if *j == 0 {
-				trace!("saving global effect at offset {}", file.stream_position()?);
 				e.pack(&mut file)?;
 			}
 		}
 		for i in 0..self.abilities_count {
 			for (e, j) in effects.iter() {
 				if *j == (i+1).into() {
-					trace!("saving effect for ability {} at offset {}",
-						i+1, file.stream_position()?);
 					e.pack(&mut file)?;
 				}
 			}
@@ -284,7 +277,7 @@ impl ToplevelResource for Item {
 		Ok(())
 	}
 	fn for_each<F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>>
-		(db: &Connection, condition: impl Display, f:F)->Result<i32> {
+		(db: &impl DbInterface, condition: impl Display, f:F)->Result<i32> {
 		let mut sel_item = Item::select_query(db, &condition)?;
 		let mut sel_item_ab = ItemAbility::select_query(db, r#"where "key"=?"#)?;
 		let mut sel_item_eff = ItemEffect::select_query(db, r#"where "key"=?"#)?;
@@ -361,7 +354,7 @@ pub struct DbInserter<'a> {
 impl<'a> DbInserter<'a> {
 	/// Creates a new `DbInserter` from a database and the list of all
 	/// resources.
-	pub fn new(db: &'a Connection)->Result<Self> {
+	pub fn new(db: &'a GameDB)->Result<Self> {
 		Ok(Self { // db,
 		tables: RESOURCES.map(|schema, _|
 			db.prepare(&schema.insert_statement("or ignore", "res_"))
