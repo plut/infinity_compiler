@@ -219,7 +219,7 @@ impl ToplevelResource for Item {
 				.context("inserting into 'item_abilities'")?;
 			ab_n.push(ab.effect_count);
 		}
-		trace!("inserting item {resref}; effects per abilities: {ab_n:?}");
+		trace!("inserting item {resref}; abilities have {ab_n:?} effects");
 		cursor.seek(SeekFrom::Start(item.effect_offset as u64))?;
 		for j in 0..item.equip_effect_count { // on-equip effects
 			let eff = ItemEffect::unpack(&mut cursor)?;

@@ -1,11 +1,15 @@
 # Override
- - [ ] atomic save to override
+ - [ ] differential compilation
+  - [ ] incompatible with atomicity, a choice must be done (pass an option and do differential by default)
+ - [+] atomic save to override
  - [+] they need to be read as resource handles
 ## Pre-existing overrides
  - [+] insert pre-existing override files in db
   - [+] and mark them somehow, so that they can be backed up as needed
  - [ ] backup of (pre-existing) override files when writing them
- - [ ] restore override files
+  - [ ] restore replaces the full directory: we should backup *all* files
+    and not only those which are overwritten
+ - [+] restore override files
 # Lua side
 ## Primitive operations
  - [x] `update`

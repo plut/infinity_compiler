@@ -27,7 +27,6 @@
 )]
 // #![feature(trace_macros)]
 // trace_macros!(false);
-const BACKUP_DIR: &str = "simod-backup";
 
 pub(crate) mod prelude {
 //! The set of symbols we want accessible from everywhere in the crate.
@@ -43,11 +42,97 @@ pub(crate) use std::fs::{self,File};
 pub(crate) use std::io::{self,Cursor,Read,Write,Seek,SeekFrom};
 pub(crate) use std::path::{Path, PathBuf};
 
-pub(crate) use crate::gamefiles::{Resref,Strref};
 pub(crate) use macros::{Pack,Table};
+pub(crate) use crate::gamefiles::{Resref,Strref};
+pub(crate) use crate::progress::scope_trace;
 
 pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
+
 }
+pub(crate) mod progress {
+//! Generic useful functions for user interaction.
+//!
+//! This contains among other:
+//!  - [`Progress`], a utility wrapper for a progress bar stack;
+//!  - [`transaction`], wrapping a closure inside a database transaction.
+use crate::prelude::*;
+use std::cell::{RefCell};
+use indicatif::{ProgressBar,ProgressStyle,MultiProgress};
+
+thread_local! {
+	static COUNT: RefCell<usize> = RefCell::new(0);
+	static MULTI: RefCell<MultiProgress> =
+		RefCell::new(MultiProgress::new());
+}
+/// A stacked progress bar.
+///
+/// This bar is removed from the stack when it is dropped.
+#[derive(Debug)]
+pub struct Progress { pb: ProgressBar, name: String, }
+impl AsRef<ProgressBar> for Progress {
+	fn as_ref(&self)->&ProgressBar { &self.pb }
+}
+impl Drop for Progress {
+	fn drop(&mut self) {
+		debug!(r#"finished task "{name}" in {elapsed:?} »»"#,
+			name=self.name, elapsed=self.pb.elapsed());
+		MULTI.with(|c| c.borrow_mut().remove(&self.pb));
+		COUNT.with(|c| *c.borrow_mut()-= 1)
+	}
+}
+
+const COLORS: &[&str] = &["red", "yellow", "green", "cyan", "blue", "magenta" ];
+
+impl Progress {
+	/// Appends a new progress bar to the stack.
+	pub fn new(n: impl num::ToPrimitive, text: impl Display)->Self {
+		let name = text.to_string();
+		let s = format!("{name} {{wide_bar:.{}}}{{pos:>5}}/{{len:>5}}",
+			COLORS[COUNT.with(|c| *c.borrow()) % COLORS.len()]);
+		let pb0 = ProgressBar::new(<u64 as num::NumCast>::from(n).unwrap());
+		pb0.set_style(ProgressStyle::with_template(&s).unwrap());
+		let pb = MULTI.with(|c| c.borrow_mut().add(pb0));
+		COUNT.with(|c| *c.borrow_mut()+= 1);
+		debug!(r#"start task "{name}" ««"#);
+		Self { pb, name, }
+	}
+	/// Advances the progress bar by the given amount.
+	pub fn inc(&self, n: u64) { self.as_ref().inc(n) }
+}
+
+/// Wraps a closure inside a game transaction.
+///
+/// The transaction aborts if the closure returns an `Err` variant, and
+/// commits if it returns an `Ok` variant.
+pub fn transaction<T>(db: &mut Connection, mut f: impl FnMut(&rusqlite::Transaction<'_>)->Result<T>)->Result<T> {
+	let t = db.transaction().context("create new transaction")?;
+	let r = f(&t)?; // automatic rollback if Err
+	t.commit()?;
+	Ok(r)
+}
+/// A struct producing balanced, foldable log messages.
+///
+/// This produces a log message with a `««` marker when created and the
+/// corresponding `»»` marker when dropped. This enables using folding in
+/// the editor when viewing log messages.
+pub struct ScopeLogger(pub log::Level);
+impl Drop for ScopeLogger {
+	fn drop(&mut self) { log::log!(self.0, "»»") }
+}
+// macro_rules! scope_log {
+// 	($lvl:expr, $msg:expr $(,$arg:tt)*) => {
+// 		let _log_scope = ScopeLogger($lvl);
+// 		log::log!($lvl, concat!($msg, "««") $(, $arg)*);
+// 	}
+// }
+macro_rules! scope_trace {
+	($msg: literal $($arg:tt)*) => {
+		let _log_scope = crate::progress::ScopeLogger(log::Level::Trace);
+		log::trace!(concat!($msg, "««") $($arg)*);
+	}
+}
+pub(crate) use scope_trace;
+} // mod progress
 pub(crate) mod gamefiles {
 //! Access to the KEY/BIF side of the database.
 //!
@@ -267,7 +352,7 @@ impl Resref {
 				if n >= 8 { break }
 			}
 		}
-		trace!("resref::fresh({source}), used {n} letters");
+// 		trace!("resref::fresh({source}), used {n} letters");
 		for j in 1..111_111_111 {
 			// This panics after all 111_111_111 possibilities have been
 			// exhausted. Unlikely to happen irl (and then we cannot do much
@@ -424,14 +509,29 @@ impl ResHandle<'_> {
 	bifnames: Vec<String>,
 	_bifsizes: Vec<u32>,
 	resources: Vec<KeyRes>,
-	/// The set of languages in the file, as a list of (language code, path
-	/// to dialog.tlk).
+	/// The set of languages in the file, as a list of
+	/// (5-letter language code, path to `dialog.tlk`).
 	pub languages: Vec<(String,PathBuf)>,
-	/// The backup directory (full path) for this tool.
-	pub backup: PathBuf,
+	/// The backup directory. This is a constant value (always
+	/// `$root/simod/backup`); we store it here for caching purposes.
+	pub backup_dir: PathBuf,
+}
+/// Creates the directory unless it exists
+fn create_dir(path: impl AsRef<Path>)->std::io::Result<()> {
+	let path = path.as_ref();
+	match std::fs::create_dir(path) {
+		Ok(_) => { info!("creating directory {path:?}"); Ok(()) }
+		Err(e) => match e.kind() {
+			io::ErrorKind::AlreadyExists =>
+				{ info!("not creating directory {path:?}: it already exists"); Ok(()) },
+			_ => Err(e) } }
 }
 impl GameIndex {
 	/// Initializes the structure from the path containing "chitin.key".
+	///
+	/// This mostly sets a few internal variables from the contents of the
+	/// directory. It also creates the `simod` directory structure if it
+	/// does not exist.
 	pub fn new(gamedir: impl AsRef<Path>)->Result<Self> {
 		let gamedir = gamedir.as_ref().to_path_buf();
 		let indexfile = Path::new(&gamedir).join("chitin.key");
@@ -454,20 +554,36 @@ impl GameIndex {
 			.with_context(|| format!("cannot read {} BIF resources in file: {}",
 				hdr.nres, indexfile.to_str().unwrap()))?;
 		let languages = Self::languages(&gamedir)?;
-		let backup = gamedir.join(crate::BACKUP_DIR);
+		let simod_dir = gamedir.join("simod");
+		create_dir(&simod_dir)
+			.with_context(|| format!("cannot create simod directory {simod_dir:?}"))?;
+		let backup_dir = simod_dir.join("backup");
+		create_dir(&backup_dir).with_context(||
+			format!("cannot create backup directory {backup_dir:?}"))?;
 		Ok(GameIndex{ root: gamedir, bifnames, resources, _bifsizes, languages,
-			backup })
+			backup_dir })
+	}
+	pub fn tempdir(&self)->Result<tempfile::TempDir> {
+		let dir = tempfile::tempdir_in(self.root.join("simod"))
+			.context("failed to create temporary directory")?;
+		debug!("created temporary directory: {dir:?}");
+		Ok(dir)
 	}
 	/// Initializes the set of languages used in the game.
+	///
+	/// A language is stored as a 5-byte value (eg `"en_US"`), possibly
+	/// followed by the letter `'F'` (eg `"fr_FRF"`). This is lossless and
+	/// thus allows reconstructing the full path to `dialog[F].tlk` for
+	/// backup and restoration.
 	fn languages(gamedir: &impl AsRef<Path>)->Result<Vec<(String,PathBuf)>> {
 		let langdir = gamedir.as_ref().join("lang");
 		let mut r = Vec::<(String,PathBuf)>::new();
 		for x in fs::read_dir(&langdir)
 			.with_context(|| format!("cannot read lang directory: {langdir:?}"))? {
 			let entry = x?;
-			let lang = &entry.file_name().into_string().unwrap()[0..2];
+			let lang = &entry.file_name().into_string().unwrap()[0..5];
 			// TMP: this is to speed up execution (a bit) during test runs.
-			if lang != "en" && lang != "fr" && lang != "frF" { continue }
+			if lang != "en_US" && lang != "fr_FR" /* && lang != "frF" */ { continue }
 			let dir = entry.path();
 			let dialog = dir.join("dialog.tlk");
 			if dialog.is_file() { r.push((lang.to_owned(), dialog)); }
@@ -490,6 +606,8 @@ impl GameIndex {
 		let pb = Progress::new(self.resources.len(), "resources");
 		let over_dir = self.root.join("override"); // "override" is a reserved kw
 		if over_dir.is_dir() {
+			scope_trace!("iterating over game resources from override: {:?}",
+				over_dir);
 			for e in over_dir.read_dir()
 				.with_context(|| format!("cannot read directory {over_dir:?}"))? {
 				let entry = e?;
@@ -504,6 +622,7 @@ impl GameIndex {
 				f(restype, resref, ResHandle::Override(&entry.path()))?
 			}
 		}
+		scope_trace!("iterating over game resources from BIF");
 		for (sourcefile, filename) in self.bifnames.iter().enumerate() {
 			let path = self.root.join(filename);
 			let mut bif = BifFile::new(path);
@@ -523,7 +642,7 @@ impl GameIndex {
 	///
 	/// (This is used for backing up all the "dialog.tlk" files).
 	pub fn backup_as(&self, file: impl AsRef<Path>, to: impl AsRef<Path>)->Result<()> {
-		let backup_dir = &self.backup;
+		let backup_dir = &self.backup_dir;
 		let file = file.as_ref();
 		if !backup_dir.exists() {
 			fs::create_dir(backup_dir)
@@ -547,6 +666,61 @@ impl GameIndex {
 	/// This backs up resource files under the same name.
 	pub fn backup(&self, file: impl AsRef<Path>)->Result<()> {
 		self.backup_as(&file, file.as_ref().file_name().unwrap())
+	}
+	/// Completely sets game state from the one saved in a directory.
+	///
+	/// This sets the contents of all `.tlk` files from those files found
+	/// in this directory, **erases** all previous contents of override
+	/// directory, and moves all non-tlk files to override directory.
+	///
+	/// This is used both for restoring a backup game state and for
+	/// quasi-atomic installation of a new game state.
+	pub fn restore(&self, source: impl AsRef<Path>)->Result<()> {
+		let source = source.as_ref();
+		debug!("restoring files from {source:?}");
+		let override_dir = self.root.join("override");
+		let out_dir = self.tempdir()?;
+		// prepare the move: list all `.tlk` files (these will be installed
+		// to separate locations).
+		let mut tlk_files = Vec::<(PathBuf,PathBuf)>::
+			with_capacity(self.languages.len());
+		for e in source.read_dir()
+			.with_context(|| format!("cannot read source directory: {source:?}"))? {
+			let entry = e?;
+			let name = match entry.file_name().into_string() { Err(_) => continue,
+				Ok(s) => s };
+			let pos = match name.find('.') { None => continue, Some(p) => p };
+			let ext = &name[pos+1..];
+			trace!(r#"found file "{name}" with extension "{ext}""#);
+			if ext.eq_ignore_ascii_case("tlk") {
+				let mut lang = &name[..pos];
+				let mut filename = String::from("dialog");
+				if pos == 6 && lang.as_bytes()[lang.len()-1] == b'F' {
+					lang = &lang[..lang.len()-1];
+					filename.push('F');
+				}
+				filename.push_str(".tlk");
+				trace!(r#"this is a tlk file, pushing {filename}"#);
+				tlk_files.push((entry.path(), 
+					self.root.join("lang").join(lang).join(filename)));
+				continue;
+			}
+		}
+		// now do the move
+		// it is not possible to do it atomically since we are moving to
+		// several directories, so we group all move operations together
+		// instead:
+		for (source, dest) in tlk_files {
+			fs::rename(&source, &dest)
+				.with_context(|| format!("cannot install saved language file {source:?} to {dest:?}"))?;
+		}
+		fs::rename(&override_dir, out_dir.path())
+			.with_context(|| format!("cannot displace old override directory {override_dir:?} to {out_dir:?}"))?;
+		fs::rename(source, &override_dir)
+			.with_context(|| format!("cannot displace old override directory {override_dir:?} to {out_dir:?}"))?;
+		// TODO: in case of failure of either rename operation, use (slower)
+		// file-by-file copy instead
+		Ok(())
 	}
 }
 } // mod gamefiles
@@ -1039,69 +1213,6 @@ impl<T: Table> Iterator for TypedRows<'_,T> {
 	}
 }
 } // mod resources
-pub(crate) mod progress {
-//! Generic useful functions for user interaction.
-//!
-//! This contains among other:
-//!  - [`Progress`], a utility wrapper for a progress bar stack;
-//!  - [`transaction`], wrapping a closure inside a database transaction.
-use crate::prelude::*;
-use std::cell::{RefCell};
-use indicatif::{ProgressBar,ProgressStyle,MultiProgress};
-
-thread_local! {
-	static COUNT: RefCell<usize> = RefCell::new(0);
-	static MULTI: RefCell<MultiProgress> =
-		RefCell::new(MultiProgress::new());
-}
-/// A stacked progress bar.
-///
-/// This bar is removed from the stack when it is dropped.
-#[derive(Debug)]
-pub struct Progress { pb: ProgressBar, name: String, }
-impl AsRef<ProgressBar> for Progress {
-	fn as_ref(&self)->&ProgressBar { &self.pb }
-}
-impl Drop for Progress {
-	fn drop(&mut self) {
-		debug!(r#"finished task "{name}" in {elapsed:?}"#,
-			name=self.name, elapsed=self.pb.elapsed());
-		MULTI.with(|c| c.borrow_mut().remove(&self.pb));
-		COUNT.with(|c| *c.borrow_mut()-= 1)
-	}
-}
-
-const COLORS: &[&str] = &["red", "yellow", "green", "cyan", "blue", "magenta" ];
-
-impl Progress {
-	/// Appends a new progress bar to the stack.
-	pub fn new(n: impl num::ToPrimitive, text: impl Display)->Self {
-		let name = text.to_string();
-		let s = format!("{name} {{wide_bar:.{}}}{{pos:>5}}/{{len:>5}}",
-			COLORS[COUNT.with(|c| *c.borrow()) % COLORS.len()]);
-		let pb0 = ProgressBar::new(<u64 as num::NumCast>::from(n).unwrap());
-		pb0.set_style(ProgressStyle::with_template(&s).unwrap());
-		let pb = MULTI.with(|c| c.borrow_mut().add(pb0));
-		COUNT.with(|c| *c.borrow_mut()+= 1);
-		debug!(r#"start task "{name}""#);
-		Self { pb, name, }
-	}
-	/// Advances the progress bar by the given amount.
-	pub fn inc(&self, n: u64) { self.as_ref().inc(n) }
-}
-
-/// Wraps a closure inside a game transaction.
-///
-/// The transaction aborts if the closure returns an `Err` variant, and
-/// commits if it returns an `Ok` variant.
-pub fn transaction<T>(db: &mut Connection, mut f: impl FnMut(&rusqlite::Transaction<'_>)->Result<T>)->Result<T> {
-	let t = db.transaction().context("create new transaction")?;
-	let r = f(&t)?; // automatic rollback if Err
-	t.commit()?;
-	Ok(r)
-}
-
-} // mod progress
 pub(crate) mod gamestrings {
 //! Access to game strings in database.
 use crate::prelude::*;
@@ -1211,7 +1322,7 @@ fn load_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> + Deb
 		.with_context(|| format!("cannot open strings file: {path:?}"))?;
 	let mut q = db.prepare(&format!(r#"insert into "res_strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
 	let itr = GameStringsIterator::try_from(bytes.as_ref())?;
-	let pb = Progress::new(itr.len(), "strings");
+	let pb = Progress::new(itr.len(), langname);
 	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
 	let mut n_strings = 0;
 	for (strref, x) in itr.enumerate() {
@@ -1223,8 +1334,8 @@ fn load_language(db: &Connection, langname: &str, path: &(impl AsRef<Path> + Deb
 	info!("loaded {n_strings} strings for language \"{langname}\"");
 	Ok(())
 }
-/// Saves all database strings to "dialog.tlk" files for all game
-/// languages.
+/// For all game languages, saves database strings to "{lang}.tlk" in
+/// current directory.
 ///
 /// This also backups those files if needed (i.e. if no backup exists
 /// yet).
@@ -1233,31 +1344,24 @@ pub fn save(db: &Connection, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(game.languages.len(), "save translations");
 	for (lang, path) in game.languages.iter() {
 		pb.inc(1);
-		if lang != "en" { continue } // TODO: remove; this is to speed up tests
-		let mut s1 = String::new(); let mut s2 = String::new();
-		for c in path.iter() {
-			std::mem::swap(&mut s1, &mut s2);
-			s2.clear(); s2.push_str(c.to_str().unwrap());
-		}
-		println!("s1='{s1}', s2='{s2}'");
-		game.backup_as(path, format!("{s1}.tlk"))
+		game.backup_as(path, game.backup_dir.join(format!("{lang}.tlk")))
 			.with_context(|| format!("cannot backup strings file {path:?}"))?;
-		let count = db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
+		let count = 1+db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
 			(), |row| row.get::<_,usize>(0))?;
-		let mut vec = vec![GameString::default(); count+1];
+		let mut vec = vec![GameString::default(); count];
 		let mut sel_str = GameString::select_query_gen(db, "strings_", lang, "")?;
 		for row in sel_str.iter(())? {
 			if row.is_db_malformed() { continue }
 			let (gamestring, (strref,)) = row.unwrap();
 			vec[strref] = gamestring;
 		}
-		let target = format!("./{lang}.tlk");
+		let target = format!("{lang}.tlk");
 		save_language(&vec, &target)?;
 		info!("updated strings in {target:?}; file now contains {count} entries");
 	}
 	Ok(())
 }
-}
+} // mod gamestrings
 pub(crate) mod lua_api {
 //! Loads mod-supplied Lua files.
 //!
@@ -1373,7 +1477,7 @@ fn pop_arg_as<'lua, T: mlua::FromLua<'lua>>(args: &mut mlua::MultiValue<'lua>, l
 // 	Ok(table_schema(&table)?.all_keys(db)?)
 // }
 fn list_keys<'lua>(db: &Connection, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Vec<mlua::Value<'lua>>> {
-	trace!("callback 'simod.list' invoked with: {args:?}");
+	scope_trace!("callback 'simod.list' invoked with: {:?}", args);
 	let table_name = pop_arg_as::<String>(&mut args, lua)
 		.context("'simod.list' callback")?;
 	trace!(r#"  first argument is "{table_name}""#);
@@ -1394,6 +1498,8 @@ fn list_keys<'lua>(db: &Connection, lua: &'lua Lua, mut args: mlua::MultiValue<'
 /// Reads a full row from one of the resource tables and returns it as a
 /// Lua table.
 fn select<'lua>(db: &Connection, lua: &'lua Lua, (table, rowid): (String, mlua::Value<'_>))->Result<mlua::Table<'lua>> {
+	scope_trace!("callback 'simod.select' invoked with: '{}' '{:?}'", table,
+		rowid);
 	let schema = table_schema(&table)?;
 	let tbl = lua.create_table_with_capacity(0,
 		schema.fields.len() as std::ffi::c_int)?;
@@ -1618,7 +1724,7 @@ end;
 					)?;
 			}
 		}
-		info!("  creating tables for resource {}", schema.table_name);
+		debug!("  creating tables for resource '{}'", schema.table_name);
 		schema.create_tables_and_views(db)?; Result::<()>::Ok(())
 	})?;
 	db.exec(new_strings)?; Ok(())
@@ -1714,30 +1820,33 @@ fn translate_strrefs(db: &mut Connection)->Result<()> {
 /// exception throws do not prevent changing back to the previous
 /// directory:
 fn command_save(game: &GameIndex, mut db: Connection)->Result<()> {
-	let pb = Progress::new(4, "save all"); pb.as_ref().tick();
+	// prepare database by translating resrefs and strrefs
 	translate_resrefs(&mut db)?;
-	pb.inc(1);
 	translate_strrefs(&mut db)?;
-	pb.inc(1);
-	gamestrings::save(&db, game)?;
-	pb.inc(1);
-	let tmpdir = Path::new(&game.root).join("simod_out");
-	fs::create_dir(&tmpdir)
-		.with_context(|| format!("cannot create temp directory {tmpdir:?}"))?;
+	// save in a temp directory before moving everything to override
+	let tmpdir = game.tempdir()?;
 	let orig_dir = std::env::current_dir()?;
-	std::env::set_current_dir(tmpdir)?;
-	let res = save_resources(&db);
+	std::env::set_current_dir(&tmpdir)?;
+	debug!("saving to temporary directory {:?}", tmpdir);
+	// don't use the question mark operator — in case of failure, we want
+	// to go back to previous directory first:
+	let res = save_resources(&db, game);
 	std::env::set_current_dir(orig_dir)?;
-	pb.inc(1);
-	res
+	res?;
+	debug!("installing resources saved in temporary directory {:?}", tmpdir);
+	game.restore(tmpdir)
 }
-/// Saves all modified game resources to game files.
+/// Saves all modified game strings and resources to current directory.
 ///
 /// This function saves in the current directory;
 /// a chdir to the appropriate override directory needs to have been done
 /// first.
-fn save_resources(db: &Connection)->Result<()> {
+fn save_resources(db: &Connection, game: &GameIndex)->Result<()> {
+	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
+	gamestrings::save(db, game)?;
+	pb.inc(1);
 	Item::save_all(db)?;
+	pb.inc(1);
 	Ok(())
 }
 // IV others: show etc.
@@ -1754,33 +1863,9 @@ fn command_show(db: Connection, target: impl AsRef<str>)->Result<()> {
 }
 /// Restores all backed up files.
 fn command_restore(game: &GameIndex)->Result<()> {
-	for x in game.backup.read_dir()
-		.with_context(|| format!("cannot read backup directory {:?}", game.backup))? {
-		let path = x
-			.with_context(|| format!("cannot read file in backup directory {:?}", game.backup))?
-			.path();
-		let ext = path.extension().unwrap().to_str().unwrap();
-		match ext {
-			"tlk" => {
-				let mut lang = path.file_stem().unwrap().to_str().unwrap();
-				let mut tail = String::new();
-				if lang.as_bytes()[lang.len()-1] == b'F' {
-					lang = &lang[..lang.len()-1];
-					tail.push('F');
-				}
-				let dest = game.root.join("lang").join(lang)
-					.join(format!("dialog{tail}.tlk"));
-				fs::copy(&path, &dest)?;
-				info!("restored {path:?} to {dest:?}");
-			},
-			_ => { // override case
-				let dest = game.root.join("override").join(path.file_name().unwrap());
-				fs::copy(&path, &dest)?;
-				info!("restored {path:?} to {dest:?}");
-			}
-		};
-	}
-	Ok(())
+	game.restore(&game.backup_dir)
+		.with_context(|| format!("failed to restore game files from {:?}",
+			game.backup_dir))
 }
 
 /// The runtime options parser for `clap` crate.
