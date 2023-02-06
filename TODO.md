@@ -1,3 +1,5 @@
+ - [ ] `DbInserter` belongs in `database` mod (nothing is particular to
+   each type)
 # Override
  - [ ] improve backup procedure
  - [ ] deleted resources

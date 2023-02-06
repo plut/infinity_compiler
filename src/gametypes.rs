@@ -22,7 +22,7 @@
 //!    they have the resref as their primary key).
 use crate::prelude::*;
 use macros::{produce_resource_list};
-use crate::database::{Resource,DbTypeCheck,Schema,DbInterface};
+use crate::database::{Resource,DbTypeCheck,Schema,DbInterface,DbInserter};
 use crate::gamefiles::{Pack,Restype};
 
 /// Those resources which are associated to a global table.
@@ -339,55 +339,3 @@ Attack type: {atype}",
 //  - and the constant `RESOURCES`, which holds the parent resources.
 produce_resource_list!();
 
-/// A structure holding insertion statements for all resource types.
-///
-/// This structure does the main work for initially filling the database.
-/// It also contains a statement for storing original resrefs.
-#[derive(Debug)]
-pub struct DbInserter<'a> {
-// 	db: &'a Connection,
-	add_resref: Statement<'a>,
-	tables: AllResources<Statement<'a>>,
-	add_override: Statement<'a>,
-	resource_count: AllResources<usize>,
-}
-impl<'a> DbInserter<'a> {
-	/// Creates a new `DbInserter` from a database and the list of all
-	/// resources.
-	pub fn new(db: &'a GameDB)->Result<Self> {
-		Ok(Self { // db,
-		tables: RESOURCES.map(|schema, _|
-			db.prepare(&schema.insert_statement("or ignore", "res_"))
-			.with_context(|| format!("insert statement for table '{table}'",
-				table = schema.name))
-		)?,
-		resource_count: RESOURCES.map(|_,_| Ok::<usize,rusqlite::Error>(0))?,
-		add_resref: db.prepare(
-			r#"insert or ignore into "resref_orig" values (?)"#)?,
-		add_override: db.prepare(
-			r#"insert or ignore into "override" values (?,?)"#)?,
-	}) }
-	/// Adds a new [`Resref`] to the table of original resrefs.
-	pub fn register(&mut self, resref: &Resref)->rusqlite::Result<usize> {
-		self.add_resref.execute((resref,))
-	}
-	/// Loads a new top-level resource
-	pub fn load<T: ToplevelResource>(&mut self, resref: Resref, mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
-		T::load(self, handle.open()?, resref)?;
-		if handle.is_override() {
-			self.add_override.execute((resref, T::SCHEMA.extension))?;
-		}
-		*(<T as NamedTable>::find_field_mut(&mut self.resource_count))+=1;
-		Ok(())
-	}
-}
-impl Drop for DbInserter<'_> {
-	fn drop(&mut self) {
-		self.resource_count.map(|schema, n| {
-			if *n > 0 {
-				info!(r#"loaded {n} entries in table "{}""#, schema.name);
-			}
-			Ok::<(),rusqlite::Error>(())
-		}).unwrap();
-	}
-}
