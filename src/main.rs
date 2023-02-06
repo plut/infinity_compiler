@@ -518,6 +518,13 @@ pub fn create_dir(path: impl AsRef<Path>)->io::Result<()> {
 				{ info!("not creating directory {path:?}: it already exists"); Ok(()) },
 			_ => Err(e) } }
 }
+pub fn with_dir<T>(dir: impl AsRef<Path>, f: impl FnOnce()->Result<T>)->Result<T> {
+	let orig_dir = std::env::current_dir()?;
+	std::env::set_current_dir(dir)?;
+	let res = f();
+	std::env::set_current_dir(orig_dir)?;
+	res
+}
 impl GameIndex {
 	/// Initializes the structure from the path containing "chitin.key".
 	///
@@ -1933,9 +1940,6 @@ use gamefiles::{GameIndex};
 use progress::{Progress};
 use gametypes::*;
 
-// I init
-// II add
-// III compile
 /// Saves all modified game strings and resources to current directory.
 ///
 /// This function saves in the current directory;
@@ -1960,14 +1964,10 @@ fn command_save_full(game: &GameIndex, mut db: GameDB)->Result<()> {
 	db.translate_strrefs()?;
 	// save in a temp directory before moving everything to override
 	let tmpdir = game.tempdir()?;
-	let orig_dir = std::env::current_dir()?;
-	std::env::set_current_dir(&tmpdir)?;
-	debug!("saving to temporary directory {:?}", tmpdir);
-	// don't use the question mark operator — in case of failure, we want
-	// to go back to previous directory first:
-	let res = save_resources(&db, game);
-	std::env::set_current_dir(orig_dir)?;
-	res?;
+	gamefiles::with_dir(&tmpdir, || {
+		debug!("saving to temporary directory {:?}", tmpdir);
+		save_resources(&db, game)
+	})?;
 	debug!("installing resources saved in temporary directory {:?}", tmpdir);
 	game.restore(tmpdir)?;
 	db.clear_orphan_resources()?;
@@ -1978,23 +1978,19 @@ fn command_save_diff(game: &GameIndex, mut db: GameDB)->Result<()> {
 	db.translate_resrefs()?;
 	db.translate_strrefs()?;
 	let override_dir = game.root.join("override");
-	gamefiles::create_dir(&override_dir)?;
-	let orig_dir = std::env::current_dir()?;
-	std::env::set_current_dir(&override_dir)?;
-	debug!("differential save to {override_dir:?}");
-	// clear orphan resources **before** installing new resources —
-	// a resource might legitimately be both orphan and still existing
-	// (if it was removed and then added again in the DB), in which case we
-	// want to save it to override:
-	let res1 = db.clear_orphan_resources();
-	let res2 = save_resources(&db, game);
-	std::env::set_current_dir(orig_dir)?;
-	res1?; res2?;
+	gamefiles::with_dir(&override_dir, || {
+		debug!("differential save to {override_dir:?}");
+		// clear orphan resources **before** installing new resources —
+		// a resource might legitimately be both orphan and still existing
+		// (if it was removed and then added again in the DB), in which case we
+		// want to save it to override:
+		db.clear_orphan_resources()?;
+		save_resources(&db, game)
+	})?;
 	debug!("resources saved!");
 	db.unmark_dirty_resources()?;
 	Ok(())
 }
-// IV others: show etc.
 fn command_show(db: &GameDB, target: impl AsRef<str>)->Result<()> {
 	let target = target.as_ref();
 	let (resref, resext) = match target.rfind('.') {

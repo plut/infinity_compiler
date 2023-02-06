@@ -1,4 +1,5 @@
 # Override
+ - [ ] improve backup procedure
  - [ ] deleted resources
   - [x] we need to know which resources have been deleted since last save
   - [x] this needs to be updated even when deleting from underlying
