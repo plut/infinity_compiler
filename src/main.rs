@@ -42,7 +42,7 @@ pub(crate) use std::fs::{self,File};
 pub(crate) use std::io::{self,Cursor,Read,Write,Seek,SeekFrom};
 pub(crate) use std::path::{Path, PathBuf};
 
-pub(crate) use macros::{Pack,Table};
+pub(crate) use macros::{Pack,Resource};
 pub(crate) use crate::gamefiles::{Resref,Strref};
 pub(crate) use crate::progress::scope_trace;
 
@@ -517,7 +517,7 @@ impl ResHandle<'_> {
 	pub backup_dir: PathBuf,
 }
 /// Creates the directory unless it exists
-fn create_dir(path: impl AsRef<Path>)->io::Result<()> {
+pub fn create_dir(path: impl AsRef<Path>)->io::Result<()> {
 	let path = path.as_ref();
 	match fs::create_dir(path) {
 		Ok(_) => { info!("creating directory {path:?}"); Ok(()) }
@@ -583,7 +583,7 @@ impl GameIndex {
 			let entry = x?;
 			let lang = &entry.file_name().into_string().unwrap()[0..5];
 			// TMP: this is to speed up execution (a bit) during test runs.
-			if lang != "en_US" && lang != "fr_FR" /* && lang != "frF" */ { continue }
+			if lang != "en_US" /* && lang != "fr_FR" && lang != "frF" */ { continue }
 			let dir = entry.path();
 			let dialog = dir.join("dialog.tlk");
 			if dialog.is_file() { r.push((lang.to_owned(), dialog)); }
@@ -732,7 +732,7 @@ pub(crate) mod database {
 //!
 //! Main exports are:
 //!  - [`Schema`] type: description of a particular SQL table;
-//!  - [`Table`] trait: connect a Rust structure to a SQL row.
+//!  - [`Resource`] trait: connect a Rust structure to a SQL row.
 use crate::prelude::*;
 use rusqlite::{Row};
 use std::marker::PhantomData;
@@ -890,7 +890,7 @@ impl<T: Display> Display for Columns<'_,T> {
 /// on the SQL side.
 ///
 /// In practice there exists exactly one [`Schema`] instance per
-/// resource, and it is compiled by the [`Table`] derive macro.
+/// resource, and it is compiled by the [`Resource`] derive macro.
 ///
 /// A few fields in this struct are used only for top-level resources.
 /// Doing this saves us a bit of code (separating top-level resources as
@@ -901,7 +901,7 @@ impl<T: Display> Display for Columns<'_,T> {
 	/// Descriptions for all the fields of this struct.
 	pub fields: &'a[Column<'a>],
 	/// The stem for the SQL table name associated with this structure.
-	pub table_name: &'a str,
+	pub name: &'a str,
 	/// The index of the field pointing to top-level resource resref.
 	///
 	/// This is also (always) the first context column.
@@ -980,15 +980,17 @@ impl<'schema> Schema<'schema> {
 	/// - `out_{name}`: the view used to save new or modified values to
 	/// game files.
 	pub fn create_tables_and_views(&self, db: &Connection)->Result<()> {
-		let name = &self.table_name;
+		let Schema { name, parent_table, extension, .. } = self;
 		let parent_key = self.resref();
-		let parent_table = &self.parent_table;
 		let primary = self.primary();
 
 		use fmt::Write;
+		// read-only table of initial resources:
 		db.exec(self.create_table(format!("res_{name}").as_str(), ""))?;
+		// table of resources inserted by mods:
 		db.exec(self.create_table(format!("add_{name}").as_str(),
 			r#", "source" text"#))?;
+		// table of fields edited by mods:
 		db.exec(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str())?;
 		{ // create main view
 		let mut view = format!(r#"create view "{name}" as
@@ -1004,14 +1006,24 @@ impl<'schema> Schema<'schema> {
 		db.exec(view)?;
 		}
 		let dirtytable = format!("dirty_{parent_table}");
-		db.exec(format!(r#"create table if not exists "{dirtytable}" ("name" text primary key)"#))?;
+		if !extension.is_empty() {
+			// only for top-level resource: create the dirty table and orphan
+			// table
+			db.exec(format!(r#"create table "{dirtytable}" ("name" text primary key)"#))?;
+			db.exec(format!(r#"create table "orphan_{name}" ("name" text primary key)"#))?;
+			db.exec(format!(r#"
+			create trigger "orphan_{name}" after delete on "add_{name}"
+			begin 
+			  insert into "orphan_{name}" values (old."{primary}");
+			end"#))?;
+		}
+		// populate resref_dict or strref_dict as needed:
+		// There are two triggers which edit "resref_dict"; we build both
+		// of them from resref fields at once, by storing the text in
+		// `trans` (for update triggers) and `trans_insert` (for insert
+		// trigger).
 		let mut trans_insert = String::new();
 		for Column {fieldname, fieldtype, ..} in self.fields.iter() {
-			// populate resref_dict or strref_dict as needed:
-			// There are two triggers which edit "resref_dict"; we build both
-			// of them from resref fields at once, by storing the text in
-			// `trans` (for update triggers) and `trans_insert` (for insert
-			// trigger).
 			let trans = match fieldtype {
 			FieldType::Resref => format!(
 	r#"insert or ignore into "resref_dict" values (new."{fieldname}", null);"#),
@@ -1069,7 +1081,7 @@ impl<'schema> Schema<'schema> {
 	fn create_output_view(&self)->String {
 		let n = '\n';
 		use fmt::Write;
-		let name = &self.table_name;
+		let name = &self.name;
 		let parent_key = self.resref();
 		let mut select = format!(r#"create view "out_{name}" as select{n}  "#);
 		let mut source = format!(r#"{n}from "{name}" as "a"{n}"#);
@@ -1107,9 +1119,9 @@ impl<'schema> Schema<'schema> {
 	/// this is used when initializing the database to ignore resources
 	/// which are superseded by override files.
 	pub fn insert_statement(&self, or: impl Display, prefix: impl Display)->String {
-		let table_name = &self.table_name;
+		let name = &self.name;
 		let cols = self.columns("");
-		let mut s = format!("insert {or} into \"{prefix}{table_name}\" ({cols}) values (");
+		let mut s = format!("insert {or} into \"{prefix}{name}\" ({cols}) values (");
 		for c in 0..cols.len()  {
 			if c > 0 { s.push(','); }
 			s.push('?');
@@ -1119,7 +1131,7 @@ impl<'schema> Schema<'schema> {
 	}
 	fn all_keys_gen<T>(&self, db: &Connection, condition: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
 		let s = format!(r#"select "{primary}" from "{table}" {condition} order by {sort}"#,
-			table = self.table_name, primary = self.primary(), sort = self.context(""));
+			table = self.name, primary = self.primary(), sort = self.context(""));
 		let mut stmt = db.prepare(&s)
 			.context("preparing statement")?;
 		let mut rows = stmt.query(())?;
@@ -1145,8 +1157,8 @@ impl<'schema> Schema<'schema> {
 ///
 /// This is the main trait for game resources, containing the low-level
 /// interaction with the database (`ins`, `sel`). Concrete
-/// implementations are provided by the `Table` derive macro.
-pub trait Table: Sized {
+/// implementations are provided by the `Resource` derive macro.
+pub trait Resource: Sized {
 	/// Additional data saved in the same row as a game object; usually
 	/// some identifier for the object (e.g. its resref).
 	type Context;
@@ -1172,17 +1184,17 @@ pub trait Table: Sized {
 	}
 	/// Particular case of SELECT statement used for saving to game files.
 	fn select_query(db: &Connection, s: impl Display)->rusqlite::Result<TypedStatement<'_, Self>> {
-		Self::select_query_gen(db, "out_", Self::SCHEMA.table_name, s)
+		Self::select_query_gen(db, "out_", Self::SCHEMA.name, s)
 	}
 }
 /// A statement aware of the associated table type.
 ///
-/// We need a few types parametrized by a Table:
+/// We need a few types parametrized by a Resource:
 ///  - `TypedStatement`: this gets saved as a (mut) local variable;
-///  - `TypedRows`: the iterator producing Table objects from the query.
+///  - `TypedRows`: the iterator producing Resource objects from the query.
 #[derive(Debug)]
-pub struct TypedStatement<'stmt, T: Table> (Statement<'stmt>, PhantomData<T>);
-impl<T: Table> TypedStatement<'_, T> {
+pub struct TypedStatement<'stmt, T: Resource> (Statement<'stmt>, PhantomData<T>);
+impl<T: Resource> TypedStatement<'_, T> {
 	/// Iterates over this statement, returning (possibly) Rust structs of
 	/// the type associated with this table.
 	pub fn iter<P: rusqlite::Params>(&mut self, params: P) ->rusqlite::Result<TypedRows<'_,T>> {
@@ -1198,12 +1210,12 @@ impl<T: Table> TypedStatement<'_, T> {
 /// This also behaves as an `Iterator` (throwing when the underlying
 /// `Row` iterator fails).
 #[allow(missing_debug_implementations)]
-pub struct TypedRows<'stmt,T: Table> {
+pub struct TypedRows<'stmt,T: Resource> {
 	rows: rusqlite::Rows<'stmt>,
 	_marker: PhantomData<T>,
 	index: usize,
 }
-impl<T: Table> Iterator for TypedRows<'_,T> {
+impl<T: Resource> Iterator for TypedRows<'_,T> {
 	type Item = Result<(T, T::Context)>;
 	fn next(&mut self)->Option<Self::Item> {
 		loop {
@@ -1230,7 +1242,7 @@ pub(crate) mod gamestrings {
 //! Access to game strings in database.
 use crate::prelude::*;
 use crate::progress::{Progress};
-use crate::database::{self,ConnectionExt,Table};
+use crate::database::{self,ConnectionExt,Resource};
 use crate::gamefiles::{Pack,GameIndex};
 
 #[derive(Debug,Pack)] struct TlkHeader {
@@ -1240,7 +1252,7 @@ use crate::gamefiles::{Pack,GameIndex};
 	offset: u32,
 }
 /// A game string as present in a .tlk file.
-#[derive(Debug,Default,Clone,Pack,Table)]
+#[derive(Debug,Default,Clone,Pack,Resource)]
 pub struct GameString {
 #[column(strref, usize, "primary key")]
 	flags: u16,
@@ -1502,10 +1514,10 @@ fn pop_arg_as<'lua, T: mlua::FromLua<'lua>>(args: &mut mlua::MultiValue<'lua>, l
 // }
 fn list_keys<'lua>(db: &Connection, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Vec<mlua::Value<'lua>>> {
 	scope_trace!("callback 'simod.list' invoked with: {:?}", args);
-	let table_name = pop_arg_as::<String>(&mut args, lua)
+	let name = pop_arg_as::<String>(&mut args, lua)
 		.context("'simod.list' callback")?;
-	trace!(r#"  first argument is "{table_name}""#);
-	let schema = table_schema(&table_name)?;
+	trace!(r#"  first argument is "{name}""#);
+	let schema = table_schema(&name)?;
 	match args.len() {
 		0 => Ok(schema.all_keys(db, |v| sql_to_lua(v, lua))?),
 		1 => {
@@ -1561,7 +1573,7 @@ fn update(db: &Connection, (table, key, field, value): (String, String, String, 
 	let s = format!(
 		r#"update "{table}" set "{field}"=? where "{primary}"='{key}'"#,
 		primary = table_schema(&table)?.primary());
-	trace!("executing sql: {s} {value:?}");
+	trace!("executing sql: {s} {:?}", LuaInspect(&value));
 	db.execute(&s, (LuaToSql(value),))
 		.with_context(|| format!("failed SQL query: {s}"))?;
 	Ok(())
@@ -1637,7 +1649,7 @@ pub fn command_add(db: Connection, _target: &str)->Result<()> {
 			res_schema.set("fields", fields)?;
 			res_schema.set("context", context)?;
 			res_schema.set("primary", schema.primary())?;
-			lua_schema.set(schema.table_name, res_schema)?;
+			lua_schema.set(schema.name, res_schema)?;
 			Ok::<_,mlua::Error>(())
 		})?;
 		simod.set("schema", lua_schema)?;
@@ -1743,14 +1755,14 @@ end;
 		pb.inc(1);
 		for database::Column { fieldname, fieldtype, .. } in schema.fields.iter() {
 			if *fieldtype == database::FieldType::Strref {
-				let name = &schema.table_name;
+				let name = &schema.name;
 				if new_strings_is_first { new_strings_is_first = false; }
 				else { write!(&mut new_strings, "\nunion\n")?; }
 				write!(&mut new_strings, r#"select "{fieldname}", 1 from "add_{name}" union select "value", 1 from "edit_{name}" where "field" = '{fieldname}'"#,
 					)?;
 			}
 		}
-		debug!("  creating tables for resource '{}'", schema.table_name);
+		debug!("  creating tables for resource '{}'", schema.name);
 		schema.create_tables_and_views(db)?; Result::<()>::Ok(())
 	})?;
 	db.exec(new_strings)?; Ok(())
@@ -1788,7 +1800,7 @@ left join "translations_{lang}" as "t" using ("key");
 /// The database must have been already created and initialized (with
 /// empty tables).
 fn load(db: Connection, game: &GameIndex)->Result<()> {
-	use crate::database::Table;
+	use crate::database::Resource;
 	let pb = Progress::new(3, "Fill database"); pb.inc(1);
 	gamestrings::load(&db, game)
 		.with_context(|| format!("cannot read game strings from game directory {:?}", game.root))?;
@@ -1839,12 +1851,48 @@ fn translate_strrefs(db: &mut Connection)->Result<()> {
 	Ok(())
 	})?; Ok(())
 }
+/// Saves all modified game strings and resources to current directory.
+///
+/// This function saves in the current directory;
+/// a chdir to the appropriate override directory needs to have been done
+/// first.
+fn save_resources(db: &Connection, game: &GameIndex)->Result<()> {
+	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
+	gamestrings::save(db, game)?;
+	pb.inc(1);
+	Item::save_all(db)?;
+	pb.inc(1);
+	Ok(())
+}
+/// Deletes from current directory all resources marked as 'orphan' in
+/// the database. This also clears the list of orphan resources.
+fn clear_orphan_resources(db: &Connection)->Result<()> {
+	RESOURCES.map(|schema, _| {
+		let ext = schema.extension; let name = schema.name;
+		if !ext.is_empty() {
+			let s = format!(r#"select "name" from "orphan_{name}""#);
+			let mut stmt = db.prepare(&s)
+				.with_context(|| format!(r#"failed SQL query: {s}"#))?;
+			let mut rows = stmt.query(())?;
+			while let Some(row) = rows.next()? {
+				let mut file = row.get::<_,String>(0)
+					.with_context(|| format!(r#"bad entry in "orphan_{name}""#))?;
+				file.push('.');
+				file.push_str(ext);
+				fs::remove_file(&file)
+					.with_context(|| format!(r#"cannot remove file "{file}""#))?;
+			}
+		}
+		any_ok(())
+	})?;
+	Ok(())
+}
 /// Saves game resources to filesystem.
 ///
 /// This wraps [`save_resources`] so that any
 /// exception throws do not prevent changing back to the previous
 /// directory:
-fn command_save(game: &GameIndex, mut db: Connection)->Result<()> {
+fn command_save_full(game: &GameIndex, mut db: Connection)->Result<()> {
 	// prepare database by translating resrefs and strrefs
 	translate_resrefs(&mut db)?;
 	translate_strrefs(&mut db)?;
@@ -1859,19 +1907,35 @@ fn command_save(game: &GameIndex, mut db: Connection)->Result<()> {
 	std::env::set_current_dir(orig_dir)?;
 	res?;
 	debug!("installing resources saved in temporary directory {:?}", tmpdir);
-	game.restore(tmpdir)
+	game.restore(tmpdir)?;
+	// clean the dirty bit from saved resources
+	RESOURCES.map(|schema, _| {
+		if !schema.extension.is_empty() {
+			let name = schema.name;
+			db.exec(format!(r#"delete from "dirty_{name}""#))?;
+			db.exec(format!(r#"delete from "orphan_{name}""#))?;
+		}
+		any_ok(())
+	})?;
+	Ok(())
 }
-/// Saves all modified game strings and resources to current directory.
-///
-/// This function saves in the current directory;
-/// a chdir to the appropriate override directory needs to have been done
-/// first.
-fn save_resources(db: &Connection, game: &GameIndex)->Result<()> {
-	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
-	gamestrings::save(db, game)?;
-	pb.inc(1);
-	Item::save_all(db)?;
-	pb.inc(1);
+fn command_save_diff(game: &GameIndex, mut db: Connection)->Result<()> {
+	translate_resrefs(&mut db)?;
+	translate_strrefs(&mut db)?;
+	let override_dir = game.root.join("override");
+	gamefiles::create_dir(&override_dir)?;
+	let orig_dir = std::env::current_dir()?;
+	std::env::set_current_dir(&override_dir)?;
+	debug!("differential save to {override_dir:?}");
+	// clear orphan resources **before** installing new resources —
+	// a resource might legitimately be both orphan and still existing
+	// (if it was removed and then added again in the DB), in which case we
+	// want to save it to override:
+	let res1 = clear_orphan_resources(&db);
+	let res2 = save_resources(&db, game);
+	std::env::set_current_dir(orig_dir)?;
+	res1?; res2?;
+	debug!("resources saved!");
 	Ok(())
 }
 // IV others: show etc.
@@ -1913,6 +1977,7 @@ struct RuntimeOptions {
 enum Command {
 	Init,
 	Save,
+	FullSave,
 	Restore,
 	Add {
 		target: String,
@@ -1954,7 +2019,8 @@ fn main() -> Result<()> {
 	let db_file = options.database.unwrap();
 	match options.command {
 		Command::Init => load(create_db(&db_file, &game)?, &game)?,
-		Command::Save => command_save(&game, database::open(db_file)?)?,
+		Command::FullSave => command_save_full(&game, database::open(db_file)?)?,
+		Command::Save => command_save_diff(&game, database::open(db_file)?)?,
 		Command::Restore => command_restore(&game)?,
 		Command::Show{ target, .. } =>
 			command_show(database::open(db_file)?, target)?,

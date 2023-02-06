@@ -161,12 +161,12 @@ struct FieldInfo {
 }
 #[derive(Default,Debug)]
 struct ResourceInfo {
-	table_name: String,
+	name: String,
 	extension: String,
 	restype: u16,
 }
 
-#[proc_macro_derive(Table, attributes(column,resource))]
+#[proc_macro_derive(Resource, attributes(column,resource))]
 pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	let mut context = Vec::<(String, syn::Type, String)>::new();
 	let mut schema = TS2::new();
@@ -222,7 +222,7 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 		ncol+= 1;
 	}
 	// Search through foreign key constraints to locate the parent resource:
-	let mut parent = toks_to_string(&ident);
+	let mut parent = resource_info.name.clone();
 	let mut parent_key = payload_len;
 	let foreign_key = Regex::new(r#"references\s*"?(\w+)"?\s*\("#).unwrap();
 	for (i, (_, _, attr)) in context.iter().enumerate() {
@@ -241,13 +241,12 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 			extra: "primary key" },
 		} .to_tokens(&mut schema);
 	}
-	println!("resource_info is {resource_info:?}");
-	let ResourceInfo { table_name, extension, restype, .. } = resource_info;
+	let ResourceInfo { name, extension, restype, .. } = resource_info;
 	let mut code = quote! {
-		impl #generics crate::database::Table for #ident #generics {
+		impl #generics crate::database::Resource for #ident #generics {
 			type Context = (#ctx);
 			const SCHEMA: crate::database::Schema<'static> = crate::database::Schema{
-				table_name: #table_name,
+				name: #name,
 				extension: #extension,
 				restype: crate::gamefiles::Restype { value: #restype },
 				resref_key: #parent_key, parent_table: #parent,
@@ -262,15 +261,15 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	};
 // 	println!("\x1b[31m Context for {}: {}\x1b[m",
 // 		toks_to_string(&ident), toks_to_string(&ctx));
-	if table_name.is_empty() {
+	if name.is_empty() {
 // 		println!("\x1b[36m{}\x1b[m", code);
 	}
-	if !table_name.is_empty() {
+	if !name.is_empty() {
 		// The type name as a string:
 		let type_name = toks_to_string(&ident);
 		// which field of `AllResources` we are attached to:
-		let field = pm2::Ident::new(&table_name, pm2::Span::call_site());
-		push_resource(ResourceDef(type_name, table_name));
+		let field = pm2::Ident::new(&name, pm2::Span::call_site());
+		push_resource(ResourceDef(type_name, name));
 		quote! {
 			impl #generics NamedTable for #ident #generics {
 	fn find_field<T: Debug>(all: &AllResources<T>)->&T { &all.#field }
@@ -279,7 +278,7 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 		}.to_tokens(&mut code);
 	}
 	code.into()
-} // Table
+} // Resource
 /// Column attribute:
 /// `[column(itemref, i32, "references items", etc.)]` pushes on table
 /// `[column(false)]` suppresses next column
@@ -311,7 +310,7 @@ fn table_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut
 fn table_attr_resource(args: &mut AttrParser, resource_info: &mut ResourceInfo) {
 	let i = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
 		Some(AttrArg::Str(s)) => s, _ => return };
-	resource_info.table_name = i;
+	resource_info.name = i;
 	let ext = match args.get::<syn::Expr>() { Some(AttrArg::Str(s)) => s,
 		_ => return };
 	let restype = match args.get::<syn::Expr>() { Some(AttrArg::Int(n)) => n,
@@ -322,7 +321,7 @@ fn table_attr_resource(args: &mut AttrParser, resource_info: &mut ResourceInfo) 
 // 		Some(AttrArg::Str(s)) => s, _ => return };
 // 	*parent_key = pk;
 // 	let pn = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
-// 		Some(AttrArg::Str(s)) => s, _ => { *parent = table_name.clone(); return }};
+// 		Some(AttrArg::Str(s)) => s, _ => { *parent = name.clone(); return }};
 // 	*parent = pn;
 }
 
@@ -336,17 +335,17 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 	RESOURCES.with(|v| {
 		use pm2::{Span,Ident};
 		n = v.borrow().len();
-	for ResourceDef (type_name, table_name) in v.borrow().iter() {
+	for ResourceDef (type_name, name) in v.borrow().iter() {
 
 		let ty = Ident::new(type_name, Span::call_site());
-		let field = Ident::new(table_name, Span::call_site());
+		let field = Ident::new(name, Span::call_site());
 		let q = quote!{ #[allow(missing_docs)] pub #field: T, };
 		q.to_tokens(&mut fields);
-		quote!{ #field: f(&<#ty as crate::database::Table>::SCHEMA,&self.#field)?, }
+		quote!{ #field: f(&<#ty as crate::database::Resource>::SCHEMA,&self.#field)?, }
 			.to_tokens(&mut map);
 		quote!{ #field: (), }.to_tokens(&mut data);
-		quote!{ let sch = &<#ty as crate::database::Table>::SCHEMA;
-			if s == sch.table_name { return Some(sch) } }
+		quote!{ let sch = &<#ty as crate::database::Resource>::SCHEMA;
+			if s == sch.name { return Some(sch) } }
 			.to_tokens(&mut table_schema);
 	}
 	});

@@ -1,10 +1,11 @@
 # Override
  - [ ] deleted resources
   - [ ] we need to know which resources have been deleted since last save
-  - [ ] this needs to be updated even when deleting from underlying
+  - [x] this needs to be updated even when deleting from underlying
         tables (e.g. `add_items`)
  - [ ] differential compilation
   - [ ] incompatible with atomicity, a choice must be done (pass an option and do differential by default)
+  - [ ] clear dirty bit
  - [+] atomic save to override
  - [+] they need to be read as resource handles
 ## Pre-existing overrides

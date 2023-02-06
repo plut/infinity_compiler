@@ -1,6 +1,6 @@
 //! Full definition of all structures representing game resources.
 //!
-//! This crate makes heavy use of the `Pack` and `Table` derive macros to
+//! This crate makes heavy use of the `Pack` and `Resource` derive macros to
 //! automatically interface with game files and the SQL database.
 //!
 //! **Most** of the Lua-side definition of resource schemas is also
@@ -22,11 +22,11 @@
 //!    they have the resref as their primary key).
 use crate::prelude::*;
 use macros::{produce_resource_list};
-use crate::database::{Table,DbTypeCheck,Schema};
+use crate::database::{Resource,DbTypeCheck,Schema};
 use crate::gamefiles::{Pack,Restype};
 
 /// Those resources which are associated to a global table.
-pub trait NamedTable: Table {
+pub trait NamedTable: Resource {
 	/// Returns the associated field (e.g. `.item`) in an `AllResources` table.
 	fn find_field<T: Debug>(all: &AllResources<T>)->&T;
 	/// Same as above; `mut` case.
@@ -46,7 +46,7 @@ pub fn restype_from_extension(ext: &str)->Restype {
 }
 
 /// An effect inside a .itm file (either global or in an ability).
-#[derive(Debug,Pack,Table)]
+#[derive(Debug,Pack,Resource)]
 #[allow(missing_copy_implementations)]
 #[resource(item_effects)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
@@ -70,7 +70,7 @@ pub fn restype_from_extension(ext: &str)->Restype {
 	stacking_id: u32,
 }
 /// An ability inside a .itm file.
-#[derive(Debug,Pack,Table)]
+#[derive(Debug,Pack,Resource)]
 #[allow(missing_copy_implementations)]
 #[resource(item_abilities)] pub struct ItemAbility {
 #[column(itemref, Resref, r#"references "items"("itemref")"#)]
@@ -108,7 +108,7 @@ pub fn restype_from_extension(ext: &str)->Restype {
 	is_bullet: u16,
 }
 /// An item effect, corresponding to a .itm file.
-#[derive(Debug,Pack,Table)]
+#[derive(Debug,Pack,Resource)]
 #[allow(missing_copy_implementations)]
 #[resource(items,"itm",0x03ed)] pub struct Item {
 #[header("ITM V1  ")]
@@ -161,7 +161,7 @@ pub trait ToplevelResource: NamedTable {
 	fn load(db: &mut DbInserter<'_>, cursor: impl Read+Seek, resref: Resref)
 		->Result<()>;
 	/// Saves a single resource (with its subresources) to game files.
-	fn save(&mut self, file: impl Write+Debug, subresources: Self::Subresources<'_>)
+	fn save(&mut self, file: impl Write+Seek+Debug, subresources: Self::Subresources<'_>)
 		->Result<()>;
 	/// Applies a closure over all resources together with their subresources.
 	///
@@ -177,17 +177,18 @@ pub trait ToplevelResource: NamedTable {
 		(db: &Connection, condition: impl Display, f:F)->Result<i32>;
 	/// Saves all toplevel resources of this type.
 	fn save_all(db: &Connection)->Result<()> {
-		let Schema { table_name, extension, .. } = <Self as Table>::SCHEMA;
-		let condition = format!(r#"where "key" in "dirty_{table_name}""#);
+		let Schema { name, extension, .. } = Self::SCHEMA;
+		scope_trace!("saving resources from '{}'", name);
+		let condition = format!(r#"where "key" in "dirty_{name}""#);
 		let n = Self::for_each(db, condition,
 			|resref, resource, subresources| {
-				trace!("start compiling {table_name}: {resref}");
+				trace!("start compiling {name}: {resref}");
 				let filename = format!("{resref}.{extension}");
 				let mut file = File::create(&filename)
 					.with_context(|| format!("cannot open output file: {filename}"))?;
 				resource.save(&mut file, subresources)
 		})?;
-		info!("compiled {n} entries from {table_name} to override");
+		info!("compiled {n} entries from {name} to override");
 		Ok(())
 	}
 	/// Shows a resource on stdout (grouped with its subresources) in a
@@ -207,7 +208,8 @@ impl ToplevelResource for Item {
 	type Subresources<'a> = (&'a mut [ItemAbility], &'a mut[(ItemEffect,usize)]);
 	/// load an item from cursor
 	fn load(db: &mut DbInserter<'_>, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
-		let item = Item::unpack(&mut cursor)?;
+		let item = Item::unpack(&mut cursor)
+			.context("cannot unpack Item main struct")?;
 		item.ins(&mut db.tables.items, &(resref,))
 			.context("inserting into 'items'")?;
 
@@ -215,7 +217,9 @@ impl ToplevelResource for Item {
 		// effect count per ability
 		let mut ab_n = Vec::<u16>::with_capacity(item.abilities_count as usize);
 		for abref in 0..item.abilities_count {
-			let ab = ItemAbility::unpack(&mut cursor)?;
+			let ab = ItemAbility::unpack(&mut cursor)
+				.with_context(|| format!("cannot unpack item ability {}/{}",
+					abref+1, item.abilities_count))?;
 			ab.ins(&mut db.tables.item_abilities, &(resref, 1+abref as usize))
 				.context("inserting into 'item_abilities'")?;
 			ab_n.push(ab.effect_count);
@@ -223,19 +227,24 @@ impl ToplevelResource for Item {
 		trace!("inserting item {resref}; abilities have {ab_n:?} effects");
 		cursor.seek(SeekFrom::Start(item.effect_offset as u64))?;
 		for j in 0..item.equip_effect_count { // on-equip effects
-			let eff = ItemEffect::unpack(&mut cursor)?;
+			let eff = ItemEffect::unpack(&mut cursor)
+				.with_context(|| format!("cannot unpack global item effect {}/{}",
+					j+1, item.equip_effect_count))?;
 			eff.ins(&mut db.tables.item_effects, &(resref, 0, 1+j as usize))?;
 		}
 		for (i, n) in ab_n.iter().enumerate() {
 			for j in 0..*n {
-				let eff = ItemEffect::unpack(&mut cursor)?;
+				let eff = ItemEffect::unpack(&mut cursor)
+					.with_context(|| format!("cannot unpack item effect {}/{} for ability {}", j+1, n, i+1))?;
 				eff.ins(&mut db.tables.item_effects, &(resref, 1+i, 1+j as usize))?;
 			}
 		}
 	Ok(())
 	}
 	/// saves an item (with its sub-resources) to a file
-	fn save(&mut self, mut file: impl Write+Debug, (abilities, effects): Self::Subresources<'_>) ->Result<()> {
+	fn save(&mut self, mut file: impl Write+Seek+Debug, (abilities, effects): Self::Subresources<'_>) ->Result<()> {
+		trace!("saving item with {} abilities and {} effects",
+			abilities.len(), effects.len());
 		let mut current_effect_idx = self.equip_effect_count;
 		for a in abilities.iter_mut() {
 			a.effect_index = current_effect_idx;
@@ -248,16 +257,29 @@ impl ToplevelResource for Item {
 		self.pack(&mut file)
 			.with_context(|| format!("cannot pack item to {file:?}"))?;
 		// pack abilities:
-		for a in abilities.iter() {
+		trace!("saving {}={} abilities; offset is {}",
+			abilities.len(), self.abilities_count, file.stream_position()?);
+		for (i, a) in abilities.iter().enumerate() {
+			trace!("saving ability {}/{} at offset {}", i+1,
+				abilities.len(), file.stream_position()?);
 			a.pack(&mut file)
 			.with_context(|| format!("cannot pack item ability to {file:?}"))?;
 		}
 		// pack effects: first on-equip, then grouped by ability
 		for (e, j) in effects.iter() {
-			if *j == usize::MAX { e.pack(&mut file)?; }
+			if *j == 0 {
+				trace!("saving global effect at offset {}", file.stream_position()?);
+				e.pack(&mut file)?;
+			}
 		}
 		for i in 0..self.abilities_count {
-			for (e, j) in effects.iter() { if *j == i.into() { e.pack(&mut file)?; } }
+			for (e, j) in effects.iter() {
+				if *j == (i+1).into() {
+					trace!("saving effect for ability {} at offset {}",
+						i+1, file.stream_position()?);
+					e.pack(&mut file)?;
+				}
+			}
 		}
 		Ok(())
 	}
@@ -344,7 +366,7 @@ impl<'a> DbInserter<'a> {
 		tables: RESOURCES.map(|schema, _|
 			db.prepare(&schema.insert_statement("or ignore", "res_"))
 			.with_context(|| format!("insert statement for table '{table}'",
-				table = schema.table_name))
+				table = schema.name))
 		)?,
 		resource_count: RESOURCES.map(|_,_| Ok::<usize,rusqlite::Error>(0))?,
 		add_resref: db.prepare(
@@ -360,7 +382,7 @@ impl<'a> DbInserter<'a> {
 	pub fn load<T: ToplevelResource>(&mut self, resref: Resref, mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
 		T::load(self, handle.open()?, resref)?;
 		if handle.is_override() {
-			self.add_override.execute((resref, <T as Table>::SCHEMA.extension))?;
+			self.add_override.execute((resref, T::SCHEMA.extension))?;
 		}
 		*(<T as NamedTable>::find_field_mut(&mut self.resource_count))+=1;
 		Ok(())
@@ -370,7 +392,7 @@ impl Drop for DbInserter<'_> {
 	fn drop(&mut self) {
 		self.resource_count.map(|schema, n| {
 			if *n > 0 {
-				info!(r#"loaded {n} entries in table "{}""#, schema.table_name);
+				info!(r#"loaded {n} entries in table "{}""#, schema.name);
 			}
 			Ok::<(),rusqlite::Error>(())
 		}).unwrap();
