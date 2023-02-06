@@ -1,5 +1,8 @@
 # `simod`: Structured IE mod tool
 
+
+[![Documentation|Dev](https://img.shields.io/badge/docs-latest-blue.svg)](https://plut.github.io/infinity_compiler/)
+
 A mod tool for Infinity Engine games
 using SQL as an intermediate representation.
 
@@ -15,8 +18,6 @@ and gives access to a number of functions for modifying this database.
    by running a script (written by the mod author) which edits the database.
  - `simod save` compiles all changes in the database back to the
    `override` directory.
-
-See `simod --help` for (slightly) more details.
 
 ## Current status
 
