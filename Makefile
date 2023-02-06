@@ -4,6 +4,11 @@ DB=./game.sqlite
 RUN=RUST_BACKTRACE=1 $(TARGET) -G $(BG) -L 5
 all: run
 
+.PHONY: all run doc watch check test
+
+doc:
+	mdbook build guide
+
 r: run
 run:
 	cargo b
