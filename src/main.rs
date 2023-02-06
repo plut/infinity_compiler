@@ -1243,6 +1243,40 @@ pub trait DbInterface {
 			Some(row) => row };
 		f(row)
 	}
+	/// Deletes from current directory all resources marked as 'orphan' in
+	/// the database. This also clears the list of orphan resources.
+	fn clear_orphan_resources(&self)->Result<()> {
+		RESOURCES.map(|schema, _| {
+			let ext = schema.extension; let name = schema.name;
+			if !ext.is_empty() {
+				let mut stmt = self.prepare(
+					format!(r#"select "name" from "orphan_{name}""#))?;
+				let mut rows = stmt.query(())?;
+				while let Some(row) = rows.next()? {
+					let mut file = row.get::<_,String>(0)
+						.with_context(|| format!(r#"bad entry in "orphan_{name}""#))?;
+					file.push('.');
+					file.push_str(ext);
+					fs::remove_file(&file)
+						.with_context(|| format!(r#"cannot remove file "{file}""#))?;
+				}
+			}
+			any_ok(())
+		})?;
+		Ok(())
+	}
+	/// Cleans the dirty bit from all resources after saving.
+	fn unmark_dirty_resources(&self)->Result<()> {
+		RESOURCES.map(|schema, _| {
+			if !schema.extension.is_empty() {
+				let name = schema.name;
+				self.exec(format!(r#"delete from "dirty_{name}""#))?;
+				self.exec(format!(r#"delete from "orphan_{name}""#))?;
+			}
+			any_ok(())
+		})?;
+		Ok(())
+	}
 	fn last_insert_rowid(&self)->i64;
 }
 impl<T: Deref<Target=Connection>>  DbInterface for T {
@@ -1411,6 +1445,37 @@ impl GameDB {
 		pb.inc(1);
 		self.exec("commit")?;
 		Ok(())
+	}
+	/// Before saving: fills the resref translation table.
+	pub fn translate_resrefs(&mut self)->Result<()> {
+		self.transaction(|db| {
+		let mut enum_st = db.prepare(r#"select key from "resref_dict" where "resref" is null"#)?;
+		let mut enum_rows = enum_st.query(())?;
+		let mut find = db.prepare(r#"select 1 from "resref_orig" where "resref"=?1 union select 1 from "resref_dict" where "resref"=?1"#)?;
+		let mut update = db.prepare(r#"update "resref_dict" set "resref"=?2 where "key"=?1"#)?;
+		let mut n_resrefs = 0;
+		while let Some(row) = enum_rows.next()? {
+			let longref = row.get::<_,String>(0)?;
+			// TODO: remove spaces etc.
+			trace!("generate fresh resref from '{longref}'");
+			let resref = Resref::fresh(&longref, |r| find.exists((r,)))?;
+			update.execute((&longref, &resref))?;
+			n_resrefs+= 1;
+		}
+		info!("translated {n_resrefs} resrefs");
+		Ok(())
+		})?; Ok(())
+	}
+	/// Before saving: fills the strref translation tables.
+	pub fn translate_strrefs(&mut self)->Result<()> {
+		self.transaction(|db| {
+		db.exec(r#"delete from "strref_dict" where "key" not in (select "key" from "new_strings" where "key" is not null)"#)
+			.context("cannot purge stale string keys")?;
+		db.exec(r#"insert into "string_keys" select "key", "flags" from "new_strings" where "key" is not null"#)
+			.context("cannot generate new string keys")?;
+		info!("translated strrefs");
+		Ok(())
+		})?; Ok(())
 	}
 }
 } // mod resources
@@ -1871,37 +1936,6 @@ use gametypes::*;
 // I init
 // II add
 // III compile
-/// Before saving: fills the resref translation table.
-fn translate_resrefs(db: &mut GameDB)->Result<()> {
-	db.transaction(|db| {
-	let mut enum_st = db.prepare(r#"select key from "resref_dict" where "resref" is null"#)?;
-	let mut enum_rows = enum_st.query(())?;
-	let mut find = db.prepare(r#"select 1 from "resref_orig" where "resref"=?1 union select 1 from "resref_dict" where "resref"=?1"#)?;
-	let mut update = db.prepare(r#"update "resref_dict" set "resref"=?2 where "key"=?1"#)?;
-	let mut n_resrefs = 0;
-	while let Some(row) = enum_rows.next()? {
-		let longref = row.get::<_,String>(0)?;
-		// TODO: remove spaces etc.
-		trace!("generate fresh resref from '{longref}'");
-		let resref = Resref::fresh(&longref, |r| find.exists((r,)))?;
-		update.execute((&longref, &resref))?;
-		n_resrefs+= 1;
-	}
-	info!("translated {n_resrefs} resrefs");
-	Ok(())
-	})?; Ok(())
-}
-/// Before saving: fills the strref translation tables.
-fn translate_strrefs(db: &mut GameDB)->Result<()> {
-	db.transaction(|db| {
-	db.exec(r#"delete from "strref_dict" where "key" not in (select "key" from "new_strings" where "key" is not null)"#)
-		.context("cannot purge stale string keys")?;
-	db.exec(r#"insert into "string_keys" select "key", "flags" from "new_strings" where "key" is not null"#)
-		.context("cannot generate new string keys")?;
-	info!("translated strrefs");
-	Ok(())
-	})?; Ok(())
-}
 /// Saves all modified game strings and resources to current directory.
 ///
 /// This function saves in the current directory;
@@ -1915,41 +1949,6 @@ fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	pb.inc(1);
 	Ok(())
 }
-/// Deletes from current directory all resources marked as 'orphan' in
-/// the database. This also clears the list of orphan resources.
-fn clear_orphan_resources(db: &impl DbInterface)->Result<()> {
-	RESOURCES.map(|schema, _| {
-		let ext = schema.extension; let name = schema.name;
-		if !ext.is_empty() {
-			let s = format!(r#"select "name" from "orphan_{name}""#);
-			let mut stmt = db.prepare(&s)
-				.with_context(|| format!(r#"failed SQL query: {s}"#))?;
-			let mut rows = stmt.query(())?;
-			while let Some(row) = rows.next()? {
-				let mut file = row.get::<_,String>(0)
-					.with_context(|| format!(r#"bad entry in "orphan_{name}""#))?;
-				file.push('.');
-				file.push_str(ext);
-				fs::remove_file(&file)
-					.with_context(|| format!(r#"cannot remove file "{file}""#))?;
-			}
-		}
-		any_ok(())
-	})?;
-	Ok(())
-}
-/// Cleans the dirty bit from all resources after saving.
-fn unmark_dirty_resources(db: &impl DbInterface)->Result<()> {
-	RESOURCES.map(|schema, _| {
-		if !schema.extension.is_empty() {
-			let name = schema.name;
-			db.exec(format!(r#"delete from "dirty_{name}""#))?;
-			db.exec(format!(r#"delete from "orphan_{name}""#))?;
-		}
-		any_ok(())
-	})?;
-	Ok(())
-}
 /// Saves game resources to filesystem.
 ///
 /// This wraps [`save_resources`] so that any
@@ -1957,8 +1956,8 @@ fn unmark_dirty_resources(db: &impl DbInterface)->Result<()> {
 /// directory:
 fn command_save_full(game: &GameIndex, mut db: GameDB)->Result<()> {
 	// prepare database by translating resrefs and strrefs
-	translate_resrefs(&mut db)?;
-	translate_strrefs(&mut db)?;
+	db.translate_resrefs()?;
+	db.translate_strrefs()?;
 	// save in a temp directory before moving everything to override
 	let tmpdir = game.tempdir()?;
 	let orig_dir = std::env::current_dir()?;
@@ -1971,12 +1970,13 @@ fn command_save_full(game: &GameIndex, mut db: GameDB)->Result<()> {
 	res?;
 	debug!("installing resources saved in temporary directory {:?}", tmpdir);
 	game.restore(tmpdir)?;
-	unmark_dirty_resources(&db)?;
+	db.clear_orphan_resources()?;
+	db.unmark_dirty_resources()?;
 	Ok(())
 }
 fn command_save_diff(game: &GameIndex, mut db: GameDB)->Result<()> {
-	translate_resrefs(&mut db)?;
-	translate_strrefs(&mut db)?;
+	db.translate_resrefs()?;
+	db.translate_strrefs()?;
 	let override_dir = game.root.join("override");
 	gamefiles::create_dir(&override_dir)?;
 	let orig_dir = std::env::current_dir()?;
@@ -1986,12 +1986,12 @@ fn command_save_diff(game: &GameIndex, mut db: GameDB)->Result<()> {
 	// a resource might legitimately be both orphan and still existing
 	// (if it was removed and then added again in the DB), in which case we
 	// want to save it to override:
-	let res1 = clear_orphan_resources(&db);
+	let res1 = db.clear_orphan_resources();
 	let res2 = save_resources(&db, game);
 	std::env::set_current_dir(orig_dir)?;
 	res1?; res2?;
 	debug!("resources saved!");
-	unmark_dirty_resources(&db)?;
+	db.unmark_dirty_resources()?;
 	Ok(())
 }
 // IV others: show etc.
