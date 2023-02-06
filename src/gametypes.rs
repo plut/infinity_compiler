@@ -22,7 +22,7 @@
 //!    they have the resref as their primary key).
 use crate::prelude::*;
 use macros::{produce_resource_list};
-use crate::database::{Table,DbTypeCheck};
+use crate::database::{Table,DbTypeCheck,Schema};
 use crate::gamefiles::{Pack,Restype};
 
 /// Those resources which are associated to a global table.
@@ -32,68 +32,17 @@ pub trait NamedTable: Table {
 	/// Same as above; `mut` case.
 	fn find_field_mut<T: Debug>(all: &mut AllResources<T>)->&mut T;
 }
-/// A top-level resource (i.e. saved to its own file in the override
-/// directory).
-pub trait ToplevelResource: NamedTable {
-	/// The file extension associated with this resource.
-	const EXTENSION: &'static str;
-	/// The resource type (as encoded in bif files).
-	const RESTYPE: Restype;
-	/// Subresources for this resource (together with linking info.).
-	///
-	/// This should be a tuple of all subresources, each of them stored in
-	/// some `Vec` with elements (subresource, linking-info).
-	type Subresources<'a>;
-	/// Inserts a single resource in the database.
-	fn load(db: &mut DbInserter<'_>, cursor: impl Read+Seek, resref: Resref)
-		->Result<()>;
-	/// Saves a single resource (with its subresources) to game files.
-	fn save(&mut self, file: impl Write+Debug, subresources: Self::Subresources<'_>)
-		->Result<()>;
-	/// Applies a closure over all resources together with their subresources.
-	///
-	/// Iterates a closure over items in the database (with their
-	/// associated properties) matching the given condition.
-	///
-	/// This function links items with their sub-resources
-	/// (e.g. item abilities and effects)
-	/// and calls the passed closure on the resulting structure.
-	///
-	/// It returns the number of rows matched.
-	fn for_each<F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>>
-		(db: &Connection, condition: impl Display, f:F)->Result<i32>;
-	/// Saves all toplevel resources of this type.
-	fn save_all(db: &Connection)->Result<()> {
-		let name = <Self as Table>::SCHEMA.table_name;
-		let condition = format!(r#"where "key" in "dirty_{name}""#);
-		let n = Self::for_each(db, condition,
-			|resref, resource, subresources| {
-				trace!("start compiling {name}: {resref}");
-				let filename = format!("{resref}.{ext}", ext = Self::EXTENSION);
-				let mut file = File::create(&filename)
-					.with_context(|| format!("cannot open output file: {filename}"))?;
-				resource.save(&mut file, subresources)
-		})?;
-		info!("compiled {n} entries from {name} to override");
-		Ok(())
-	}
-	/// Shows a resource on stdout (grouped with its subresources) in a
-	/// nice user format.
-	fn show(&self, resref: impl Display, subresources: Self::Subresources<'_>);
-	/// Shows on stdout the resource with given resref, or returns an error.
-	fn show_all(db: &Connection, resref: impl Display)->Result<()> {
-		Self::for_each(db, format!(r#"where "id"='{resref}'"#),
-		|resref, resource, subresources| {
-			resource.show(resref, subresources);
-			Ok(())
-		}).unwrap();
-		Ok(())
-	}
-} // trait ToplevelResource
 /// When provided with a file extension, return the corresponding Restype.
 pub fn restype_from_extension(ext: &str)->Restype {
-	if ext.eq_ignore_ascii_case(Item::EXTENSION) { return Item::RESTYPE }
-	Restype { value: 0 }
+	match RESOURCES.map(|schema, _| {
+		// small trick: when we find the correct extension, we break the
+		// iteration by returning an `Err` variant.
+		if ext.eq_ignore_ascii_case(schema.extension) { Err(schema.restype) }
+		else { Ok(()) }
+	}) {
+		Err(r) => r,
+		Ok(_) => Restype { value: 0 }
+	}
 }
 
 /// An effect inside a .itm file (either global or in an ability).
@@ -161,7 +110,7 @@ pub fn restype_from_extension(ext: &str)->Restype {
 /// An item effect, corresponding to a .itm file.
 #[derive(Debug,Pack,Table)]
 #[allow(missing_copy_implementations)]
-#[resource(items)] pub struct Item {
+#[resource(items,"itm",0x03ed)] pub struct Item {
 #[header("ITM V1  ")]
 #[column(itemref, Resref)]
 	unidentified_name: Strref,
@@ -200,9 +149,61 @@ pub fn restype_from_extension(ext: &str)->Restype {
 #[column(false)] effect_index: u16,
 #[column(false)] equip_effect_count: u16,
 }
+/// A top-level resource (i.e. saved to its own file in the override
+/// directory).
+pub trait ToplevelResource: NamedTable {
+	/// Subresources for this resource (together with linking info.).
+	///
+	/// This should be a tuple of all subresources, each of them stored in
+	/// some `Vec` with elements (subresource, linking-info).
+	type Subresources<'a>;
+	/// Inserts a single resource in the database.
+	fn load(db: &mut DbInserter<'_>, cursor: impl Read+Seek, resref: Resref)
+		->Result<()>;
+	/// Saves a single resource (with its subresources) to game files.
+	fn save(&mut self, file: impl Write+Debug, subresources: Self::Subresources<'_>)
+		->Result<()>;
+	/// Applies a closure over all resources together with their subresources.
+	///
+	/// Iterates a closure over items in the database (with their
+	/// associated properties) matching the given condition.
+	///
+	/// This function links items with their sub-resources
+	/// (e.g. item abilities and effects)
+	/// and calls the passed closure on the resulting structure.
+	///
+	/// It returns the number of rows matched.
+	fn for_each<F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>>
+		(db: &Connection, condition: impl Display, f:F)->Result<i32>;
+	/// Saves all toplevel resources of this type.
+	fn save_all(db: &Connection)->Result<()> {
+		let Schema { table_name, extension, .. } = <Self as Table>::SCHEMA;
+		let condition = format!(r#"where "key" in "dirty_{table_name}""#);
+		let n = Self::for_each(db, condition,
+			|resref, resource, subresources| {
+				trace!("start compiling {table_name}: {resref}");
+				let filename = format!("{resref}.{extension}");
+				let mut file = File::create(&filename)
+					.with_context(|| format!("cannot open output file: {filename}"))?;
+				resource.save(&mut file, subresources)
+		})?;
+		info!("compiled {n} entries from {table_name} to override");
+		Ok(())
+	}
+	/// Shows a resource on stdout (grouped with its subresources) in a
+	/// nice user format.
+	fn show(&self, resref: impl Display, subresources: Self::Subresources<'_>);
+	/// Shows on stdout the resource with given resref, or returns an error.
+	fn show_all(db: &Connection, resref: impl Display)->Result<()> {
+		Self::for_each(db, format!(r#"where "id"='{resref}'"#),
+		|resref, resource, subresources| {
+			resource.show(resref, subresources);
+			Ok(())
+		}).unwrap();
+		Ok(())
+	}
+} // trait ToplevelResource
 impl ToplevelResource for Item {
-	const EXTENSION: &'static str = "itm";
-	const RESTYPE: Restype = Restype { value: 0x03ed };
 	type Subresources<'a> = (&'a mut [ItemAbility], &'a mut[(ItemEffect,usize)]);
 	/// load an item from cursor
 	fn load(db: &mut DbInserter<'_>, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
@@ -233,7 +234,7 @@ impl ToplevelResource for Item {
 		}
 	Ok(())
 	}
-	///
+	/// saves an item (with its sub-resources) to a file
 	fn save(&mut self, mut file: impl Write+Debug, (abilities, effects): Self::Subresources<'_>) ->Result<()> {
 		let mut current_effect_idx = self.equip_effect_count;
 		for a in abilities.iter_mut() {
@@ -359,7 +360,7 @@ impl<'a> DbInserter<'a> {
 	pub fn load<T: ToplevelResource>(&mut self, resref: Resref, mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
 		T::load(self, handle.open()?, resref)?;
 		if handle.is_override() {
-			self.add_override.execute((resref, T::EXTENSION))?;
+			self.add_override.execute((resref, <T as Table>::SCHEMA.extension))?;
 		}
 		*(<T as NamedTable>::find_field_mut(&mut self.resource_count))+=1;
 		Ok(())

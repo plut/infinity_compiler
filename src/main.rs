@@ -891,6 +891,12 @@ impl<T: Display> Display for Columns<'_,T> {
 ///
 /// In practice there exists exactly one [`Schema`] instance per
 /// resource, and it is compiled by the [`Table`] derive macro.
+///
+/// A few fields in this struct are used only for top-level resources.
+/// Doing this saves us a bit of code (separating top-level resources as
+/// their own type + writing ad-hoc macros etc.). The most harm it does
+/// is (a) storing a few bytes of useless memory in the executable,
+/// and (b) possibly inserting a few always-empty tables in the database.
 #[derive(Debug)] pub struct Schema<'a> {
 	/// Descriptions for all the fields of this struct.
 	pub fields: &'a[Column<'a>],
@@ -904,6 +910,10 @@ impl<T: Display> Display for Columns<'_,T> {
 	pub resref_key: usize,
 	/// The name of the table holding the top-level resource.
 	pub parent_table: &'a str,
+	/// The extension for this file type (if top-level), or "".
+	pub extension: &'a str,
+	/// The restype identifier for this resource type (if top-level), or 0.
+	pub restype: crate::gamefiles::Restype,
 }
 impl<'schema> Schema<'schema> {
 	// Step 0: a few useful functions
@@ -1778,6 +1788,7 @@ left join "translations_{lang}" as "t" using ("key");
 /// The database must have been already created and initialized (with
 /// empty tables).
 fn load(db: Connection, game: &GameIndex)->Result<()> {
+	use crate::database::Table;
 	let pb = Progress::new(3, "Fill database"); pb.inc(1);
 	gamestrings::load(&db, game)
 		.with_context(|| format!("cannot read game strings from game directory {:?}", game.root))?;
@@ -1788,10 +1799,8 @@ fn load(db: Connection, game: &GameIndex)->Result<()> {
 	game.for_each(|restype, resref,  handle| {
 		trace!("found resource {}.{:#04x}", resref, restype.value);
 		base.register(&resref)?;
-		match restype {
-			Item::RESTYPE => base.load::<Item>(resref, handle),
-			_ => Ok(())
-		}
+		if restype == Item::SCHEMA.restype { base.load::<Item>(resref, handle) }
+		else { Ok(()) }
 	})?;
 	pb.inc(1);
 	db.exec("commit")?;

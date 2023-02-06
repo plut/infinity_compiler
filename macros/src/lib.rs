@@ -64,8 +64,8 @@ impl From<Expr> for AttrArg {
 			syn::Lit::Bool(syn::LitBool { value, .. }) =>
 				AttrArg::Ident(value.to_string()),
 			syn::Lit::Str(s) => AttrArg::Str(s.value()),
-			syn::Lit::Int(s) =>
-				AttrArg::Int(toks_to_string(&s).parse::<isize>().unwrap()),
+			syn::Lit::Int(s) => AttrArg::Int(s.base10_parse::<isize>()
+				.expect("not an integer")),
 			_ => AttrArg::Other()
 			},
 			Expr::Path(ExprPath{path, ..}) => AttrArg::Ident(toks_to_string(&path)),
@@ -155,9 +155,15 @@ fn pack_attr_header(readf: &mut TS2, writef: &mut TS2, args: &mut AttrParser) {
 }
 
 #[derive(Default,Debug)]
-struct RowCurrent {
+struct FieldInfo {
 	extra: String,
 	no_column: bool,
+}
+#[derive(Default,Debug)]
+struct ResourceInfo {
+	table_name: String,
+	extension: String,
+	restype: u16,
 }
 
 #[proc_macro_derive(Table, attributes(column,resource))]
@@ -176,16 +182,16 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 		} }; //.to_tokens(&mut schema);
 	let DeriveInput{ ident, data, attrs, generics, .. } = parse_macro_input!(tokens);
 	let payload = struct_fields(data);
-	let mut table_name = String::new();
+	let mut resource_info = ResourceInfo::default();
 // 	println!("parsing attributes: {:?}", attrs.iter().map(toks_to_string).collect::<Vec<_>>());
 	for (name, mut args) in attrs.into_iter().map(parse_attr) {
 		match &name[..] {
-			"resource" => table_attr_resource(&mut args, &mut table_name),
+			"resource" => table_attr_resource(&mut args, &mut resource_info),
 			_ => () };
 	}
 	// Build the payload part of the schema from the struct fields:
 	for Field { attrs, ident, ty, .. } in payload {
-		let mut current = RowCurrent::default();
+		let mut current = FieldInfo::default();
 		for (name, mut args) in attrs.into_iter().map(parse_attr) {
 			match name.as_str() {
 				"column" => table_attr_column(&mut context, &mut current, &mut args),
@@ -235,11 +241,15 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 			extra: "primary key" },
 		} .to_tokens(&mut schema);
 	}
+	println!("resource_info is {resource_info:?}");
+	let ResourceInfo { table_name, extension, restype, .. } = resource_info;
 	let mut code = quote! {
 		impl #generics crate::database::Table for #ident #generics {
 			type Context = (#ctx);
 			const SCHEMA: crate::database::Schema<'static> = crate::database::Schema{
 				table_name: #table_name,
+				extension: #extension,
+				restype: crate::gamefiles::Restype { value: #restype },
 				resref_key: #parent_key, parent_table: #parent,
 				fields: &[#schema]};
 			fn ins(&self, s: &mut crate::rusqlite::Statement, k: &Self::Context)->crate::rusqlite::Result<()> {
@@ -273,7 +283,7 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 /// Column attribute:
 /// `[column(itemref, i32, "references items", etc.)]` pushes on table
 /// `[column(false)]` suppresses next column
-fn table_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut RowCurrent, args: &mut AttrParser) {
+fn table_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut FieldInfo, args: &mut AttrParser) {
 	use AttrArg::{Ident, Str};
 	let a = match args.get::<syn::Expr>() { None=>return, Some(a)=> a};
 	match a {
@@ -291,20 +301,23 @@ fn table_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut
 		_ => ()
 	}
 }
-/// `[table]` attribute:
-/// - `[table("")]` prevents storing this table in the global [default]
-/// RESOURCES constant,
-/// - `[table(item_abilities, "itemref", "items")]` stores with a
-/// relation to the parent resource,
-/// - `[table(items, "itemref")]` stores as a parent table (using given
-/// primary key);
-/// - `[table(items)]` tries to guess the link to parent resource
-/// (either use a key reference if there is one, or take this table as
-/// a root resource if not).
-fn table_attr_resource(args: &mut AttrParser, table_name: &mut String) {
+/// `[resource]` attribute:
+/// - if this attribute is not used then this table will not be stored in
+///   the global `RESOURCES` constant. This is used for `GameStrings`.
+/// - `[resource(items)]` declares the name of a global table
+///   and creates an entry for this table in `RESOURCES`.
+/// - `[resource(items, "itm", 0x03ed)]` declares a file extension for this
+///   resource and an associated magic number in key files.
+fn table_attr_resource(args: &mut AttrParser, resource_info: &mut ResourceInfo) {
 	let i = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
 		Some(AttrArg::Str(s)) => s, _ => return };
-	*table_name = i;
+	resource_info.table_name = i;
+	let ext = match args.get::<syn::Expr>() { Some(AttrArg::Str(s)) => s,
+		_ => return };
+	let restype = match args.get::<syn::Expr>() { Some(AttrArg::Int(n)) => n,
+		x => { println!("got attribute: {x:?}"); return } };
+	resource_info.extension = ext;
+	resource_info.restype = restype as u16;
 // 	let pk = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
 // 		Some(AttrArg::Str(s)) => s, _ => return };
 // 	*parent_key = pk;
