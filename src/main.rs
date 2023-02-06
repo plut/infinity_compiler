@@ -1887,6 +1887,18 @@ fn clear_orphan_resources(db: &Connection)->Result<()> {
 	})?;
 	Ok(())
 }
+/// Cleans the dirty bit from all resources after saving.
+fn unmark_dirty_resources(db: &Connection)->Result<()> {
+	RESOURCES.map(|schema, _| {
+		if !schema.extension.is_empty() {
+			let name = schema.name;
+			db.exec(format!(r#"delete from "dirty_{name}""#))?;
+			db.exec(format!(r#"delete from "orphan_{name}""#))?;
+		}
+		any_ok(())
+	})?;
+	Ok(())
+}
 /// Saves game resources to filesystem.
 ///
 /// This wraps [`save_resources`] so that any
@@ -1908,15 +1920,7 @@ fn command_save_full(game: &GameIndex, mut db: Connection)->Result<()> {
 	res?;
 	debug!("installing resources saved in temporary directory {:?}", tmpdir);
 	game.restore(tmpdir)?;
-	// clean the dirty bit from saved resources
-	RESOURCES.map(|schema, _| {
-		if !schema.extension.is_empty() {
-			let name = schema.name;
-			db.exec(format!(r#"delete from "dirty_{name}""#))?;
-			db.exec(format!(r#"delete from "orphan_{name}""#))?;
-		}
-		any_ok(())
-	})?;
+	unmark_dirty_resources(&db)?;
 	Ok(())
 }
 fn command_save_diff(game: &GameIndex, mut db: Connection)->Result<()> {
@@ -1936,6 +1940,7 @@ fn command_save_diff(game: &GameIndex, mut db: Connection)->Result<()> {
 	std::env::set_current_dir(orig_dir)?;
 	res1?; res2?;
 	debug!("resources saved!");
+	unmark_dirty_resources(&db)?;
 	Ok(())
 }
 // IV others: show etc.
