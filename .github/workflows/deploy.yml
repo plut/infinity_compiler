@@ -19,7 +19,7 @@ jobs:
           echo `pwd`/mdbook >> $GITHUB_PATH
       - name: Build
         run: |
-          cargo doc
+          cargo doc --no-deps --document-private-items
           cd guide
           mdbook build
           ln -s ../../target/doc/infinity_compiler/index.html book/infinity_compiler.html
