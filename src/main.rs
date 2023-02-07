@@ -49,6 +49,34 @@ pub(crate) use crate::database::{GameDB,DbInterface};
 pub(crate) use crate::progress::{Progress,scope_trace};
 
 pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
+mod workaround {
+//! [Workaround to export macro and function with same name](https://stackoverflow.com/questions/70356695/how-to-export-function-and-macro-with-the-same-name)
+	use std::fmt::{self,Display};
+pub fn join<W: fmt::Write, F: FnMut(&mut W,T)->fmt::Result,T>(target: &mut W, separator: impl Display, itr: impl IntoIterator<Item=T>, mut f: F)->fmt::Result {
+	let mut is_first = true;
+	for x in itr {
+		if is_first {
+			is_first = false;
+		} else {
+			write!(target, "{separator}")?;
+		}
+		f(target, x)?;
+	}
+	Ok(())
+}
+}
+pub use workaround::*;
+/// Joins a separated list into a [`std::fmt::Write`] implementation.
+///
+/// join!(&mut s, "separator", "list of elements",
+///   |x| write!(s, "{}", x.foobar))
+macro_rules! join {
+	($target:expr, $sep:expr, $iter: expr, |$elt:ident| write!($($a:expr),*)) => {
+		join($target, $sep, $iter,
+			|s, $elt| write!(s, $($a),*))
+	}
+}
+pub(crate) use join;
 
 }
 pub(crate) mod progress {
@@ -79,6 +107,82 @@ impl Drop for Progress {
 			name=self.name, elapsed=self.pb.elapsed());
 		MULTI.with(|c| c.borrow_mut().remove(&self.pb));
 		COUNT.with(|c| *c.borrow_mut()-= 1)
+	}
+}
+
+// expected api:
+// write(s, [collection].fmt_all(|x| format_args!()).join(",")
+// write(s, [collection].join(x))
+//
+// macros:
+// write(s, fmt_all!([collection], |x| "{x}").join(","))
+// write(s, join!([collection], ",", |x| "{x}"))
+/// A collection of writer functions.
+///
+/// The API for [`Display`] has only `&self` (and not `mut`) so we cannot
+/// represent this as an iterator. We use a (lazy) collection instead.
+struct CollectionWriter<'a,T,F> {
+	source: &'a [T],
+	format: F,
+}
+impl<T: Display, F: Fn(&T)->fmt::Arguments<'_>> Display for CollectionWriter<'_,T,F> {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+		for i in 0..self.fmt_len() {
+			self.fmt_i(i, f)?;
+		}
+		Ok(())
+	}
+}
+/// A collection of displayable objects.
+///
+/// This trait serves to unify [`CollectionWriter`] and `Vec<impl
+/// Display>`.
+trait IndexedWriter {
+	fn fmt_len(&self)->usize;
+	fn fmt_i(&self, i: usize, f: &mut Formatter<'_>)->fmt::Result;
+	fn join<T: Display>(&self, separator: T)->SeparatorWriter<'_,Self,T> {
+		SeparatorWriter { source: &self, separator }
+	}
+}
+impl<T: Display, F: Fn(&T)->fmt::Arguments<'_>> IndexedWriter for CollectionWriter<'_,T,F> {
+	fn fmt_len(&self)->usize { self.source.len() }
+	fn fmt_i(&self, i: usize, f: &mut Formatter<'_>)->fmt::Result {
+		fmt::Display::fmt(&(self.format)(&self.source[i]), f)
+	}
+}
+impl<T: Display> IndexedWriter for &[T] {
+	fn fmt_len(&self)->usize { self.len() }
+	fn fmt_i(&self, i: usize, f: &mut Formatter<'_>)->fmt::Result {
+		fmt::Display::fmt(&self[i], f)
+	}
+}
+pub trait ToCollectionWriter {
+	type El;
+	fn format_as<F: Fn(&Self::El)->fmt::Arguments>(&self, f: F)->CollectionWriter<'_,Self::El,F>;
+}
+impl<T> ToCollectionWriter for &[T] {
+	type El = T;
+	fn format_as<F: Fn(&Self::El)->fmt::Arguments>(&self, f: F)->CollectionWriter<'_,Self::El,F> {
+		CollectionWriter { source: self, format: f, }
+	}
+}
+
+struct SeparatorWriter<'a,T: ?Sized,S> {
+	source: &'a T,
+	separator: S,
+}
+impl<T: IndexedWriter, S: Display> Display for SeparatorWriter<'_,T,S> {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+		let mut is_first = true;
+		for i in 0..self.source.fmt_len() {
+			if is_first {
+				is_first = false;
+			} else {
+				self.separator.fmt(f)?;
+			}
+			self.source.fmt_i(i, f)?;
+		}
+		Ok(())
 	}
 }
 
@@ -1129,6 +1233,18 @@ impl<'schema> Schema<'schema> {
 		self.all_keys_gen(db, format!(r#"where "{parent_key}"='{value}'"#,
 			parent_key = self.resref()), f)
 	}
+	/// Collects parameters for a SQL statement from the fields of the
+	/// schema.
+	///
+	/// Utility wrapper for [`rusqlite::params_from_iter`].
+	/// Usage: `schema.params_from(|fname, ftype| { Ok(parameter...) })?`
+	pub fn params_from<T: rusqlite::ToSql+Debug,F: Fn(&str, FieldType)->Result<T>>(&self, f:F)->Result<rusqlite::ParamsFromIter<Vec<T>>> {
+		let params = self.full(()).iter()
+			.map(|Field{fname, ftype, ..}| f(fname, *ftype))
+			.collect::<Result<Vec<T>>>()?;
+		trace!("collected parameters: {params:?}");
+		Ok(rusqlite::params_from_iter(params))
+	}
 } // impl Schema
 /// Builds the SQL statement creating the `new_strings` view.
 pub fn create_new_strings_sql()->String {
@@ -1931,26 +2047,16 @@ fn insert(db: &impl DbInterface, (table, vals, context): (String, mlua::Table<'_
 	let schema = table_schema(&table)?;
 	trace!("schema for {table}: {schema:?}");
 	let mut stmt = db.prepare(&schema.insert_statement("", ""))?;
-	let mut fields = Vec::<LuaToSql<'_>>::with_capacity(schema.fields.len());
-	for Field { fname, ftype, .. } in schema.fields.iter() {
-		if *ftype == FieldType::Rowid {
-			// don't insert the rowid! instead, let sqlite determine it
-			// and later fix the table with the correct key:
-			fields.push(LuaToSql(mlua::Value::Nil));
-			continue;
+	let params = schema.params_from(|fname, ftype| {
+		if ftype == FieldType::Rowid { Ok(LuaToSql(mlua::Value::Nil)) }
+		else {
+			match vals.get::<_,LuaToSql<'_>>(fname)? {
+				LuaToSql(mlua::Value::Nil) => Ok(context.get(fname)?),
+				x => Ok(x)
+			}
 		}
-		let x = vals.get::<_,LuaToSql<'_>>(*fname)?;
-		let y = if let LuaToSql(mlua::Value::Nil) = x {
-			context.get(*fname)?
-		} else { x };
-		trace!("insert: {fname} = {y:?}");
-		if let LuaToSql(mlua::Value::String(ref s)) = y {
-			trace!("   (string is {})", s.to_str()?);
-		}
-		fields.push(y);
-	}
-	trace!("insert called on {table} with values: {fields:?}");
-	stmt.execute(rusqlite::params_from_iter(fields))?;
+	})?;
+	stmt.execute(params)?;
 	// fix the primary key if needed
 	for Field { fname, ftype, .. } in schema.fields.iter() {
 		if *ftype != FieldType::Rowid {
@@ -2146,6 +2252,16 @@ enum Command {
 }
 
 fn main() -> Result<()> {
+	use std::fmt::Write;
+	use crate::progress::ToCollectionWriter;
+	let a = ["toto", "foo", "bar"];
+	println!("{}",
+		a.as_ref().format_as(|x| format_args!("({x})")));
+	println!("{}", a.join(">"));
+// 	join!(&mut s, ",", ["u","v","w"],
+// 		|x| write!("{}", x))?;
+// 	println!("now s is '{s}'");
+	return Ok(());
 	let mut options = RuntimeOptions::parse();
 	if options.database.is_none() {
 		options.database = Some(Path::new("game.sqlite").into());
