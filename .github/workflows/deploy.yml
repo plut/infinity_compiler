@@ -12,10 +12,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Install Lua
-        uses: leafo/gh-actions-lua@v10
-        with:
-          luaVersion: "5.4"
+      - name: Install liblua-dev (needed for crate mlua)
+        run: |
+          sudo apt-get install liblua5.4-dev
       - name: Install mdbook
         run: |
           mkdir mdbook
