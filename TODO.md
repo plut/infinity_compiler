@@ -1,9 +1,9 @@
 # Override
- - [ ] improve backup procedure: a full backup as part of init
- - [ ] a mod `base_types` for chaff such as SqlType etc.
- - [ ] a mod `schema` for Schema + Resource
+ - [x] improve backup procedure: a full backup as part of init
+ - [x] a mod `base_types` for chaff such as SqlType etc.
+ - [x] a mod `schema` for Schema + Resource
  - [ ] rename `gametypes` as `resources`
- - [ ] deleted resources
+ - [x] deleted resources
   - [x] we need to know which resources have been deleted since last save
   - [x] this needs to be updated even when deleting from underlying
         tables (e.g. `add_items`)
@@ -12,13 +12,6 @@
   - [x] clear dirty bit
  - [+] atomic save to override
  - [+] they need to be read as resource handles
-## Pre-existing overrides
- - [+] insert pre-existing override files in db
-  - [+] and mark them somehow, so that they can be backed up as needed
- - [ ] backup of (pre-existing) override files when writing them
-  - [ ] restore replaces the full directory: we should backup *all* files
-    and not only those which are overwritten
- - [+] restore override files
 # Lua side
 ## Primitive operations
  - [x] `update`

@@ -1589,6 +1589,8 @@ impl Drop for DbInserter<'_> {
 } // mod resources
 pub(crate) mod gamestrings {
 //! Access to game strings in database.
+//!
+//! This is the only mod knowing the internals of [`GameString`] struct.
 use crate::prelude::*;
 use crate::progress::{Progress};
 use crate::database::{self,Resource,DbInterface};
@@ -1899,7 +1901,7 @@ fn select<'lua>(db: &impl DbInterface, lua: &'lua Lua, (table, rowid): (String, 
 			let fname = col.fname;
 			let val = row.get_ref(i)
 				.with_context(|| format!("cannot read field {i} in row"))?;
-			trace!("fieldd {i}/{n}, got value {val:?}, expected {ft:?}",
+			trace!("field {i}/{n}, got value {val:?}, expected {ft:?}",
 				ft = col.ftype, n = schema.fields.len());
 			tbl.set(fname, sql_to_lua(val, lua)
 				.with_context(|| format!("cannot convert value {val:?} to Lua"))?)
@@ -1932,7 +1934,7 @@ fn insert(db: &impl DbInterface, (table, vals, context): (String, mlua::Table<'_
 	let mut fields = Vec::<LuaToSql<'_>>::with_capacity(schema.fields.len());
 	for Field { fname, ftype, .. } in schema.fields.iter() {
 		if *ftype == FieldType::Rowid {
-			// don't insert the primary key! instead, let sqlite determine it
+			// don't insert the rowid! instead, let sqlite determine it
 			// and later fix the table with the correct key:
 			fields.push(LuaToSql(mlua::Value::Nil));
 			continue;
