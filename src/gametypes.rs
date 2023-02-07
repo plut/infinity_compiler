@@ -22,7 +22,8 @@
 //!    they have the resref as their primary key).
 use crate::prelude::*;
 use macros::{produce_resource_list};
-use crate::database::{Resource,DbTypeCheck,Schema,DbInterface,DbInserter};
+use crate::schemas::{Schema};
+use crate::database::{Resource,DbTypeCheck,DbInterface,DbInserter};
 use crate::gamefiles::{Pack,Restype};
 
 /// Those resources which are associated to a global table.

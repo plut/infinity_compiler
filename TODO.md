@@ -1,7 +1,8 @@
- - [ ] `DbInserter` belongs in `database` mod (nothing is particular to
-   each type)
 # Override
- - [ ] improve backup procedure
+ - [ ] improve backup procedure: a full backup as part of init
+ - [ ] a mod `base_types` for chaff such as SqlType etc.
+ - [ ] a mod `schema` for Schema + Resource
+ - [ ] rename `gametypes` as `resources`
  - [ ] deleted resources
   - [x] we need to know which resources have been deleted since last save
   - [x] this needs to be updated even when deleting from underlying

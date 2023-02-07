@@ -175,11 +175,8 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	let mut ncol = 0usize;
 // 	let ty_i64: syn::Type = syn::parse_str("i64").unwrap();
 	let add_schema = |fieldname: &str, ty: &syn::Type, extra: &str| {
-		quote!{ crate::database::Column {
-			fieldname: #fieldname,
-			fieldtype: <#ty as crate::database::SqlType>::SQL_TYPE,
-			extra: #extra },
-		} }; //.to_tokens(&mut schema);
+		quote!{ crate::schemas::Field::new::<#ty>(#fieldname, #extra), }
+		}; //.to_tokens(&mut schema);
 	let DeriveInput{ ident, data, attrs, generics, .. } = parse_macro_input!(tokens);
 	let payload = struct_fields(data);
 	let mut resource_info = ResourceInfo::default();
@@ -236,16 +233,14 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	}
 	if context.len() > 1 {
 		// we are dealing with a subresource: insert the "id" key
-		quote!{ crate::database::Column {
-			fieldname: "id", fieldtype: crate::database::FieldType::Integer,
-			extra: "primary key" },
+		quote!{ crate::schemas::Field::new::<i64>("id", "primary key"),
 		} .to_tokens(&mut schema);
 	}
 	let ResourceInfo { name, extension, restype, .. } = resource_info;
 	let mut code = quote! {
 		impl #generics crate::database::Resource for #ident #generics {
 			type Context = (#ctx);
-			const SCHEMA: crate::database::Schema<'static> = crate::database::Schema{
+			const SCHEMA: crate::schemas::Schema<'static> = crate::schemas::Schema{
 				name: #name,
 				extension: #extension,
 				restype: crate::gamefiles::Restype { value: #restype },
@@ -279,7 +274,7 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	}
 	code.into()
 } // Resource
-/// Column attribute:
+/// `column` attribute:
 /// `[column(itemref, i32, "references items", etc.)]` pushes on table
 /// `[column(false)]` suppresses next column
 fn table_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut FieldInfo, args: &mut AttrParser) {
@@ -366,15 +361,15 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 			/// Number of resources in this table.
 			pub fn len(&self)->usize { #n }
 			/// Calls a closure for each resource type in the game.
-			pub fn map<U: Debug,E,F:Fn(&'static crate::database::Schema,&T)->Result<U,E>>(&self, f: F)->Result<AllResources<U>,E> {
+			pub fn map<U: Debug,E,F:Fn(&'static crate::schemas::Schema,&T)->Result<U,E>>(&self, f: F)->Result<AllResources<U>,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map })
 			}
 			/// Calls a closure for each resource type in the game.
-			pub fn map_mut<U: Debug,E,F:FnMut(&crate::database::Schema,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources<U>,E> {
+			pub fn map_mut<U: Debug,E,F:FnMut(&crate::schemas::Schema,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources<U>,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map })
 			}
 			/// Given a SQL table name, returns the schema for this table.
-			pub fn table_schema(&self, s: &str)->Option<&'static crate::database::Schema> {
+			pub fn table_schema(&self, s: &str)->Option<&'static crate::schemas::Schema> {
 				#table_schema; None }
 		}
 	};
