@@ -77,7 +77,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li class="chapter-item expanded "><a href="design.html" class="active"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">5.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">6.</strong> String and translations</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">7.</strong> Translations</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li class="chapter-item expanded "><a href="design.html" class="active"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">4.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">4.2.</strong> String and translations</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">4.3.</strong> Translations</a></li></ol></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -136,10 +136,12 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="why-a-new-modding-tool"><a class="header" href="#why-a-new-modding-tool">Why a new modding tool?</a></h1>
-<p>This should offer the following advantages over WeiDU mods,
-either in terms of robustness or in ease-of-use for mod authors.</p>
-<h2 id="replacing-the-mod-stack-by-a-proper-database"><a class="header" href="#replacing-the-mod-stack-by-a-proper-database">Replacing the mod stack by a proper database</a></h2>
+                        <h1 id="design-goals"><a class="header" href="#design-goals">Design goals</a></h1>
+<p>Obviously, there already exists a perfectly fine tool for IE modding.
+However, starting from scratch allows us to design
+with a number of useful properties in mind.</p>
+<h2 id="robustness"><a class="header" href="#robustness">Robustness</a></h2>
+<h3 id="replacing-the-mod-stack-by-a-proper-database"><a class="header" href="#replacing-the-mod-stack-by-a-proper-database">Replacing the mod stack by a proper database</a></h3>
 <p>The database offers at any given time a coherent view of all
 currently-installed mods. Uninstalling a single mod can be done by
 running a somewhat simple (set of) SQL <code>DELETE</code> statement(s).
@@ -147,12 +149,12 @@ In particular, this is very fast (quasi-constant time w.r.t the number of
 mods installed) compared to WeiDU's stack model (when modifying a mod
 deep down the stack requires recomputing the whole stack, which has O(n)
 cost).</p>
-<h2 id="easier-conflict-detection-between-mods"><a class="header" href="#easier-conflict-detection-between-mods">Easier conflict detection between mods</a></h2>
+<h3 id="easier-conflict-detection-between-mods"><a class="header" href="#easier-conflict-detection-between-mods">Easier conflict detection between mods</a></h3>
 <p>With whole access to the database it becomes trivial to detect when two
 mods are trying to access the same resource.</p>
 <p>(This is still <strong>TODO</strong> however; mostly, we need to fix an interface
 about what to do in the case of conflict).</p>
-<h2 id="namespacing"><a class="header" href="#namespacing">Namespacing</a></h2>
+<h3 id="namespacing"><a class="header" href="#namespacing">Namespacing</a></h3>
 <p>Identifiers for game resources and strings are abstracted as strings
 and namespaced per mod component.
 This completely removes the need for using mod prefixes
@@ -164,7 +166,7 @@ needed).</p>
 a number of “bad behaviours” by mod authors,
 such as fully overwriting a game file
 or using inconsistent case for file names.</p>
-<h2 id="translations"><a class="header" href="#translations">Translations</a></h2>
+<h3 id="translations"><a class="header" href="#translations">Translations</a></h3>
 <p>This tool uses <a href="https://www.gnu.org/software/gettext/manual/html_node/PO-Files.html"><code>.po</code>
 files</a>
 for string translations.
@@ -180,7 +182,15 @@ the translation manager also contains a number of features
 making it easy to annotate syntactically ambiguous sentences
 (e.g. “Guard” may be either a verb or a noun in English;
 both cases have different translations in most languages).</p>
-<h2 id="mod-writing-in-sql-or-lua"><a class="header" href="#mod-writing-in-sql-or-lua">Mod writing in SQL or Lua</a></h2>
+<h3 id="portability"><a class="header" href="#portability">Portability</a></h3>
+<p>The tool is mostly written in Rust, which takes great pains to be as
+portable as possible; and mod scripts written in Lua should be portable
+by construction.</p>
+<p>In particular, it is a design goal to prevent mod authors from needing to
+run shell scripts or batch files (which is a nightmare from a maintenance
+POV).</p>
+<h2 id="ease-of-use"><a class="header" href="#ease-of-use">Ease-of-use</a></h2>
+<h3 id="mod-writing-in-sql-or-lua"><a class="header" href="#mod-writing-in-sql-or-lua">Mod writing in SQL or Lua</a></h3>
 <p>This tool offers two levels of API for accessing the database.
 The first level is plain SQL given by the description of the database;
 for instance, <code>UPDATE &quot;items&quot; SET &quot;enchantment&quot;=5 WHERE &quot;itemref&quot;='sw1h34'</code> is a perfectly valid mod and will update Albruin's
@@ -200,18 +210,11 @@ moreover, it is already the language used in some parts of the games
 themselves.</p>
 <p>The SQL interface also allows authors to write mods in any language
 containing a library for SQL access.</p>
-<h2 id="mod-manager"><a class="header" href="#mod-manager">Mod manager</a></h2>
+<h3 id="mod-manager"><a class="header" href="#mod-manager">Mod manager</a></h3>
 <p><strong>TODO</strong>: define a common API from the Lua side for describing a mod +
 metadata (author, description, compatibility list)
 and write on the an interactive mod selection tool which uses this mod
 database.</p>
-<h2 id="portability-and-robustness"><a class="header" href="#portability-and-robustness">Portability and robustness</a></h2>
-<p>The tool is mostly written in Rust, which takes great pains to be as
-portable as possible; and mod scripts written in Lua should be portable
-by construction.</p>
-<p>In particular, it is a design goal to prevent mod authors from needing to
-run shell scripts or batch files (which is a nightmare from a maintenance
-POV).</p>
 <h2 id="performance"><a class="header" href="#performance">Performance</a></h2>
 <p>Any single mod installation only accesses the SQLite database;
 thus all work is deferred to SQLite, which is quite fast.
