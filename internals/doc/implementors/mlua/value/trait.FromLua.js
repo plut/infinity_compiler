@@ -1,0 +1,3 @@
+(function() {var implementors = {
+"infinity_compiler":[["impl&lt;'lua&gt; <a class=\"trait\" href=\"https://docs.rs/mlua/0.8.7/mlua/value/trait.FromLua.html\" title=\"trait mlua::value::FromLua\">FromLua</a>&lt;'lua&gt; for <a class=\"struct\" href=\"infinity_compiler/lua_api/struct.LuaToSql.html\" title=\"struct infinity_compiler::lua_api::LuaToSql\">LuaToSql</a>&lt;'lua&gt;"]]
+};if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()

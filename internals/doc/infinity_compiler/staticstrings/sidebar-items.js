@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":[["Generator","A struct enumerating fixed-length strings of the following form: x, x0, x1, .., x00, x01, .., x99, x000, x001, …"],["StaticString","A fixed-length string."]]};

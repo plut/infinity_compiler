@@ -1,0 +1,3 @@
+(function() {var implementors = {
+"infinity_compiler":[["impl FromSql for <a class=\"struct\" href=\"infinity_compiler/gamefiles/struct.Resref.html\" title=\"struct infinity_compiler::gamefiles::Resref\">Resref</a>"],["impl FromSql for <a class=\"struct\" href=\"infinity_compiler/gamefiles/struct.Strref.html\" title=\"struct infinity_compiler::gamefiles::Strref\">Strref</a>"]]
+};if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()

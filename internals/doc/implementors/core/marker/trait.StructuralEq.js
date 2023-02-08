@@ -1,0 +1,3 @@
+(function() {var implementors = {
+"infinity_compiler":[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.67.0/core/marker/trait.StructuralEq.html\" title=\"trait core::marker::StructuralEq\">StructuralEq</a> for <a class=\"struct\" href=\"infinity_compiler/gamefiles/struct.Restype.html\" title=\"struct infinity_compiler::gamefiles::Restype\">Restype</a>"]]
+};if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()
