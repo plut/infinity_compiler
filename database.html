@@ -157,10 +157,10 @@ authors (TODO).</p>
 <ul>
 <li><code>X</code> is the user-facing view of all resources (original and modded).
 This is the</li>
-<li><code>res_X</code> is the table of all original resources;</li>
+<li><code>load_X</code> is the table of all original resources;</li>
 <li><code>add_X</code> is the table of all mod-inserted resources;</li>
 <li><code>edit_X</code> is the table of all mod changes on this resource;</li>
-<li><code>out_X</code> is the view used for saving game resources.</li>
+<li><code>save_X</code> is the view used for saving game resources.</li>
 </ul>
 <blockquote>
 <p>In general, mods should only interact with the main view <code>X</code>.
@@ -180,11 +180,11 @@ the database, but not yet from the <code>override</code> directory.</li>
 (either <code>add_X</code> or <code>edit_X</code>);</li>
 <li>at the same time, modifying <code>X</code> records the resource as dirty in
 <code>dirty_X</code>;</li>
-<li>deleting entries from <code>X</code> marks resources as orphan in <code>orphan_X</code>.
-The <code>res_X</code> table always contains exactly the resources found in
-<code>key/bif</code> and pre-existing override files.
-This table is never touched again after it is built by <code>simod init</code>.</li>
+<li>deleting entries from <code>X</code> marks resources as orphan in <code>orphan_X</code>.</li>
 </ul>
+<p>The <code>load_X</code> table always contains exactly the resources found in
+<code>key/bif</code> and pre-existing override files.
+This table is never touched again after it is built by <code>simod init</code>.</p>
 <h2 id="game-lists-ids-files"><a class="header" href="#game-lists-ids-files">Game lists (<code>IDS</code> files)</a></h2>
 <p>TODO.</p>
 <h2 id="game-tables-2da-files"><a class="header" href="#game-tables-2da-files">Game tables (<code>2DA</code> files)</a></h2>

@@ -266,10 +266,10 @@ authors (TODO).</p>
 <ul>
 <li><code>X</code> is the user-facing view of all resources (original and modded).
 This is the</li>
-<li><code>res_X</code> is the table of all original resources;</li>
+<li><code>load_X</code> is the table of all original resources;</li>
 <li><code>add_X</code> is the table of all mod-inserted resources;</li>
 <li><code>edit_X</code> is the table of all mod changes on this resource;</li>
-<li><code>out_X</code> is the view used for saving game resources.</li>
+<li><code>save_X</code> is the view used for saving game resources.</li>
 </ul>
 <blockquote>
 <p>In general, mods should only interact with the main view <code>X</code>.
@@ -289,11 +289,11 @@ the database, but not yet from the <code>override</code> directory.</li>
 (either <code>add_X</code> or <code>edit_X</code>);</li>
 <li>at the same time, modifying <code>X</code> records the resource as dirty in
 <code>dirty_X</code>;</li>
-<li>deleting entries from <code>X</code> marks resources as orphan in <code>orphan_X</code>.
-The <code>res_X</code> table always contains exactly the resources found in
-<code>key/bif</code> and pre-existing override files.
-This table is never touched again after it is built by <code>simod init</code>.</li>
+<li>deleting entries from <code>X</code> marks resources as orphan in <code>orphan_X</code>.</li>
 </ul>
+<p>The <code>load_X</code> table always contains exactly the resources found in
+<code>key/bif</code> and pre-existing override files.
+This table is never touched again after it is built by <code>simod init</code>.</p>
 <h2 id="game-lists-ids-files"><a class="header" href="#game-lists-ids-files">Game lists (<code>IDS</code> files)</a></h2>
 <p>TODO.</p>
 <h2 id="game-tables-2da-files"><a class="header" href="#game-tables-2da-files">Game tables (<code>2DA</code> files)</a></h2>
@@ -421,6 +421,62 @@ This means that entries where \(\mathtt{strref} \geq C+S \)
 need to be purged from the <code>strref_dict</code> table.</p>
 <p>The <code>string_keys</code> view is used for sequential generation of strrefs.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="translations-1"><a class="header" href="#translations-1">Translations</a></h1>
+<h2 id="language-identifiers"><a class="header" href="#language-identifiers">Language identifiers</a></h2>
+<p>Languages are represented by their 5-letter name (as in <code>&quot;en_US&quot;</code>)
+or, for female variants, by their 6-letter name (as in <code>&quot;fr_FRF&quot;</code>).</p>
+<p>Inside the database, female variants are handled as
+distinct languages from male variants;
+however a number of rules exist </p>
+<p>(The 5- or 6-letter language identifier is lossless from the game's
+<code>&quot;dialog.tlk&quot;</code> path; this simplifies backups etc.)</p>
+<h2 id="translations-2"><a class="header" href="#translations-2">Translations</a></h2>
+<p>String translation is handled through the use of the <code>translations_X</code>
+table, where <code>X</code> is a 5- or 6- language identifier.
+This table contains data similar to the game's <code>.tlk</code> file,
+except that it is indexed by native strings instead of strrefs.</p>
+<p>Any native string absent from this dictionary is left untranslated;
+only its markers (see below) are discarded.
+This is intended as a sane default value where the player,
+when a string has not (yet) been translated, will see the string in the
+original language, which is most often English.</p>
+<h2 id="markers"><a class="header" href="#markers">Markers</a></h2>
+<p>Native strings can contain markers of the following form: <code>{?text}</code>.
+Such markers are discarded when a native string is used as the default
+value for a game string in the absence of an appropriate translation.</p>
+<p>These markers, however, are seen by translators when translating the
+native string to another game language; most tools will even highlight
+them (these look like Python formatting parameters).
+It is thus <strong>strongly recommended</strong> to include markers in native strings
+to signal any possible grammatical ambiguity
+including at least the following cases:</p>
+<ul>
+<li>distinguishing verbs from nouns etc.: <code>&quot;{?verb}guard&quot;</code> vs.
+`&quot;{?noun}guard&quot;;</li>
+<li>marking grammatical gender where it is not obvious:
+e.g. <code>&quot;come here, my dear {?male}friend&quot;</code>.</li>
+</ul>
+<p>Keep in mind that translators, when translating a string,
+will generally not have access to context beyond the string itself.
+Make liberal use of markers to help them produce quality work.</p>
+<h2 id="gendered-languages"><a class="header" href="#gendered-languages">Gendered languages</a></h2>
+<p>When producing translations for gendered languages,
+the general case is that a single translation will be produced
+for both gender variants.</p>
+<h3 id="gender-markers"><a class="header" href="#gender-markers">Gender markers</a></h3>
+<p>The empty marker <code>{?}</code> is a special case.
+Including this marker in a native string marks this string as
+needing two translations for gendered languages.
+This means that, while a single native string is present in the source file,
+the translator will be prompted to translate two strings,
+where the empty marker will be replaced by either <code>{?M}</code> or <code>{?F}</code>.</p>
+<p>This marker has no special meaning for non-gendered languages;
+in this case the translator will see only a single string,
+still bearing its empty marker.</p>
+<h2 id="conversion-to-strref-1"><a class="header" href="#conversion-to-strref-1">Conversion to strref</a></h2>
+<p>Conversion between native strings and strref is performed iby the
+<code>strref_dict</code> table in a way similar to the <code>resref_dict</code> table.
+The algorithm for generating new strrefs is of course different (the
+lowest available value is used).</p>
 
                     </main>
 
