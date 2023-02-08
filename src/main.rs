@@ -49,34 +49,6 @@ pub(crate) use crate::database::{GameDB,DbInterface};
 pub(crate) use crate::progress::{Progress,scope_trace};
 
 pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
-mod workaround {
-//! [Workaround to export macro and function with same name](https://stackoverflow.com/questions/70356695/how-to-export-function-and-macro-with-the-same-name)
-	use std::fmt::{self,Display};
-pub fn join<W: fmt::Write, F: FnMut(&mut W,T)->fmt::Result,T>(target: &mut W, separator: impl Display, itr: impl IntoIterator<Item=T>, mut f: F)->fmt::Result {
-	let mut is_first = true;
-	for x in itr {
-		if is_first {
-			is_first = false;
-		} else {
-			write!(target, "{separator}")?;
-		}
-		f(target, x)?;
-	}
-	Ok(())
-}
-}
-pub use workaround::*;
-/// Joins a separated list into a [`std::fmt::Write`] implementation.
-///
-/// join!(&mut s, "separator", "list of elements",
-///   |x| write!(s, "{}", x.foobar))
-macro_rules! join {
-	($target:expr, $sep:expr, $iter: expr, |$elt:ident| write!($($a:expr),*)) => {
-		join($target, $sep, $iter,
-			|s, $elt| write!(s, $($a),*))
-	}
-}
-pub(crate) use join;
 
 }
 pub(crate) mod progress {
@@ -110,44 +82,60 @@ impl Drop for Progress {
 	}
 }
 
-// expected api:
-// write(s, [collection].fmt_all(|x| format_args!()).join(",")
-// write(s, [collection].join(x))
-//
-// macros:
-// write(s, fmt_all!([collection], |x| "{x}").join(","))
-// write(s, join!([collection], ",", |x| "{x}"))
 /// A collection of writer functions.
 ///
 /// The API for [`Display`] has only `&self` (and not `mut`) so we cannot
 /// represent this as an iterator. We use a (lazy) collection instead.
-struct CollectionWriter<'a,T,F> {
+pub struct CollectionWriter<'a,T,F> {
 	source: &'a [T],
 	format: F,
 }
-impl<T: Display, F: Fn(&T)->fmt::Arguments<'_>> Display for CollectionWriter<'_,T,F> {
+impl<T, F> Display for CollectionWriter<'_,T,F>
+where
+	T: Display,
+	F: Fn(&mut Formatter<'_>, &T)->fmt::Result
+{
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		for i in 0..self.fmt_len() {
-			self.fmt_i(i, f)?;
+		for i in 0..self.source.len() {
+			(self.format)(f, &self.source[i])?;
 		}
 		Ok(())
 	}
 }
+/// A trait used to convert a slice to [`CollectionWriter`].
+pub trait ToCollectionWriter {
+	type El;
+	fn format_as<F>(&self, f: F)->CollectionWriter<'_,Self::El,F>
+	where
+		F: Fn(&mut Formatter<'_>, &Self::El)->fmt::Result;
+}
+impl<'a,T:'a> ToCollectionWriter for &[T] {
+	type El = T;
+	fn format_as<F>(&self, f: F)->CollectionWriter<'_,Self::El,F>
+	where
+		F: Fn(&mut Formatter<'a>, &Self::El)->fmt::Result {
+		CollectionWriter { source: self, format: f, }
+	}
+}
+
 /// A collection of displayable objects.
 ///
 /// This trait serves to unify [`CollectionWriter`] and `Vec<impl
 /// Display>`.
-trait IndexedWriter {
+pub trait IndexedWriter {
 	fn fmt_len(&self)->usize;
 	fn fmt_i(&self, i: usize, f: &mut Formatter<'_>)->fmt::Result;
-	fn join<T: Display>(&self, separator: T)->SeparatorWriter<'_,Self,T> {
-		SeparatorWriter { source: &self, separator }
+	fn join<T: Display>(&self, separator: T)->JoinWriter<'_,Self,T> {
+		JoinWriter { source: self, separator }
 	}
 }
-impl<T: Display, F: Fn(&T)->fmt::Arguments<'_>> IndexedWriter for CollectionWriter<'_,T,F> {
+impl<T,F> IndexedWriter for CollectionWriter<'_,T,F>
+where
+	F: Fn(&mut Formatter<'_>, &T)->fmt::Result
+{
 	fn fmt_len(&self)->usize { self.source.len() }
 	fn fmt_i(&self, i: usize, f: &mut Formatter<'_>)->fmt::Result {
-		fmt::Display::fmt(&(self.format)(&self.source[i]), f)
+		(self.format)(f, &self.source[i])
 	}
 }
 impl<T: Display> IndexedWriter for &[T] {
@@ -156,22 +144,11 @@ impl<T: Display> IndexedWriter for &[T] {
 		fmt::Display::fmt(&self[i], f)
 	}
 }
-pub trait ToCollectionWriter {
-	type El;
-	fn format_as<F: Fn(&Self::El)->fmt::Arguments>(&self, f: F)->CollectionWriter<'_,Self::El,F>;
-}
-impl<T> ToCollectionWriter for &[T] {
-	type El = T;
-	fn format_as<F: Fn(&Self::El)->fmt::Arguments>(&self, f: F)->CollectionWriter<'_,Self::El,F> {
-		CollectionWriter { source: self, format: f, }
-	}
-}
-
-struct SeparatorWriter<'a,T: ?Sized,S> {
+pub struct JoinWriter<'a,T: ?Sized,S> {
 	source: &'a T,
 	separator: S,
 }
-impl<T: IndexedWriter, S: Display> Display for SeparatorWriter<'_,T,S> {
+impl<T: IndexedWriter, S: Display> Display for JoinWriter<'_,T,S> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		let mut is_first = true;
 		for i in 0..self.source.fmt_len() {
@@ -938,7 +915,8 @@ sqltype_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
 // II. Everything connected to the table schemas (but not to Connection;
 // only as SQL strings).
 /// Description of a field in a game resource.
-#[derive(Debug)] pub struct Field<'a> {
+#[derive(Debug)]
+pub struct Field<'a> {
 	/// Name of this column.
 	pub fname: &'a str,
 	/// Content type of this column.
@@ -956,9 +934,12 @@ impl<'a> Field<'a> {
 /// The methods from [`Schema`] might return various distinct instances
 /// from this (e.g. payload, full columns, or context columns).
 #[derive(Debug)] pub struct Columns<'a, T>(&'a[Field<'a>], T);
-impl<T> Columns<'_, T> {
+impl<'a,T> Columns<'a, T> {
 	pub fn iter(&self)->impl Iterator<Item=&Field<'_>> { self.0.iter() }
 	pub fn len(&self)->usize { self.0.len() }
+	pub fn with_prefix<P: Display>(self, prefix: P)->Columns<'a, P> {
+		Columns(self.0, prefix)
+	}
 }
 impl<T: Display> Display for Columns<'_,T> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
@@ -983,7 +964,8 @@ impl<T: Display> Display for Columns<'_,T> {
 /// their own type + writing ad-hoc macros etc.). The most harm it does
 /// is (a) storing a few bytes of useless memory in the executable,
 /// and (b) possibly inserting a few always-empty tables in the database.
-#[derive(Debug)] pub struct Schema<'a> {
+#[derive(Debug)]
+pub struct Schema<'a> {
 	/// Descriptions for all the fields of this struct.
 	pub fields: &'a[Field<'a>],
 	/// The stem for the SQL table name associated with this structure.
@@ -1016,16 +998,16 @@ impl<'schema> Schema<'schema> {
 	/// column headers for this schema in a SQL query.
 	///
 	/// Each column may be preceded by a prefix; this is used for e.g. "new".
-	pub fn columns<T>(&'schema self, prefix: T)->Columns<'schema, T> {
-		Columns(&self.fields[..self.before_id()], prefix)
+	pub fn columns(&'schema self)->Columns<'schema, &'static str> {
+		Columns(&self.fields[..self.before_id()], "")
 	}
 	/// Complete columns.
-	pub fn full<T>(&'schema self, prefix: T)->Columns<'schema,T> {
-		Columns(self.fields, prefix)
+	pub fn full(&'schema self)->Columns<'schema, &'static str> {
+		Columns(self.fields, "")
 	}
 	/// Context columns only.
-	pub fn context<T>(&'schema self, prefix: T)->Columns<'schema, T> {
-		Columns(&self.fields[self.resref_key..self.before_id()], prefix)
+	pub fn context(&'schema self)->Columns<'schema, &'static str> {
+		Columns(&self.fields[self.resref_key..self.before_id()], "")
 	}
 	/// The resref for this schema (as a string).
 	pub fn resref(&'schema self)->&str {
@@ -1050,120 +1032,24 @@ impl<'schema> Schema<'schema> {
 			write!(&mut s, "\n \"{fname}\" {} {extra}", ftype.affinity()).unwrap();
 		}
 		write!(&mut s, "{more},\n unique ({context}))",
-			context = self.context("")).unwrap();
+			context = self.context()).unwrap();
 		s
 	}
-	/// Creates all tables and views in the database associated with a
-	/// given resource.
-	///
-	/// The tables are as follows:
-	/// - `res_{name}`: data read from game files.
-	/// - `add_{name}`: new data inserted by mods.
-	/// - `edit_{name}`: data modified by mods.
-	/// The views are:
-	/// - `{name}`: the main view on which edits are done by mods (and
-	/// propagated to `add_{name}` or `edit_{name}` by triggers as needed).
-	/// - `out_{name}`: the view used to save new or modified values to
-	/// game files.
-	pub fn create_tables_and_views(&self, db: &impl DbInterface)->Result<()> {
-		let Schema { name, parent_table, extension, .. } = self;
-		let parent_key = self.resref();
-		let primary = self.primary();
-
+	/// Returns the SQL statement creating the main view for this schema.
+	fn create_main_view(&self)->String {
 		use fmt::Write;
-		// read-only table of initial resources:
-		db.exec(self.create_table(format!("res_{name}").as_str(), ""))?;
-		// table of resources inserted by mods:
-		db.exec(self.create_table(format!("add_{name}").as_str(),
-			r#", "source" text"#))?;
-		// table of fields edited by mods:
-		db.exec(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#).as_str())?;
-		{ // create main view
+		let Schema { name, .. } = self;
+		let primary = self.primary();
 		let mut view = format!(r#"create view "{name}" as
-	with "u" as (select {0} from "res_{name}" union select {0} from "add_{name}") select "#, self.full(""));
-		for (i, Field {fname, ..}) in self.fields.iter().enumerate() {
-			if i == self.fields.len() - 1 {
-				write!(&mut view, r#""{fname}""#).unwrap();
-			} else {
-				write!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{primary}" and "field"='{fname}' order by rowid desc limit 1), "{fname}") as "{fname}", "#).unwrap();
-			}
+	with "u" as (select {f} from "res_{name}" union select {f} from "add_{name}") select "#, f = self.full());
+		let (_, not_key) = self.fields.split_last().unwrap();
+		for Field {fname, .. } in not_key.iter() {
+			write!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{primary}" and "field"='{fname}' order by rowid desc limit 1), "{fname}") as "{fname}", "#).unwrap();
 		}
-		write!(&mut view, r#" from "u""#).unwrap();
-		db.exec(view)?;
-		}
-		let dirtytable = format!("dirty_{parent_table}");
-		if !extension.is_empty() {
-			// only for top-level resource: create the dirty table and orphan
-			// table
-			db.exec(format!(r#"create table "{dirtytable}" ("name" text primary key)"#))?;
-			db.exec(format!(r#"create table "orphan_{name}" ("name" text primary key)"#))?;
-			db.exec(format!(r#"
-			create trigger "orphan_{name}" after delete on "add_{name}"
-			begin 
-			  insert into "orphan_{name}" values (old."{primary}");
-			end"#))?;
-		}
-		// populate resref_dict or strref_dict as needed:
-		// There are two triggers which edit "resref_dict"; we build both
-		// of them from resref fields at once, by storing the text in
-		// `trans` (for update triggers) and `trans_insert` (for insert
-		// trigger).
-		let mut trans_insert = String::new();
-		for Field {fname, ftype, ..} in self.fields.iter() {
-			let trans = match ftype {
-			FieldType::Resref => format!(
-	r#"insert or ignore into "resref_dict" values (new."{fname}", null);"#),
-// 			FieldType::Strref => format!(
-// 	r#"insert or ignore into "strref_dict" values (new."{fname}", null);"#),
-			_ => String::new()
-			};
-			trans_insert.push_str(&trans);
-			let trig = format!(
-	r#"create trigger "update_{name}_{fname}"
-	instead of update on "{name}" when new."{fname}" is not null
-		and new."{fname}" <> old."{fname}"
-	begin
-		{trans}
-		insert or ignore into "{dirtytable}" values (new."{parent_key}");
-		insert into "edit_{name}" ("source", "resource", "field", "value") values
-			((select "component" from "global"), new."{primary}", '{fname}',
-			new."{fname}");
-	end"#);
-			db.exec(trig)?;
-			if *ftype == FieldType::Strref {
-			}
-		}
-		let trig = format!(
-	r#"create trigger "insert_{name}"
-	instead of insert on "{name}"
-	begin
-		{trans_insert}
-		insert into "add_{name}" ({cols}) values ({newcols});
-		insert or ignore into "{dirtytable}" values (new."{parent_key}");
-	end"#,
-		cols = self.full(""), newcols = self.full("new."));
-		db.exec(trig)?;
-		let trig = format!(
-	r#"create trigger "delete_{name}"
-	instead of delete on "{name}"
-	begin
-		insert or ignore into "{dirtytable}" values (old."{parent_key}");
-		delete from "add_{name}" where "{primary}" = old."{primary}";
-	end"#);
-		db.exec(trig)?;
-		let trig = format!(
-	r#"create trigger "unedit_{name}"
-	after delete on "edit_{name}"
-	begin
-		insert or ignore into "{dirtytable}" values (old."resource");
-	end"#);
-		db.exec(trig)?;
-		db.exec(self.create_output_view())?;
-		Ok (())
+		write!(&mut view, r#""{primary}" from "u""#).unwrap();
+		view
 	}
 	/// Returns the SQL for creating the output view of a resource.
-	///
-	/// This is a (large) part of [`Self::create_tables_and_views`].
 	fn create_output_view(&self)->String {
 		let n = '\n';
 		use fmt::Write;
@@ -1191,10 +1077,97 @@ impl<'schema> Schema<'schema> {
 		write!(&mut select, r#""a"."{parent_key}" as "key"{source}"#).unwrap();
 		select
 	}
+	/// Creates all tables and views in the database associated with a
+	/// given resource.
+	///
+	/// The tables are as follows:
+	/// - `res_{name}`: data read from game files.
+	/// - `add_{name}`: new data inserted by mods.
+	/// - `edit_{name}`: data modified by mods.
+	/// The views are:
+	/// - `{name}`: the main view on which edits are done by mods (and
+	/// propagated to `add_{name}` or `edit_{name}` by triggers as needed).
+	/// - `out_{name}`: the view used to save new or modified values to
+	/// game files.
+	pub fn create_tables_and_views(&self, db: &impl DbInterface)->Result<()> {
+		let Schema { name, parent_table, extension, .. } = self;
+		let parent_key = self.resref();
+		let primary = self.primary();
+
+		// read-only table of initial resources:
+		db.exec(self.create_table(&format!("res_{name}"), ""))?;
+		// table of resources inserted by mods:
+		db.exec(self.create_table(&format!("add_{name}"), r#", "source" text"#))?;
+		// table of fields edited by mods:
+		db.exec(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#))?;
+		db.exec(self.create_main_view())?;
+		let dirtytable = format!("dirty_{parent_table}");
+		if !extension.is_empty() {
+			// only for top-level resource: create the dirty table and orphan
+			// table
+			db.exec(format!(r#"create table "{dirtytable}" ("name" text primary key)"#))?;
+			db.exec(format!(r#"create table "orphan_{name}" ("name" text primary key)"#))?;
+			db.exec(format!(r#"
+			create trigger "orphan_{name}" after delete on "add_{name}"
+			begin
+			  insert into "orphan_{name}" values (old."{primary}");
+			end"#))?;
+		}
+		// populate resref_dict or strref_dict as needed:
+		// There are two triggers which edit "resref_dict"; we build both
+		// of them from resref fields at once, by storing the text in
+		// `trans` (for update triggers) and `trans_insert` (for insert
+		// trigger).
+		let mut trans_insert = String::new();
+		for Field {fname, ftype, ..} in self.fields.iter() {
+			let trans = match ftype {
+			FieldType::Resref => format!(
+	r#"insert or ignore into "resref_dict" values (new."{fname}", null);"#),
+// 			FieldType::Strref => format!(
+// 	r#"insert or ignore into "strref_dict" values (new."{fname}", null);"#),
+			_ => String::new()
+			};
+			trans_insert.push_str(&trans);
+			db.exec(format!(
+	r#"create trigger "update_{name}_{fname}"
+	instead of update on "{name}" when new."{fname}" is not null
+		and new."{fname}" <> old."{fname}"
+	begin
+		{trans}
+		insert or ignore into "{dirtytable}" values (new."{parent_key}");
+		insert into "edit_{name}" ("source", "resource", "field", "value") values
+			((select "component" from "global"), new."{primary}", '{fname}',
+			new."{fname}");
+	end"#))?;
+		}
+		db.exec(format!(
+	r#"create trigger "insert_{name}"
+	instead of insert on "{name}"
+	begin
+		{trans_insert}
+		insert into "add_{name}" ({cols}) values ({newcols});
+		insert or ignore into "{dirtytable}" values (new."{parent_key}");
+	end"#, cols = self.full(), newcols = self.full().with_prefix("new.")))?;
+		db.exec(format!(
+	r#"create trigger "delete_{name}"
+	instead of delete on "{name}"
+	begin
+		insert or ignore into "{dirtytable}" values (old."{parent_key}");
+		delete from "add_{name}" where "{primary}" = old."{primary}";
+	end"#))?;
+		db.exec(format!(
+	r#"create trigger "unedit_{name}"
+	after delete on "edit_{name}"
+	begin
+		insert or ignore into "{dirtytable}" values (old."resource");
+	end"#))?;
+		db.exec(self.create_output_view())?;
+		Ok (())
+	}
 	// Step 2: populating tables
 	pub fn select_statement(&self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
 		format!(r#"select {cols} from "{n1}{n2}" {condition} order by {sort}"#,
-			cols = self.columns(""), sort = self.context(""))
+			cols = self.columns(), sort = self.context())
 	}
 	/// The SQL code for inserting into a table.
 	///
@@ -1206,7 +1179,7 @@ impl<'schema> Schema<'schema> {
 	/// which are superseded by override files.
 	pub fn insert_statement(&self, or: impl Display, prefix: impl Display)->String {
 		let name = &self.name;
-		let cols = self.columns("");
+		let cols = self.columns();
 		let mut s = format!("insert {or} into \"{prefix}{name}\" ({cols}) values (");
 		for c in 0..cols.len()  {
 			if c > 0 { s.push(','); }
@@ -1217,7 +1190,7 @@ impl<'schema> Schema<'schema> {
 	}
 	fn all_keys_gen<T>(&self, db: &impl DbInterface, condition: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
 		let s = format!(r#"select "{primary}" from "{table}" {condition} order by {sort}"#,
-			table = self.name, primary = self.primary(), sort = self.context(""));
+			table = self.name, primary = self.primary(), sort = self.context());
 		let mut stmt = db.prepare(&s)?;
 		let mut rows = stmt.query(())?;
 		let mut v = Vec::<T>::new();
@@ -1239,7 +1212,7 @@ impl<'schema> Schema<'schema> {
 	/// Utility wrapper for [`rusqlite::params_from_iter`].
 	/// Usage: `schema.params_from(|fname, ftype| { Ok(parameter...) })?`
 	pub fn params_from<T: rusqlite::ToSql+Debug,F: Fn(&str, FieldType)->Result<T>>(&self, f:F)->Result<rusqlite::ParamsFromIter<Vec<T>>> {
-		let params = self.full(()).iter()
+		let params = self.full().iter()
 			.map(|Field{fname, ftype, ..}| f(fname, *ftype))
 			.collect::<Result<Vec<T>>>()?;
 		trace!("collected parameters: {params:?}");
@@ -2013,7 +1986,7 @@ fn select<'lua>(db: &impl DbInterface, lua: &'lua Lua, (table, rowid): (String, 
 	trace!("query: {query}; {srowid:?}");
 	tbl.set(schema.primary(), rowid)?;
 	db.query_row_and_then(&query, (&sqlrowid,), |row| {
-		for (i, col) in schema.columns("").iter().enumerate() {
+		for (i, col) in schema.columns().iter().enumerate() {
 			let fname = col.fname;
 			let val = row.get_ref(i)
 				.with_context(|| format!("cannot read field {i} in row"))?;
@@ -2092,10 +2065,10 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		RESOURCES.map(|schema, _| {
 			let fields = lua.create_table()?;
 			let context = lua.create_table()?;
-			for col in schema.columns("").iter() {
+			for col in schema.columns().iter() {
 				fields.set(col.fname, col.ftype.to_lua())?;
 			}
-			for col in schema.context("").iter() {
+			for col in schema.context().iter() {
 				context.push(col.fname)?;
 			}
 			let res_schema = lua.create_table()?;
@@ -2252,16 +2225,18 @@ enum Command {
 }
 
 fn main() -> Result<()> {
-	use std::fmt::Write;
-	use crate::progress::ToCollectionWriter;
-	let a = ["toto", "foo", "bar"];
-	println!("{}",
-		a.as_ref().format_as(|x| format_args!("({x})")));
-	println!("{}", a.join(">"));
-// 	join!(&mut s, ",", ["u","v","w"],
-// 		|x| write!("{}", x))?;
-// 	println!("now s is '{s}'");
-	return Ok(());
+// 	use std::fmt::Write;
+// 	use crate::progress::{IndexedWriter,ToCollectionWriter};
+// 	let a = ["toto", "foo", "bar"];
+// 	println!("{}",
+// 		a.as_ref().format_as(|f, x| { write!(f, "({x})") })
+// 		.join("=>")
+// 	);
+// 	println!("{}", a.join(">"));
+// // 	join!(&mut s, ",", ["u","v","w"],
+// // 		|x| write!("{}", x))?;
+// // 	println!("now s is '{s}'");
+// 	return Ok(());
 	let mut options = RuntimeOptions::parse();
 	if options.database.is_none() {
 		options.database = Some(Path::new("game.sqlite").into());
