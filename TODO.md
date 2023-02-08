@@ -1,4 +1,5 @@
  - rust join_lazy_fmt / joinery / lazy_format
+  join_lazy: à l'envers
 # Override
  - [x] improve backup procedure: a full backup as part of init
  - [x] a mod `base_types` for chaff such as SqlType etc.

@@ -340,7 +340,7 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 			.to_tokens(&mut map);
 		quote!{ #field: (), }.to_tokens(&mut data);
 		quote!{ let sch = &<#ty as crate::database::Resource>::SCHEMA;
-			if s == sch.name { return Some(sch) } }
+			if s == sch.to_string() { return Some(sch) } }
 			.to_tokens(&mut table_schema);
 	}
 	});
