@@ -82,87 +82,6 @@ impl Drop for Progress {
 	}
 }
 
-/// A collection of writer functions.
-///
-/// The API for [`Display`] has only `&self` (and not `mut`) so we cannot
-/// represent this as an iterator. We use a (lazy) collection instead.
-pub struct CollectionWriter<'a,T,F> {
-	source: &'a [T],
-	format: F,
-}
-impl<T, F> Display for CollectionWriter<'_,T,F>
-where
-	T: Display,
-	F: Fn(&mut Formatter<'_>, &T)->fmt::Result
-{
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		for i in 0..self.source.len() {
-			(self.format)(f, &self.source[i])?;
-		}
-		Ok(())
-	}
-}
-/// A trait used to convert a slice to [`CollectionWriter`].
-pub trait ToCollectionWriter {
-	type El;
-	fn format_as<F>(&self, f: F)->CollectionWriter<'_,Self::El,F>
-	where
-		F: Fn(&mut Formatter<'_>, &Self::El)->fmt::Result;
-}
-impl<'a,T:'a> ToCollectionWriter for &[T] {
-	type El = T;
-	fn format_as<F>(&self, f: F)->CollectionWriter<'_,Self::El,F>
-	where
-		F: Fn(&mut Formatter<'a>, &Self::El)->fmt::Result {
-		CollectionWriter { source: self, format: f, }
-	}
-}
-
-/// A collection of displayable objects.
-///
-/// This trait serves to unify [`CollectionWriter`] and `Vec<impl
-/// Display>`.
-pub trait IndexedWriter {
-	fn fmt_len(&self)->usize;
-	fn fmt_i(&self, i: usize, f: &mut Formatter<'_>)->fmt::Result;
-	fn join<T: Display>(&self, separator: T)->JoinWriter<'_,Self,T> {
-		JoinWriter { source: self, separator }
-	}
-}
-impl<T,F> IndexedWriter for CollectionWriter<'_,T,F>
-where
-	F: Fn(&mut Formatter<'_>, &T)->fmt::Result
-{
-	fn fmt_len(&self)->usize { self.source.len() }
-	fn fmt_i(&self, i: usize, f: &mut Formatter<'_>)->fmt::Result {
-		(self.format)(f, &self.source[i])
-	}
-}
-impl<T: Display> IndexedWriter for &[T] {
-	fn fmt_len(&self)->usize { self.len() }
-	fn fmt_i(&self, i: usize, f: &mut Formatter<'_>)->fmt::Result {
-		fmt::Display::fmt(&self[i], f)
-	}
-}
-pub struct JoinWriter<'a,T: ?Sized,S> {
-	source: &'a T,
-	separator: S,
-}
-impl<T: IndexedWriter, S: Display> Display for JoinWriter<'_,T,S> {
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		let mut is_first = true;
-		for i in 0..self.source.fmt_len() {
-			if is_first {
-				is_first = false;
-			} else {
-				self.separator.fmt(f)?;
-			}
-			self.source.fmt_i(i, f)?;
-		}
-		Ok(())
-	}
-}
-
 const COLORS: &[&str] = &["red", "yellow", "green", "cyan", "blue", "magenta" ];
 
 impl Progress {
@@ -191,12 +110,6 @@ pub struct ScopeLogger(pub log::Level);
 impl Drop for ScopeLogger {
 	fn drop(&mut self) { log::log!(self.0, "»»") }
 }
-// macro_rules! scope_log {
-// 	($lvl:expr, $msg:expr $(,$arg:tt)*) => {
-// 		let _log_scope = ScopeLogger($lvl);
-// 		log::log!($lvl, concat!($msg, "««") $(, $arg)*);
-// 	}
-// }
 macro_rules! scope_trace {
 	($msg: literal $($arg:tt)*) => {
 		let _log_scope = crate::progress::ScopeLogger(log::Level::Trace);
@@ -937,6 +850,7 @@ impl<'a> Field<'a> {
 impl<'a,T> Columns<'a, T> {
 	pub fn iter(&self)->impl Iterator<Item=&Field<'_>> { self.0.iter() }
 	pub fn len(&self)->usize { self.0.len() }
+	/// Modifies a set of column headers by prepending a prefix, e.g. "new."
 	pub fn with_prefix<P: Display>(self, prefix: P)->Columns<'a, P> {
 		Columns(self.0, prefix)
 	}
@@ -994,10 +908,12 @@ impl<'schema> Schema<'schema> {
 		self.fields.len() - (self.is_subresource() as usize)
 	}
 	/// Columns of payload + context; no id.
+	///
+	/// In other words: these are the columns which can be inserted (id is
+	/// automatically computed by sqlite).
+	///
 	/// Returns an object implementing [`std::fmt::Display`] to write the
 	/// column headers for this schema in a SQL query.
-	///
-	/// Each column may be preceded by a prefix; this is used for e.g. "new".
 	pub fn columns(&'schema self)->Columns<'schema, &'static str> {
 		Columns(&self.fields[..self.before_id()], "")
 	}
@@ -1005,9 +921,13 @@ impl<'schema> Schema<'schema> {
 	pub fn full(&'schema self)->Columns<'schema, &'static str> {
 		Columns(self.fields, "")
 	}
-	/// Context columns only.
+	/// Context columns only
 	pub fn context(&'schema self)->Columns<'schema, &'static str> {
 		Columns(&self.fields[self.resref_key..self.before_id()], "")
+	}
+	/// All the columns except the primary key.
+	pub fn except_primary(&'schema self)->Columns<'schema, &'static str> {
+		Columns(&self.fields[..self.fields.len()-1], "")
 	}
 	/// The resref for this schema (as a string).
 	pub fn resref(&'schema self)->&str {
@@ -1042,8 +962,7 @@ impl<'schema> Schema<'schema> {
 		let primary = self.primary();
 		let mut view = format!(r#"create view "{name}" as
 	with "u" as (select {f} from "res_{name}" union select {f} from "add_{name}") select "#, f = self.full());
-		let (_, not_key) = self.fields.split_last().unwrap();
-		for Field {fname, .. } in not_key.iter() {
+		for Field {fname, .. } in self.except_primary().iter() {
 			write!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{primary}" and "field"='{fname}' order by rowid desc limit 1), "{fname}") as "{fname}", "#).unwrap();
 		}
 		write!(&mut view, r#""{primary}" from "u""#).unwrap();
@@ -1089,29 +1008,28 @@ impl<'schema> Schema<'schema> {
 	/// propagated to `add_{name}` or `edit_{name}` by triggers as needed).
 	/// - `out_{name}`: the view used to save new or modified values to
 	/// game files.
-	pub fn create_tables_and_views(&self, db: &impl DbInterface)->Result<()> {
+	pub fn create_tables_and_views<T>(&self, f: impl Fn(String)->Result<T>)->Result<()> {
 		let Schema { name, parent_table, extension, .. } = self;
 		let parent_key = self.resref();
 		let primary = self.primary();
 
 		// read-only table of initial resources:
-		db.exec(self.create_table(&format!("res_{name}"), ""))?;
+		f(self.create_table(&format!("res_{name}"), ""))?;
 		// table of resources inserted by mods:
-		db.exec(self.create_table(&format!("add_{name}"), r#", "source" text"#))?;
+		f(self.create_table(&format!("add_{name}"), r#", "source" text"#))?;
 		// table of fields edited by mods:
-		db.exec(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#))?;
-		db.exec(self.create_main_view())?;
+		f(format!(r#"create table "edit_{name}" ("source" text, "resource" text, "field" text, "value")"#))?;
+		f(self.create_main_view())?;
+		f(self.create_output_view())?;
 		let dirtytable = format!("dirty_{parent_table}");
 		if !extension.is_empty() {
-			// only for top-level resource: create the dirty table and orphan
-			// table
-			db.exec(format!(r#"create table "{dirtytable}" ("name" text primary key)"#))?;
-			db.exec(format!(r#"create table "orphan_{name}" ("name" text primary key)"#))?;
-			db.exec(format!(r#"
-			create trigger "orphan_{name}" after delete on "add_{name}"
-			begin
-			  insert into "orphan_{name}" values (old."{primary}");
-			end"#))?;
+			// only for top-level resource: create the dirty and orphan tables
+			f(format!(r#"create table "{dirtytable}" ("name" text primary key)"#))?;
+			f(format!(r#"create table "orphan_{name}" ("name" text primary key)"#))?;
+			f(format!(r#"create trigger "orphan_{name}" after delete on "add_{name}"
+				begin
+					insert into "orphan_{name}" values (old."{primary}");
+				end"#))?;
 		}
 		// populate resref_dict or strref_dict as needed:
 		// There are two triggers which edit "resref_dict"; we build both
@@ -1128,7 +1046,7 @@ impl<'schema> Schema<'schema> {
 			_ => String::new()
 			};
 			trans_insert.push_str(&trans);
-			db.exec(format!(
+			f(format!(
 	r#"create trigger "update_{name}_{fname}"
 	instead of update on "{name}" when new."{fname}" is not null
 		and new."{fname}" <> old."{fname}"
@@ -1140,7 +1058,7 @@ impl<'schema> Schema<'schema> {
 			new."{fname}");
 	end"#))?;
 		}
-		db.exec(format!(
+		f(format!(
 	r#"create trigger "insert_{name}"
 	instead of insert on "{name}"
 	begin
@@ -1148,20 +1066,19 @@ impl<'schema> Schema<'schema> {
 		insert into "add_{name}" ({cols}) values ({newcols});
 		insert or ignore into "{dirtytable}" values (new."{parent_key}");
 	end"#, cols = self.full(), newcols = self.full().with_prefix("new.")))?;
-		db.exec(format!(
+		f(format!(
 	r#"create trigger "delete_{name}"
 	instead of delete on "{name}"
 	begin
 		insert or ignore into "{dirtytable}" values (old."{parent_key}");
 		delete from "add_{name}" where "{primary}" = old."{primary}";
 	end"#))?;
-		db.exec(format!(
+		f(format!(
 	r#"create trigger "unedit_{name}"
 	after delete on "edit_{name}"
 	begin
 		insert or ignore into "{dirtytable}" values (old."resource");
 	end"#))?;
-		db.exec(self.create_output_view())?;
 		Ok (())
 	}
 	// Step 2: populating tables
@@ -1320,7 +1237,7 @@ pub trait Resource: Sized {
 	/// over the result and recover structures of the original type.
 	fn select_query_gen(db: &impl DbInterface, n1: impl Display, n2: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
 		let s = Self::SCHEMA.select_statement(n1, n2, cond);
-		Ok(TypedStatement(db.prepare(&s)?, PhantomData::<Self>))
+		Ok(TypedStatement(db.prepare(&s)?, PhantomData))
 	}
 	/// Particular case of SELECT statement used for saving to game files.
 	fn select_query(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
@@ -1339,7 +1256,7 @@ impl<T: Resource> TypedStatement<'_, T> {
 	/// the type associated with this table.
 	pub fn iter<P: rusqlite::Params>(&mut self, params: P) ->rusqlite::Result<TypedRows<'_,T>> {
 		let rows = self.0.query(params)?;
-		Ok(TypedRows { rows, _marker: PhantomData::<T>, index: 0 })
+		Ok(TypedRows { rows, _marker: PhantomData, index: 0 })
 	}
 }
 /// An enriched version of `rusqlite::Rows`.
@@ -1566,7 +1483,7 @@ impl GameDB {
 		"#).context("create strings tables")?;
 		RESOURCES.map_mut(|schema,_| {
 			debug!("  creating tables for resource '{}'", schema.name);
-			schema.create_tables_and_views(db)
+			schema.create_tables_and_views(|s| db.exec(s))
 		})?;
 		db.exec(crate::schemas::create_new_strings_sql())?; Ok(())
 		}).context("creating global tables")?;
@@ -2225,18 +2142,6 @@ enum Command {
 }
 
 fn main() -> Result<()> {
-// 	use std::fmt::Write;
-// 	use crate::progress::{IndexedWriter,ToCollectionWriter};
-// 	let a = ["toto", "foo", "bar"];
-// 	println!("{}",
-// 		a.as_ref().format_as(|f, x| { write!(f, "({x})") })
-// 		.join("=>")
-// 	);
-// 	println!("{}", a.join(">"));
-// // 	join!(&mut s, ",", ["u","v","w"],
-// // 		|x| write!("{}", x))?;
-// // 	println!("now s is '{s}'");
-// 	return Ok(());
 	let mut options = RuntimeOptions::parse();
 	if options.database.is_none() {
 		options.database = Some(Path::new("game.sqlite").into());

@@ -355,18 +355,18 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 			_marker: std::marker::PhantomData<T>, #fields }
 /// An heterogeneous iterator over the constant list of all game resource types.
 		pub const RESOURCES: AllResources<()> = AllResources {
-			_marker: std::marker::PhantomData::<()>, #data };
+			_marker: std::marker::PhantomData, #data };
 		#[allow(clippy::len_without_is_empty)]
 		impl<T: Debug> AllResources<T> {
 			/// Number of resources in this table.
 			pub fn len(&self)->usize { #n }
 			/// Calls a closure for each resource type in the game.
 			pub fn map<U: Debug,E,F:Fn(&'static crate::schemas::Schema,&T)->Result<U,E>>(&self, f: F)->Result<AllResources<U>,E> {
-				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map })
+				Ok(AllResources { _marker: std::marker::PhantomData, #map })
 			}
 			/// Calls a closure for each resource type in the game.
 			pub fn map_mut<U: Debug,E,F:FnMut(&crate::schemas::Schema,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources<U>,E> {
-				Ok(AllResources { _marker: std::marker::PhantomData::<U>, #map })
+				Ok(AllResources { _marker: std::marker::PhantomData, #map })
 			}
 			/// Given a SQL table name, returns the schema for this table.
 			pub fn table_schema(&self, s: &str)->Option<&'static crate::schemas::Schema> {
