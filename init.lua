@@ -63,6 +63,22 @@ local function mkfn(name)
 	  print("[33;1m"..name.."[m called with: "..strdump(arg))
 	end
 end
+local function mkdisplay(prefix)
+	return function(...)
+		local s = ""
+		for i, v in ipairs({...}) do
+			s = s .. tostring(v)
+		end
+		return "["..prefix.."m"..s.."[m"
+	end
+end
+local red = mkdisplay("31")
+local green = mkdisplay("32")
+local yellow = mkdisplay("33")
+local blue = mkdisplay("34")
+local magenta = mkdisplay("35")
+local cyan = mkdisplay("36")
+local bold = mkdisplay("1")
 --««1 simulate a mini-version of simod's api
 local simod_simul = {}
 -- local simod = simod_simul -- comment this line when using real simod
@@ -152,7 +168,8 @@ function simod_simul.update(tbl, resref, key, value)
 		error("cannot update resref with nil key in table '"..tbl.."'")
 	end
 	local ft = schema_fieldtype(tbl, sch, key)
-	print("[1mupdate \""..tbl.."\" set \""..key.."\"='"..value.."' where \""..sch.primary.."\"='"..resref.."'[m")
+	print(bold('update "', tbl, '" set "', key, "\"='", value,
+		"' where \"", sch.primary, "\"='", resref, "'"))
 end
 function simod_simul.insert(tbl, fields, context)
 	assert(tbl ~= nil, "nil tbl in simod.insert")
@@ -175,7 +192,7 @@ function simod_simul.insert(tbl, fields, context)
 -- 			print("[36m -- ignoring vector data for field: '"..tbl.."'.'"..fn.."' ("..count(fields[fn]).." entries)[m")
 		end
 	end
-	print("[1m"..s1..s2..")[m")
+	print(bold(s1, s2))
 end
 
 --««1 Methods for resources
@@ -207,6 +224,12 @@ local default_key = {
 local function child_context(tbl, fields, context)
 	-- given a table name, values and local context,
 	-- produce context for children (by adding the primary)
+	if debug then
+		print(magenta("building child context"))
+		print("tbl is", tbl)
+		print("context is ", strdump(context))
+		print("primary is", table_schema(tbl).primary)
+	end
 	local pk = table_schema(tbl).primary
 	local ctx = { [pk] = fields[pk] }
 	for k, v in pairs(context) do
@@ -214,13 +237,29 @@ local function child_context(tbl, fields, context)
 	end
 	return ctx
 end
-local function resource_getindex(self, fieldname)
-	-- returns either the raw field, or (for subresources) a contextualized
-	-- resvec:
+-- we need a forward declaration so that `resource_getindex` can find it:
+local function resource_delete(self)
 	local mt = getmetatable(self)
 	local sch = table_schema(mt.table)
+	print("deleting resource with id [31m"..self._fields[sch.primary].."[m")
+	simod.delete(mt.table, self._fields[sch.primary])
+end
+local function resource_getindex(self, fieldname)
+	-- Implements `$resource.$field`.
+	-- 
+	-- This returns either the raw field,
+	-- or (when the field designates a subresource)
+	-- a contextualized resvec.
+	-- first the methods
+	if fieldname == "delete" then return resource_delete end
+	local mt = getmetatable(self)
+	local sch = table_schema(mt.table)
+	print("called getindex("..green(fieldname)..") for resource with name "..blue(mt.table))
+	-- `ft` is the field type (if it exists) for the field we are asking
 	local ft = sch.fields[fieldname]
 	if type(ft) == "table" then
+		-- this field designates a subresource;
+		-- we build the resvec, with the appropriate metatable
 		-- TODO: maybe _parent = self would be even better?
 		local resvec = {
 			_entries = self._fields[fieldname],
@@ -228,6 +267,8 @@ local function resource_getindex(self, fieldname)
 		}
 		return setmetatable(resvec, mt[fieldname])
 	elseif ft ~= nil then
+		-- this field designates an ordinary property;
+		-- we simply return the value for this property:
 		return self._fields[fieldname]
 	end
 end
@@ -324,7 +365,7 @@ local function resource_clone(self, changes)
 	-- `nil` on function call and set by `simod.insert` to the rowid
 	local context = deep_copy(self._context)
 	print("new context is ", strdump(context))
-	print("new fields is ", strdump(fields))
+-- 	print("new fields is ", strdump(fields))
 	insert_rec(tbl, fields, context)
 	return setmetatable({ _fields = fields, _context = context }, mt)
 end
@@ -446,18 +487,29 @@ function test()
 	assert(sword.weight == 18)
 -- 	d"sword.abilities[1].use_icon"
 	sword.abilities[1].use_icon="spwi101b"
-	if true then return end
 	carsomyr1 = sword("crasomyr")
+	ab = carsomyr1.abilities[1]
+	print(bold(red("computing effect now:")))
+	debug=true
+	ef = ab.effects[0]
+	print(bold(red("computing effect done!")))
+	dump(ef._context)
+	if true then return end
 -- 	d"crasomyr1"
 	assert(carsomyr1.itemref == "crasomyr")
 	assert(carsomyr1.name == "crasomyr")
 	assert(carsomyr1.abilities[0]._context.itemref == carsomyr1.itemref)
 	carsomyr2 = sword{"crasomyr", weight=200, itemref="cars2"}
+	print("cocou")
 	assert(carsomyr2.itemref == "cars2")
 	assert(carsomyr2.name == "crasomyr")
 	assert(carsomyr2.weight == 200)
 	assert(carsomyr2.abilities[0]._context.itemref == carsomyr2.itemref)
+	print("delete!")
+	carsomyr2:delete()
+	print("after delete")
 end
+-- print("blah")
 test()
 -- print("==============")
 -- sword.abilities:push { range = 9, use_icon="!!new!!",

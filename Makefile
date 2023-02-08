@@ -14,9 +14,9 @@ run:
 	cargo b
 	$(MAKE) test
 
-c: check
-check:
-	cargo c --color=always 2>&1 |head -30
+c: clippy
+clippy:
+	cargo clippy --color=always 2>&1 | less -R
 
 w: watch
 watch:
@@ -39,3 +39,9 @@ x:
 	echo "delete from edit_item_abilities" | sqlite3 game.sqlite
 	echo "delete from edit_item_effects" | sqlite3 game.sqlite
 	$(RUN) -O add.log add target
+	echo "select * from add_items" | sqlite3 game.sqlite
+	echo "select itemref,abref from item_abilities where itemref in (select itemref from add_items)" |sqlite3 game.sqlite
+	echo "select itemref,abref,effectref,opcode from item_effects where itemref in (select itemref from add_items)" |sqlite3 game.sqlite
+
+save:
+	$(RUN) -O save.log save

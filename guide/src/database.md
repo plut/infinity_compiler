@@ -25,10 +25,10 @@ For each resource `X`:
 
  - `X` is the user-facing view of all resources (original and modded).
 	 This is the
- - `res_X` is the table of all original resources;
+ - `load_X` is the table of all original resources;
  - `add_X` is the table of all mod-inserted resources;
  - `edit_X` is the table of all mod changes on this resource;
- - `out_X` is the view used for saving game resources.
+ - `save_X` is the view used for saving game resources.
 
 > In general, mods should only interact with the main view `X`.
 > The structure of all other views listed here is **unstable**.
@@ -46,7 +46,8 @@ A (large) number of triggers are attached to the main view `X`:
  - at the same time, modifying `X` records the resource as dirty in
 	 `dirty_X`;
  - deleting entries from `X` marks resources as orphan in `orphan_X`.
-The `res_X` table always contains exactly the resources found in
+
+The `load_X` table always contains exactly the resources found in
 `key/bif` and pre-existing override files.
 This table is never touched again after it is built by `simod init`.
 

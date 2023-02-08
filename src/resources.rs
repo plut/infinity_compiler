@@ -23,9 +23,48 @@
 use crate::prelude::*;
 use macros::{produce_resource_list};
 use crate::schemas::{Schema};
-use crate::database::{Resource,DbTypeCheck,DbInterface,DbInserter};
+use crate::database::{DbTypeCheck,DbInterface,DbInserter,TypedStatement};
 use crate::gamefiles::{Pack,Restype};
 
+/// Interface for a game resource.
+///
+/// This trait is implemented by the corresponding derive macro.
+///
+/// This is the main trait for game resources, containing the low-level
+/// interaction with the database (`ins`, `sel`). Concrete
+/// implementations are provided by the `Resource` derive macro.
+pub trait Resource: Sized {
+	/// Additional data saved in the same row as a game object; usually
+	/// some identifier for the object (e.g. its resref).
+	type Context;
+	/// The internal description of the fields of this structure, as used
+	/// to produce SQL statements.
+	const SCHEMA: Schema<'static>;
+	/// The low-level insert function for an object to a database row.
+	fn ins(&self, s: &mut Statement<'_>, key: &Self::Context)->rusqlite::Result<()>;
+	/// The low-level select function from a database row to an object.
+	fn sel(r: &rusqlite::Row<'_>)->Result<(Self, Self::Context)>;
+	/// The select Statement for an object.
+	///
+	/// The ID field (if present) is not selected. (This is used only for
+	/// building game files, where this field is not used anyway).
+	///
+	/// The name of the table is `{n1}{n2}`; since many tables are built in
+	/// two parts (e.g. `load_{name}`, `strings_{lang}`),
+	/// this avoids calling `format!` on the
+	/// caller side and slightly simplifies the API.
+	///
+	/// This returns a [`Result<TypedStatement>`]: it is possible to iterate
+	/// over the result and recover structures of the original type.
+	fn select_query_gen(db: &impl DbInterface, n1: impl Display, n2: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
+		let s = Self::SCHEMA.select_statement(n1, n2, cond);
+		Ok(TypedStatement::new(db.prepare(&s)?))
+	}
+	/// Particular case of SELECT statement used for saving to game files.
+	fn select_query(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
+		Self::select_query_gen(db, "save_", Self::SCHEMA, s)
+	}
+}
 /// Those resources which are associated to a global table.
 pub trait NamedTable: Resource {
 	/// Returns the associated field (e.g. `.item`) in an `AllResources` table.
@@ -50,8 +89,9 @@ pub fn restype_from_extension(ext: &str)->Restype {
 #[derive(Debug,Pack,Resource)]
 #[allow(missing_copy_implementations)]
 #[resource(item_effects)] pub struct ItemEffect {
-#[column(itemref, Resref, r#"references "items"("itemref")"#)]
-#[column(abref, usize, r#"references "item_abilities"("abref")"#)]
+#[column(itemref, Resref, r#"references "items"("itemref") on delete cascade"#)]
+#[column(abref, usize, r#"references "item_abilities"("abref") on delete cascade"#)]
+// itemref is used only for sorting:
 #[column(effectref, usize)]
 	opcode: u16, //opcode,
 	target: u8, // EffectTarget,
@@ -74,7 +114,7 @@ pub fn restype_from_extension(ext: &str)->Restype {
 #[derive(Debug,Pack,Resource)]
 #[allow(missing_copy_implementations)]
 #[resource(item_abilities)] pub struct ItemAbility {
-#[column(itemref, Resref, r#"references "items"("itemref")"#)]
+#[column(itemref, Resref, r#"references "items"("itemref") on delete cascade"#)]
 #[column(abref, usize)]
 	attack_type: u8, // AttackType,
 	must_identify: u8,

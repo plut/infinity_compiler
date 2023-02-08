@@ -39,6 +39,7 @@ pub(crate) use lazy_format::lazy_format;
 #[allow(unused_imports)]
 pub(crate) use joinery::JoinableIterator;
 
+pub(crate) use core::marker::PhantomData;
 #[allow(unused_imports)]
 pub(crate) use std::ops::{Deref};
 pub(crate) use std::fmt::{self,Display,Debug,Formatter,Write as FWrite};
@@ -54,6 +55,22 @@ pub(crate) use crate::database::{GameDB,DbInterface};
 pub(crate) use crate::progress::{Progress,scope_trace,NullDisplay,DisplayExt};
 
 pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
+
+#[derive(Debug)]
+pub(crate) enum Error{
+	UnknownTable(String),
+// 	BadType(String),
+// 	BadArgumentNumber(usize, &'static str),
+	CallbackMissingArgument,
+	CallbackExtraArgument,
+}
+impl Display for Error {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+		fmt::Debug::fmt(&self, f)
+	}
+}
+impl std::error::Error for Error { }
+
 }
 pub(crate) mod progress {
 //! Generic useful functions for user interaction.
@@ -616,11 +633,11 @@ impl GameIndex {
 		create_dir(&simod_dir)
 			.with_context(|| format!("cannot create simod directory {simod_dir:?}"))?;
 		let backup_dir = simod_dir.join("backup");
-		create_dir(&backup_dir).with_context(||
-			format!("cannot create backup directory {backup_dir:?}"))?;
 		Ok(GameIndex{ root: gamedir, bifnames, resources, _bifsizes, languages,
 			backup_dir })
 	}
+	/// Creates a temporary directory in an appropriate place in the game
+	/// structure.
 	pub fn tempdir(&self)->Result<tempfile::TempDir> {
 		let dir = tempfile::tempdir_in(self.root.join("simod"))
 			.context("failed to create temporary directory")?;
@@ -660,7 +677,9 @@ impl GameIndex {
 	/// This (and the use of a well-placed `INSERT OR IGNORE` SQL
 	/// statement) allows ignoring of BIF resources masked by an override
 	/// file.
-	pub fn for_each<F>(&self, mut f: F)->Result<()> where F: (FnMut(Restype, Resref, ResHandle<'_>)->Result<()>) {
+	pub fn for_each<F>(&self, mut f: F)->Result<()>
+	where F: (FnMut(Restype, Resref, ResHandle<'_>)->Result<()>)
+	{
 		let pb = Progress::new(self.resources.len(), "resources");
 		let over_dir = self.root.join("override"); // "override" is a reserved kw
 		if over_dir.is_dir() {
@@ -675,7 +694,7 @@ impl GameIndex {
 				if pos > 8 { continue }
 				let resref = Resref { name: StaticString::<8>::from(&name[..pos]), };
 				let ext = &name[pos+1..];
-				let restype = crate::gametypes::restype_from_extension(ext);
+				let restype = crate::resources::restype_from_extension(ext);
 				trace!("reading override file: {name}; restype={restype:?}");
 				f(restype, resref, ResHandle::Override(&entry.path()))?
 			}
@@ -695,6 +714,10 @@ impl GameIndex {
 		}
 		Ok(())
 	}
+	/// Backups all game files.
+	///
+	/// If the backup already exists then an error is raised,
+	/// unless `no_fail` is true.
 	pub fn maybe_backup(&self, dest: impl AsRef<Path>, no_fail: bool)->Result<()> {
 		let dest = dest.as_ref();
 		self.backup(dest).or_else(|e| {
@@ -702,6 +725,7 @@ impl GameIndex {
 				warn!("could not backup game to {dest:?}: {e:?}"); Ok(())
 			} else {
 				Err(e)
+				.with_context(|| format!("could not backup to {dest:?}"))
 			}
 		})
 	}
@@ -799,7 +823,7 @@ pub(crate) mod schemas {
 //! This mod groups everything which has access to the content of the
 //! [`Schema`] struct.
 use crate::prelude::*;
-use crate::gametypes::RESOURCES;
+use crate::resources::RESOURCES;
 
 /// An utility enum defining SQL behaviour for a given resource field type.
 ///
@@ -1034,7 +1058,7 @@ impl<'schema> Schema<'schema> {
 		let Schema { name, .. } = self;
 		let primary = self.primary();
 		let mut view = format!(r#"create view "{name}" as
-	with "u" as (select {f} from "res_{name}" union select {f} from "add_{name}") select "#, f = self.iter());
+	with "u" as (select {f} from "load_{name}" union select {f} from "add_{name}") select "#, f = self.iter());
 		for Field {fname, .. } in self.except_primary() {
 			write!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{primary}" and "field"='{fname}' order by rowid desc limit 1), "{fname}") as "{fname}", "#).unwrap();
 		}
@@ -1045,7 +1069,7 @@ impl<'schema> Schema<'schema> {
 	fn create_output_view(&self)->String {
 		let n = '\n';
 		let parent_key = self.resref();
-		let mut select = format!(r#"create view "out_{self}" as select{n}  "#);
+		let mut select = format!(r#"create view "save_{self}" as select{n}  "#);
 		let mut source = format!(r#"{n}from "{self}" as "a"{n}"#);
 		for Field { fname: f, ftype, .. } in self.iter() {
 			match ftype {
@@ -1071,13 +1095,13 @@ impl<'schema> Schema<'schema> {
 	/// given resource.
 	///
 	/// The tables are as follows:
-	/// - `res_{name}`: data read from game files.
+	/// - `load_{name}`: data read from game files.
 	/// - `add_{name}`: new data inserted by mods.
 	/// - `edit_{name}`: data modified by mods.
 	/// The views are:
 	/// - `{name}`: the main view on which edits are done by mods (and
 	/// propagated to `add_{name}` or `edit_{name}` by triggers as needed).
-	/// - `out_{name}`: the view used to save new or modified values to
+	/// - `save_{name}`: the view used to save new or modified values to
 	/// game files.
 	pub fn create_tables_and_views<T>(&self, f: impl Fn(String)->Result<T>)->Result<()> {
 		let Schema { name, parent_table, extension, .. } = self;
@@ -1085,7 +1109,7 @@ impl<'schema> Schema<'schema> {
 		let primary = self.primary();
 
 		// read-only table of initial resources:
-		f(self.create_table(&format!("res_{name}"), ""))?;
+		f(self.create_table(&format!("load_{name}"), ""))?;
 		// table of resources inserted by mods:
 		f(self.create_table(&format!("add_{name}"), r#", "source" text"#))?;
 		// table of fields edited by mods:
@@ -1096,11 +1120,12 @@ impl<'schema> Schema<'schema> {
 		if !extension.is_empty() {
 			// only for top-level resource: create the dirty and orphan tables
 			f(format!(r#"create table "{dirtytable}" ("name" text primary key on conflict ignore)"#))?;
-			f(format!(r#"create table "orphan_{name}" ("name" text primary key)"#))?;
-			f(format!(r#"create trigger "orphan_{name}" after delete on "add_{name}"
-				begin
-					insert into "orphan_{name}" values (old."{primary}");
-				end"#))?;
+			f(format!(r#"create table "orphan_{name}" ("name" text primary key on conflict ignore)"#))?;
+			f(format!(
+r#"create trigger "orphan_{name}" after delete on "add_{name}"
+begin
+	insert into "orphan_{name}" values (old."{primary}");
+end"#))?;
 		}
 		// populate resref_dict or strref_dict as needed:
 		// There are two triggers which edit "resref_dict"; we build both
@@ -1118,38 +1143,37 @@ impl<'schema> Schema<'schema> {
 			};
 			trans_insert.push_str(&trans);
 			f(format!(
-	r#"create trigger "update_{name}_{fname}"
-	instead of update on "{name}" when new."{fname}" is not null
-		and new."{fname}" <> old."{fname}"
-	begin
-		{trans}
-		insert or ignore into "{dirtytable}" values (new."{parent_key}");
-		insert into "edit_{name}" ("source", "resource", "field", "value") values
-			((select "component" from "global"), new."{primary}", '{fname}',
-			new."{fname}");
-	end"#))?;
+r#"create trigger "update_{name}_{fname}"
+instead of update of "{fname}" on "{name}"
+begin
+	{trans}
+	insert or ignore into "{dirtytable}" values (new."{parent_key}");
+	insert into "edit_{name}" ("source", "resource", "field", "value") values
+		((select "component" from "global"), new."{primary}", '{fname}',
+		new."{fname}");
+end"#))?;
 		}
 		f(format!(
-	r#"create trigger "insert_{name}"
-	instead of insert on "{name}"
-	begin
-		{trans_insert}
-		insert into "add_{name}" ({cols}) values ({newcols});
-		insert or ignore into "{dirtytable}" values (new."{parent_key}");
-	end"#, cols = self.iter(), newcols = self.iter().with_prefix("new.")))?;
+r#"create trigger "insert_{name}"
+instead of insert on "{name}"
+begin
+	{trans_insert}
+	insert into "add_{name}" ({cols}) values ({newcols});
+	insert or ignore into "{dirtytable}" values (new."{parent_key}");
+end"#, cols = self.iter(), newcols = self.iter().with_prefix("new.")))?;
 		f(format!(
-	r#"create trigger "delete_{name}"
-	instead of delete on "{name}"
-	begin
-		insert or ignore into "{dirtytable}" values (old."{parent_key}");
-		delete from "add_{name}" where "{primary}" = old."{primary}";
-	end"#))?;
+r#"create trigger "delete_{name}"
+instead of delete on "{name}"
+begin
+	insert or ignore into "{dirtytable}" values (old."{parent_key}");
+	delete from "add_{name}" where "{primary}" = old."{primary}";
+end"#))?;
 		f(format!(
-	r#"create trigger "unedit_{name}"
-	after delete on "edit_{name}"
-	begin
-		insert or ignore into "{dirtytable}" values (old."resource");
-	end"#))?;
+r#"create trigger "unedit_{name}"
+after delete on "edit_{name}"
+begin
+	insert or ignore into "{dirtytable}" values (old."resource");
+end"#))?;
 		Ok (())
 	}
 	pub fn select_statement(&self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
@@ -1198,8 +1222,11 @@ impl<'schema> Schema<'schema> {
 	///
 	/// Utility wrapper for [`rusqlite::params_from_iter`].
 	/// Usage: `schema.params_from(|fname, ftype| { Ok(parameter...) })?`
-	pub fn params_from<T: rusqlite::ToSql+Debug,F: Fn(&str, FieldType)->Result<T>>(&self, f:F)->Result<rusqlite::ParamsFromIter<Vec<T>>> {
-		let params = self.iter().into_iter()
+	pub fn params_from<T,F>(&self, f: F)->Result<rusqlite::ParamsFromIter<Vec<T>>>
+	where T: rusqlite::ToSql + Debug,
+		F: Fn(&str, FieldType)->Result<T>
+	{
+		let params = self.columns().into_iter()
 			.map(|Field{fname, ftype, ..}| f(fname, *ftype))
 			.collect::<Result<Vec<T>>>()?;
 		trace!("collected parameters: {params:?}");
@@ -1252,16 +1279,23 @@ begin"#);
 	}).unwrap();
 	write!(&mut create, r#") as "a"
 left join "strref_dict" as "b" on "a"."native" = "b"."native"
-where "a"."native" is not null"#)?;
+where typeof("a"."native") = 'text'"#)?;
 	write!(&mut trigger, "end")?;
 	f(create)?;
 	f(trigger)?;
+	// This triggers makes any update of `strref` in `new_strings`
+	// (with any dummy value; we use -1) produce the lowest still-available
+	// strref; see
+	// https://stackoverflow.com/questions/24587799/returning-the-lowest-integer-not-in-a-list-in-sql
 #[allow(clippy::useless_format)]
 	f(format!(r#"create trigger "update_new_strings"
-instead of update on "new_strings"
+instead of update of "strref" on "new_strings"
 begin
 	insert into "strref_dict"("native","strref")
-	values (new."native",new."strref");
+	values (new."native",
+		ifnull((select min("strref")+1 from "strref_dict"
+			where "strref"+1 not in (select "strref" from "strref_dict")),
+			(select "strref_count" from "global")));
 end"#))?;
 	Ok(())
 }
@@ -1274,8 +1308,7 @@ pub(crate) mod database {
 //!  - [`Resource`] trait: connect a Rust structure to a SQL row.
 use crate::prelude::*;
 use rusqlite::{Row};
-use std::marker::PhantomData;
-use crate::gametypes::*;
+use crate::resources::*;
 use crate::gamefiles::GameIndex;
 use crate::schemas::Schema;
 
@@ -1318,45 +1351,6 @@ impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
 }
 
 // III. Structure accessing directly SQL data
-/// Interface for a game resource.
-///
-/// This trait is implemented by the corresponding derive macro.
-///
-/// This is the main trait for game resources, containing the low-level
-/// interaction with the database (`ins`, `sel`). Concrete
-/// implementations are provided by the `Resource` derive macro.
-pub trait Resource: Sized {
-	/// Additional data saved in the same row as a game object; usually
-	/// some identifier for the object (e.g. its resref).
-	type Context;
-	/// The internal description of the fields of this structure, as used
-	/// to produce SQL statements.
-	const SCHEMA: Schema<'static>;
-	/// The low-level insert function for an object to a database row.
-	fn ins(&self, s: &mut Statement<'_>, key: &Self::Context)->rusqlite::Result<()>;
-	/// The low-level select function from a database row to an object.
-	fn sel(r: &Row<'_>)->rusqlite::Result<(Self, Self::Context)>;
-	/// The select Statement for an object.
-	///
-	/// The ID field (if present) is not selected. (This is used only for
-	/// building game files, where this field is not used anyway).
-	///
-	/// The name of the table is `{n1}{n2}`; since many tables are built in
-	/// two parts (e.g. `res_{name}`, `strings_{lang}`),
-	/// this avoids calling `format!` on the
-	/// caller side and slightly simplifies the API.
-	///
-	/// This returns a [`Result<TypedStatement>`]: it is possible to iterate
-	/// over the result and recover structures of the original type.
-	fn select_query_gen(db: &impl DbInterface, n1: impl Display, n2: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
-		let s = Self::SCHEMA.select_statement(n1, n2, cond);
-		Ok(TypedStatement(db.prepare(&s)?, PhantomData))
-	}
-	/// Particular case of SELECT statement used for saving to game files.
-	fn select_query(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
-		Self::select_query_gen(db, "out_", Self::SCHEMA, s)
-	}
-}
 /// A statement aware of the associated table type.
 ///
 /// We need a few types parametrized by a Resource:
@@ -1364,7 +1358,8 @@ pub trait Resource: Sized {
 ///  - `TypedRows`: the iterator producing Resource objects from the query.
 #[derive(Debug)]
 pub struct TypedStatement<'stmt, T: Resource> (Statement<'stmt>, PhantomData<T>);
-impl<T: Resource> TypedStatement<'_, T> {
+impl<'stmt,T: Resource> TypedStatement<'stmt, T> {
+	pub fn new(stmt: Statement<'stmt>)->Self { Self(stmt, PhantomData) }
 	/// Iterates over this statement, returning (possibly) Rust structs of
 	/// the type associated with this table.
 	pub fn iter<P: rusqlite::Params>(&mut self, params: P) ->rusqlite::Result<TypedRows<'_,T>> {
@@ -1396,13 +1391,14 @@ impl<T: Resource> Iterator for TypedRows<'_,T> {
 			};
 			self.index+= 1;
 			let t = T::sel(row);
-			if t.is_err() {
-				println!("cannot read a {} from row {}", std::any::type_name::<T>(),
-					self.index);
+			match t {
+			Err(e) => {
+				println!("cannot read a {} from row {}: {e:?}",
+				std::any::type_name::<T>(), self.index);
 				row.dump();
-				continue
+				continue },
+			_ => return Some(t)
 			}
-			return Some(Ok(t.unwrap()))
 		}
 		None
 	}
@@ -1460,18 +1456,16 @@ pub trait DbInterface {
 		// be modified. The simplest way is to delete them from the dictionary.
 		let bound = base_strings + new_strings;
 		debug!("reallocating strrefs up to {bound}");
+		// we update `new_strings` with a dummy value (-1);
+		// thanks to the trigger, SQLite replaces this for us by
+		// the lowest available strref:
 		self.batch(format!(r#"
 delete from "strref_dict"
 where
 	"native" not in (select "native" from "new_strings")
 or
 	"strref" >= {bound};
-insert into "strref_dict" ("native", "strref")
-select "native",
-	ifnull((select min("strref")+1 from "strref_dict"
-		where "strref" not in (select "strref" from "strref_dict")),
-		(select "strref_count" from "global"))
-from "new_strings" where "strref" is null"#))
+update "new_strings" set "strref"=-1 where "strref" is null"#))
 			.context("cannot generate new strrefs")?;
 		info!("translated strrefs");
 		Ok(())
@@ -1509,11 +1503,18 @@ from "new_strings" where "strref" is null"#))
 					file.push('.');
 					file.push_str(extension);
 					fs::remove_file(&file)
-						.with_context(|| format!(r#"cannot remove file "{file}""#))?;
+					.or_else(|e| match e.kind() {
+						io::ErrorKind::NotFound => {
+						warn!(r#"should have removed orphan file "{file}""#);
+						Ok(())
+					},
+						_ => Err(e) })
+					.with_context(|| format!(r#"cannot remove file "{file}""#))?;
 				}
 			}
 			any_ok(())
-		})?;
+		})
+			.context("cannot clear orphan resources")?;
 		Ok(())
 	}
 	/// Cleans the dirty bit from all resources after saving.
@@ -1601,9 +1602,10 @@ impl GameDB {
 			fs::remove_file(db_file)
 			.with_context(|| format!("cannot remove DB file: {db_file:?}"))?;
 		}
-		let mut db = Self::open(db_file)?;
+		let mut db = Self::open(db_file)
+			.with_context(|| format!("cannot open DB file: {db_file:?}"))?;
 		db.transaction(|db| {
-			db.execute_batch(r#"
+			db.batch(r#"
 create table "global" ("component" text, "strref_count" integer);
 insert into "global"("component") values (null);
 create table "override" ("resref" text, "ext" text);
@@ -1615,11 +1617,11 @@ create index "strref_dict_reverse" on "strref_dict" ("strref");
 			RESOURCES.map_mut(|schema,_| {
 				debug!("  creating tables for resource '{schema}'");
 				schema.create_tables_and_views(|s| db.exec(s))
-			})?;
+			}).context("cannot create main tables and views")?;
 			crate::schemas::create_new_strings(|s| db.exec(s))?;
 			Ok(())
 		}).context("creating global tables")?;
-		db.create_language_tables(game)?;
+		db.create_language_tables(game).context("cannot create language tables")?;
 		Ok(db)
 	}
 	/// Creates (but does not fill) all per-language tables.
@@ -1634,11 +1636,11 @@ create index "strref_dict_reverse" on "strref_dict" ("strref");
 // 		const SCHEMA: &str = r#"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer)"#;
 // 		const SCHEMA1: &str = r#"("native" string primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer)"#;
 		for (lang, _) in game.languages.iter() {
-			db.execute_batch(&format!(r#"
-	create table "res_strings_{lang}"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer);
+			db.batch(&format!(r#"
+	create table "load_strings_{lang}"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer);
 	create table "translations_{lang}"("native" string primary key, "string" text, "sound" text, "volume" integer, "pitch" integer);
 	create view "strings_{lang}" as
-	select "strref", "string",  "flags", "sound", "volume", "pitch", 0 as "raw" from "res_strings_{lang}" union
+	select "strref", "string",  "flags", "sound", "volume", "pitch", 0 as "raw" from "load_strings_{lang}" union
 	select "strref", ifnull("string", "native"), "flags", ifnull("sound",''), ifnull("volume",0), ifnull("pitch",0), ("string" is null)
 from "new_strings"
 	left join "translations_{lang}" using ("native");
@@ -1663,7 +1665,8 @@ from "new_strings"
 			let mut base = DbInserter::new(db)?;
 			game.for_each(|restype, resref,  handle| {
 				trace!("found resource {}.{:#04x}", resref, restype.value);
-				base.register(&resref)?;
+				base.register(&resref)
+					.with_context(|| format!("could not register resref:{resref}"))?;
 				if restype == Item::SCHEMA.restype { base.load::<Item>(resref, handle) }
 				else { Ok(()) }
 			})?;
@@ -1690,7 +1693,7 @@ impl<'a> DbInserter<'a> {
 	pub fn new(db: &'a impl DbInterface)->Result<Self> {
 		Ok(Self { // db,
 		tables: RESOURCES.map(|schema, _|
-			db.prepare(&schema.insert_statement("or ignore", "res_"))
+			db.prepare(&schema.insert_statement("or ignore", "load_"))
 			.with_context(|| format!("insert statement for table '{schema}'"))
 		)?,
 		resource_count: RESOURCES.map(|_,_| Ok::<usize,rusqlite::Error>(0))?,
@@ -1730,8 +1733,9 @@ pub(crate) mod gamestrings {
 //! This is the only mod knowing the internals of [`GameString`] struct.
 use crate::prelude::*;
 use crate::progress::{Progress};
-use crate::database::{self,Resource,DbInterface};
+use crate::database::{self,DbInterface};
 use crate::gamefiles::{Pack,GameIndex};
+use crate::resources::Resource;
 
 #[derive(Debug,Pack)]
 struct TlkHeader {
@@ -1800,8 +1804,9 @@ pub fn save_language(vec: &[GameString], path: &impl AsRef<Path>)->Result<()> {
 	// FIXME: this could be done with a prepared statement and iterator
 	// (saving the (rather big) memory for the whole vector of strings),
 	// but rusqlite does not export `reset`...
+	let path = path.as_ref();
 	let mut file = fs::File::create(path)
-		.with_context(|| format!("cannot create TLK file: {:?}", path.as_ref()))?;
+		.with_context(|| format!("cannot create TLK file: {path:?}"))?;
 	TlkHeader { lang: 0, nstr: vec.len() as u32,
 		offset: (26*vec.len() + 18) as u32 }.pack(&mut file)?;
 	// first string in en.tlk has: (flags: u16=5, offset=0, strlen=9)
@@ -1815,7 +1820,7 @@ pub fn save_language(vec: &[GameString], path: &impl AsRef<Path>)->Result<()> {
 	}
 	for s in vec {
 		file.write_all(s.string.as_bytes())
-			.with_context(|| format!("cannot write strings to TLK file:{:?}", path.as_ref()))?;
+			.with_context(|| format!("cannot write strings to TLK file:{path:?}"))?;
 	}
 	Ok(())
 }
@@ -1834,7 +1839,7 @@ pub fn load_languages(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 fn load_language(db: &impl DbInterface, langname: &str, path: &(impl AsRef<Path> + Debug))->Result<()> {
 	let bytes = fs::read(path)
 		.with_context(|| format!("cannot open strings file: {path:?}"))?;
-	let mut q = db.prepare(&format!(r#"insert into "res_strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
+	let mut q = db.prepare(&format!(r#"insert into "load_strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
 	let itr = GameStringsIterator::try_from(bytes.as_ref())?;
 	let pb = Progress::new(itr.len(), langname);
 	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
@@ -1864,11 +1869,12 @@ pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 		let mut sel_str = GameString::select_query_gen(db, "strings_", lang, "")?;
 		for row in sel_str.iter(())? {
 			if row.is_db_malformed() { continue }
-			let (gamestring, (strref,)) = row.unwrap();
+			let (gamestring, (strref,)) = row?;
 			vec[strref] = gamestring;
 		}
 		let target = format!("{lang}.tlk");
-		save_language(&vec, &target)?;
+		save_language(&vec, &target)
+		.with_context(|| format!("could not save strings for language '{lang}'"))?;
 		info!("updated strings in {target:?}; file now contains {count} entries");
 	}
 	Ok(())
@@ -1903,24 +1909,9 @@ pub(crate) mod lua_api {
 use mlua::{Lua,ExternalResult};
 
 use crate::prelude::*;
-use crate::schemas::{Schema};
-use crate::gametypes::RESOURCES;
+use crate::resources::RESOURCES;
+use crate::schemas::FieldType;
 /// Runtime errors during interface between SQL and Lua.
-#[derive(Debug)]
-enum Error{
-	UnknownTable(String),
-// 	BadType(String),
-// 	BadArgumentNumber(usize, &'static str),
-	MissingArgument,
-	ExtraArgument,
-}
-impl Display for Error {
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		fmt::Debug::fmt(&self, f)
-	}
-}
-impl std::error::Error for Error { }
-
 /// A simple wrapper allowing `mlua::Value` to be converted to SQL.
 #[derive(Debug)]
 struct LuaToSql<'a>(mlua::Value<'a>);
@@ -1970,12 +1961,6 @@ fn lua_to_sql<'lua>(v: &'lua mlua::Value<'lua>)->rusqlite::Result<rusqlite::type
 	e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
 	}
 }
-/// Returns the table schema for a given table (indexed by the base name
-/// for this resource), or throws a Lua-compatible error.
-pub fn table_schema(table: &str)->Result<&Schema<'_>> {
-	RESOURCES.table_schema(table)
-		.ok_or_else(|| Error::UnknownTable(table.to_owned()).into())
-}
 /// A trivial wrapper giving a slightly better [`Debug`] implementation
 /// for Lua values (displaying the actual contents of strings).
 struct LuaInspect<'lua>(&'lua mlua::Value<'lua>);
@@ -1992,7 +1977,7 @@ impl Debug for LuaInspect<'_> {
 /// Reads an argument as the given `FromLua` type and returns it,
 /// wrapped in a `Result`.
 fn pop_arg_as<'lua, T: mlua::FromLua<'lua>>(args: &mut mlua::MultiValue<'lua>, lua:&'lua Lua)->Result<T> {
-	let arg0 = args.pop_front().ok_or(Error::MissingArgument)?;
+	let arg0 = args.pop_front().ok_or(Error::CallbackMissingArgument)?;
 	let r = T::from_lua(arg0, lua).with_context(||
 		format!("cannot convert argument to type {}", std::any::type_name::<T>()))?;
 	Ok(r)
@@ -2006,7 +1991,7 @@ fn list_keys<'lua>(db: &impl DbInterface, lua: &'lua Lua, mut args: mlua::MultiV
 	let name = pop_arg_as::<String>(&mut args, lua)
 		.context("'simod.list' callback")?;
 	trace!(r#"  first argument is "{name}""#);
-	let schema = table_schema(&name)?;
+	let schema = RESOURCES.table_schema(&name)?;
 	match args.len() {
 		0 => Ok(schema.all_keys(db, |v| sql_to_lua(v, lua))?),
 		1 => {
@@ -2015,7 +2000,7 @@ fn list_keys<'lua>(db: &impl DbInterface, lua: &'lua Lua, mut args: mlua::MultiV
 			trace!(r#"  second argument is "{key}""#);
 			Ok(schema.all_keys_with_parent(db, key, |v| sql_to_lua(v,lua))?)
 		},
-		_ => Err(Error::ExtraArgument.into()),
+		_ => Err(Error::CallbackExtraArgument.into()),
 	}
 }
 /// Implementation of `simod.select`.
@@ -2025,7 +2010,7 @@ fn list_keys<'lua>(db: &impl DbInterface, lua: &'lua Lua, mut args: mlua::MultiV
 fn select<'lua>(db: &impl DbInterface, lua: &'lua Lua, (table, rowid): (String, mlua::Value<'_>))->Result<mlua::Table<'lua>> {
 	scope_trace!("callback 'simod.select' invoked with: '{}' '{:?}'", table,
 		LuaInspect(&rowid));
-	let schema = table_schema(&table)?;
+	let schema = RESOURCES.table_schema(&table)?;
 	let tbl = lua.create_table_with_capacity(0,
 		schema.iter().len() as std::ffi::c_int)?;
 	let query = schema.select_statement("", &table,
@@ -2048,7 +2033,7 @@ fn select<'lua>(db: &impl DbInterface, lua: &'lua Lua, (table, rowid): (String, 
 				.with_context(|| format!("cannot convert value {val:?} to Lua"))?)
 				.with_context(|| format!("cannot set entry for {fname:?} to {val:?}"))?;
 		}
-		any_ok(tbl)
+		Ok(tbl)
 	}).with_context(|| format!(r#"failed to query row '{srowid}' in "{table}""#))
 }
 /// Implementation of `simod.update`.
@@ -2061,16 +2046,14 @@ fn update(db: &impl DbInterface, (table, key, field, value): (String, String, St
 		table, key, field, LuaInspect(&value));
 	let s = format!(
 		r#"update "{table}" set "{field}"=? where "{primary}"='{key}'"#,
-		primary = table_schema(&table)?.primary());
+		primary = RESOURCES.table_schema(&table)?.primary());
 	trace!("executing sql: {s} {:?}", LuaInspect(&value));
 	db.execute(&s, (LuaToSql(value),))?;
 	Ok(())
 }
 /// Implementation of `simod.insert`.
 fn insert(db: &impl DbInterface, (table, vals, context): (String, mlua::Table<'_>, mlua::Table<'_>))->Result<()> {
-	use crate::schemas::{FieldType};
-	let schema = table_schema(&table)?;
-	trace!("schema for {table}: {schema:?}");
+	let schema = RESOURCES.table_schema(&table)?;
 	let mut stmt = db.prepare(&schema.insert_statement("", ""))?;
 	let params = schema.params_from(|fname, ftype| {
 		if ftype == FieldType::Rowid { Ok(LuaToSql(mlua::Value::Nil)) }
@@ -2088,6 +2071,14 @@ fn insert(db: &impl DbInterface, (table, vals, context): (String, mlua::Table<'_
 		trace!("read subresource {table} with rowid {rowid}; assigning it to field {primary}", primary = schema.primary());
 		context.set(schema.primary(), rowid)?;
 	}
+	Ok(())
+}
+/// Implementation of `simod.delete`.
+fn delete(db: &impl DbInterface, (table, key): (String, mlua::Value<'_>))->Result<()> {
+	let schema = RESOURCES.table_schema(&table)?;
+	let primary = schema.primary();
+	db.execute(format!(r#"delete from "{schema}" where "{primary}"=?"#),
+		(LuaToSql(key),))?;
 	Ok(())
 }
 /// Runs the lua script for adding a mod component to the database.
@@ -2145,6 +2136,8 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 			|_lua, args| update(&db, args).to_lua_err())?)?;
 		simod.set("insert", scope.create_function(
 			|_lua, args| insert(&db, args).to_lua_err())?)?;
+		simod.set("delete", scope.create_function(
+			|_lua, args| delete(&db, args).to_lua_err())?)?;
 		lua.globals().set("simod", simod)?;
 
 		info!("loading file {lua_file:?}");
@@ -2155,7 +2148,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 }
 } // mod lua_api
 
-pub mod gametypes;
+pub(crate) mod resources;
 
 use crate::prelude::*;
 use clap::Parser;
@@ -2164,7 +2157,7 @@ fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
 use gamefiles::{GameIndex};
 use progress::{Progress};
-use gametypes::*;
+use resources::*;
 
 /// Saves all modified game strings and resources to current directory.
 ///
@@ -2332,7 +2325,7 @@ fn main() -> Result<()> {
 				RESOURCES.map(|schema,_| { println!("{schema}"); any_ok(()) })?;
 			},
 			Some(s) => {
-				let schema = lua_api::table_schema(&s)?;
+				let schema = RESOURCES.table_schema(&s)?;
 				for crate::schemas::Field { fname, ftype, .. } in schema.iter() {
 					println!("{fname:30}{}", ftype.to_lua());
 				}

@@ -203,7 +203,9 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 		add_schema(fieldname.as_str(), &ty, current.extra.as_str())
 			.to_tokens(&mut schema);
 		quote!{ self.#ident, }.to_tokens(&mut params);
-		quote!{ #ident: row.get::<_,#ty>(#ncol)?, }.to_tokens(&mut build);
+		quote!{ #ident: row.get::<_,#ty>(#ncol)
+			.context(concat!("cannot read field ", stringify!(#ncol)))?, }
+			.to_tokens(&mut build);
 		ncol+= 1;
 	}
 	let payload_len = ncol;
@@ -213,9 +215,12 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	for (keycol_in, (fieldname, ty, extra)) in context.iter().enumerate() {
 		add_schema(fieldname.as_str(), ty, extra.as_str()).to_tokens(&mut schema);
 		let kc = pm2::Literal::isize_unsuffixed(keycol_in as isize);
+		let sty = toks_to_string(ty);
 		quote!{ #ty, }.to_tokens(&mut ctx);
 		quote!{ k.#kc, }.to_tokens(&mut params);
-		quote!{ row.get_unwrap::<_,#ty>(#ncol), }.to_tokens(&mut build_key);
+		quote!{ row.get::<_,#ty>(#ncol)
+			.context(concat!("cannot read field ", stringify!(#ncol), ": ", #fieldname, " as " , #sty))?, }
+			.to_tokens(&mut build_key);
 		ncol+= 1;
 	}
 	// Search through foreign key constraints to locate the parent resource:
@@ -238,7 +243,7 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	}
 	let ResourceInfo { name, extension, restype, .. } = resource_info;
 	let mut code = quote! {
-		impl #generics crate::database::Resource for #ident #generics {
+		impl #generics crate::resources::Resource for #ident #generics {
 			type Context = (#ctx);
 			const SCHEMA: crate::schemas::Schema<'static> = crate::schemas::Schema{
 				name: #name,
@@ -249,7 +254,7 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 			fn ins(&self, s: &mut crate::rusqlite::Statement, k: &Self::Context)->crate::rusqlite::Result<()> {
 				s.execute(rusqlite::params![#params])?; Ok(())
 			}
-			fn sel(row: &crate::rusqlite::Row)->crate::rusqlite::Result<(Self, Self::Context)> {
+			fn sel(row: &crate::rusqlite::Row)->Result<(Self, Self::Context)> {
 				Ok((Self{ #build }, (#build_key)))
 			}
 		}
@@ -336,11 +341,11 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 		let field = Ident::new(name, Span::call_site());
 		let q = quote!{ #[allow(missing_docs)] pub #field: T, };
 		q.to_tokens(&mut fields);
-		quote!{ #field: f(&<#ty as crate::database::Resource>::SCHEMA,&self.#field)?, }
+		quote!{ #field: f(&<#ty as crate::resources::Resource>::SCHEMA,&self.#field)?, }
 			.to_tokens(&mut map);
 		quote!{ #field: (), }.to_tokens(&mut data);
-		quote!{ let sch = &<#ty as crate::database::Resource>::SCHEMA;
-			if s == sch.to_string() { return Some(sch) } }
+		quote!{ let sch = &<#ty as crate::resources::Resource>::SCHEMA;
+			if s == sch.to_string() { return Ok(sch) } }
 			.to_tokens(&mut table_schema);
 	}
 	});
@@ -368,9 +373,12 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 			pub fn map_mut<U: Debug,E,F:FnMut(&crate::schemas::Schema,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources<U>,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData, #map })
 			}
-			/// Given a SQL table name, returns the schema for this table.
-			pub fn table_schema(&self, s: &str)->Option<&'static crate::schemas::Schema> {
-				#table_schema; None }
+			/// Given a SQL table name, returns the schema for this table,
+			/// or throws an appropriate error.
+			pub fn table_schema(&self, s: &str)->Result<&'static crate::schemas::Schema> {
+				#table_schema;
+				Err(Error::UnknownTable(s.to_owned()).into())
+				}
 		}
 	};
 	code.into()
