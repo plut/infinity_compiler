@@ -1,9 +1,11 @@
-# Why a new modding tool?
+# Design goals
 
-This should offer the following advantages over WeiDU mods,
-either in terms of robustness or in ease-of-use for mod authors.
+Obviously, there already exists a perfectly fine tool for IE modding.
+However, starting from scratch allows us to design
+with a number of useful properties in mind.
 
-## Replacing the mod stack by a proper database
+## Robustness
+### Replacing the mod stack by a proper database
 
 The database offers at any given time a coherent view of all
 currently-installed mods. Uninstalling a single mod can be done by
@@ -13,7 +15,7 @@ mods installed) compared to WeiDU's stack model (when modifying a mod
 deep down the stack requires recomputing the whole stack, which has O(n)
 cost).
 
-## Easier conflict detection between mods
+### Easier conflict detection between mods
 
 With whole access to the database it becomes trivial to detect when two
 mods are trying to access the same resource.
@@ -21,7 +23,7 @@ mods are trying to access the same resource.
 (This is still **TODO** however; mostly, we need to fix an interface
 about what to do in the case of conflict).
 
-## Namespacing
+### Namespacing
 
 Identifiers for game resources and strings are abstracted as strings
 and namespaced per mod component.
@@ -36,7 +38,7 @@ a number of “bad behaviours” by mod authors,
 such as fully overwriting a game file
 or using inconsistent case for file names.
 
-## Translations
+### Translations
 
 This tool uses [`.po`
 files](https://www.gnu.org/software/gettext/manual/html_node/PO-Files.html)
@@ -55,7 +57,19 @@ making it easy to annotate syntactically ambiguous sentences
 (e.g. “Guard” may be either a verb or a noun in English;
 both cases have different translations in most languages).
 
-## Mod writing in SQL or Lua
+### Portability
+
+The tool is mostly written in Rust, which takes great pains to be as
+portable as possible; and mod scripts written in Lua should be portable
+by construction.
+
+In particular, it is a design goal to prevent mod authors from needing to
+run shell scripts or batch files (which is a nightmare from a maintenance
+POV).
+
+
+## Ease-of-use
+### Mod writing in SQL or Lua
 
 This tool offers two levels of API for accessing the database.
 The first level is plain SQL given by the description of the database;
@@ -82,22 +96,12 @@ themselves.
 The SQL interface also allows authors to write mods in any language
 containing a library for SQL access.
 
-## Mod manager
+### Mod manager
 
 **TODO**: define a common API from the Lua side for describing a mod +
 metadata (author, description, compatibility list)
 and write on the an interactive mod selection tool which uses this mod
 database.
-
-## Portability and robustness
-
-The tool is mostly written in Rust, which takes great pains to be as
-portable as possible; and mod scripts written in Lua should be portable
-by construction.
-
-In particular, it is a design goal to prevent mod authors from needing to
-run shell scripts or batch files (which is a nightmare from a maintenance
-POV).
 
 ## Performance
 
