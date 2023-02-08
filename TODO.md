@@ -4,7 +4,6 @@
  - [x] improve backup procedure: a full backup as part of init
  - [x] a mod `base_types` for chaff such as SqlType etc.
  - [x] a mod `schema` for Schema + Resource
- - [ ] rename `gametypes` as `resources`
  - [x] deleted resources
   - [x] we need to know which resources have been deleted since last save
   - [x] this needs to be updated even when deleting from underlying
@@ -22,6 +21,8 @@
  - [x] `insert`
  - [ ] `delete`
 ## Argument checking
+ - [ ] `current`, `namespace` handling
+ - [ ] strref namespacing
  - [ ] arguments to function calls
  - [ ] values for filling db
  - [ ] from lua or rust?
@@ -51,6 +52,7 @@
    metadata: name, categorization, description, code (function or string),
    compatibility
 # Other functions
+ - [ ] rename `gametypes` as `resources`
  - [ ] debug output is a bit of a mess: clean it
  - add a few functions:
   - [ ] `translate`: lua to .po

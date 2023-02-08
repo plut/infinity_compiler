@@ -41,7 +41,7 @@ pub(crate) use joinery::JoinableIterator;
 
 #[allow(unused_imports)]
 pub(crate) use std::ops::{Deref};
-pub(crate) use std::fmt::{self,Display,Debug,Formatter};
+pub(crate) use std::fmt::{self,Display,Debug,Formatter,Write as FWrite};
 pub(crate) use std::fs::{self,File};
 #[allow(unused_imports)]
 pub(crate) use std::io::{self,Cursor,Read,Write,Seek,SeekFrom};
@@ -190,6 +190,8 @@ impl<const N: usize> AsRef<str> for StaticString<N> {
 }
 impl<const N: usize> Debug for StaticString<N> {
 	fn fmt(&self, f:&mut Formatter<'_>) -> fmt::Result {
+		// since we write individual chars to `f`,
+		// we need to bring into scope its `Write` implem.:
 		use fmt::Write;
 		f.write_char('"')?;
 		for c in &self.bytes {
@@ -431,7 +433,6 @@ impl Resref {
 pub struct Strref { value: i32, }
 impl Display for Strref {
 	fn fmt(&self, mut f: &mut Formatter<'_>)->std::result::Result<(),fmt::Error>{
-		use fmt::Write;
 		write!(&mut f, "@{}", self.value)
 	}
 }
@@ -1017,7 +1018,6 @@ impl<'schema> Schema<'schema> {
 	/// The parameters are the table name (not necessarily matching the
 	/// name of the schema) and the string defining extra columns, if any.
 	fn create_table(&self, name: &str, more: &str)->String {
-		use fmt::Write;
 		let mut s = format!("create table \"{name}\" (");
 		let mut isfirst = true;
 		for Field { fname, ftype, extra, .. } in self.iter() {
@@ -1031,7 +1031,6 @@ impl<'schema> Schema<'schema> {
 	}
 	/// Returns the SQL statement creating the main view for this schema.
 	fn create_main_view(&self)->String {
-		use fmt::Write;
 		let Schema { name, .. } = self;
 		let primary = self.primary();
 		let mut view = format!(r#"create view "{name}" as
@@ -1045,11 +1044,9 @@ impl<'schema> Schema<'schema> {
 	/// Returns the SQL for creating the output view of a resource.
 	fn create_output_view(&self)->String {
 		let n = '\n';
-		use fmt::Write;
-		let name = &self.name;
 		let parent_key = self.resref();
-		let mut select = format!(r#"create view "out_{name}" as select{n}  "#);
-		let mut source = format!(r#"{n}from "{name}" as "a"{n}"#);
+		let mut select = format!(r#"create view "out_{self}" as select{n}  "#);
+		let mut source = format!(r#"{n}from "{self}" as "a"{n}"#);
 		for Field { fname: f, ftype, .. } in self.iter() {
 			match ftype {
 				FieldType::Resref => {
@@ -1218,7 +1215,6 @@ impl Display for Schema<'_> {
 /// This also builds a few triggers which mark resources as dirty
 /// whenever their strrefs are reassigned.
 pub fn create_new_strings<T>(f: impl Fn(String)->Result<T>)->Result<()> {
-	use fmt::Write;
 	let mut create = String::from(
 	r#"create view "new_strings"("native","strref","flags") as
 select "a"."native", "strref", "flags"
@@ -1260,6 +1256,7 @@ where "a"."native" is not null"#)?;
 	write!(&mut trigger, "end")?;
 	f(create)?;
 	f(trigger)?;
+#[allow(clippy::useless_format)]
 	f(format!(r#"create trigger "update_new_strings"
 instead of update on "new_strings"
 begin
@@ -1594,7 +1591,7 @@ impl GameDB {
 	///    de-namespacing (all resrefs in this list translate to themselves);
 	/// - `resref_dict`: translations of resrefs (from namespaced to 8 bytes);
 	/// - `strref_dict`: translations of strrefs (from string key to 4-bytes int);
-	/// - `new_strings`: (built in [`Schema::create_new_strings_sql`])
+	/// - `new_strings`: (built in [`crate::schemas::create_new_strings`])
 	///    a view of all strrefs currently introduced by mods.
 	///    This gets compiled into `strref_dict` as part of `save`.
 	pub fn create(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Self> {
@@ -1975,7 +1972,7 @@ fn lua_to_sql<'lua>(v: &'lua mlua::Value<'lua>)->rusqlite::Result<rusqlite::type
 }
 /// Returns the table schema for a given table (indexed by the base name
 /// for this resource), or throws a Lua-compatible error.
-fn table_schema(table: &str)->Result<&Schema<'_>> {
+pub fn table_schema(table: &str)->Result<&Schema<'_>> {
 	RESOURCES.table_schema(table)
 		.ok_or_else(|| Error::UnknownTable(table.to_owned()).into())
 }
@@ -2261,20 +2258,32 @@ struct RuntimeOptions {
 /// Subcommands passed to the executable.
 #[derive(clap::Subcommand,Debug)]
 enum Command {
+	/// Initializes the database from the game installation.
 	Init {
-#[arg(short='B',default_value_t=false,help="ignore existing backup")]
-		ignore_backup: bool,
+#[arg(short='B',default_value_t=false,help="Don't abort even if backup fails.")]
+		ignore_backup_fail: bool,
 	},
+	/// Saves the database to the game installation (differential save).
 	Save,
 	FullSave,
 	Restore,
+	/// Installs a mod component by running the associated Lua script.
 	Add {
+#[arg(help="The name of the mod script to install.")]
 		target: String,
 	},
 	Remove,
 	Select,
 	Show {
 		target: String,
+	},
+	/// Displays the schema for a given game resource.
+	///
+	/// If no name is given then the list of game resources is displayed
+	/// instead.
+	Schema {
+#[arg(help="The name of the SQL table to display.")]
+		table: Option<String>,
 	},
 }
 
@@ -2307,8 +2316,8 @@ fn main() -> Result<()> {
 	}.context("cannot set up logging")?;
 	let db_file = options.database.unwrap();
 	match options.command {
-		Command::Init{ ignore_backup, } => {
-			game.maybe_backup(game.root.join("simod").join("backup"), ignore_backup)?;
+		Command::Init{ ignore_backup_fail, } => {
+			game.maybe_backup(game.root.join("simod").join("backup"), ignore_backup_fail)?;
 			GameDB::create(&db_file,&game)?.load(&game)?
 		},
 		Command::FullSave => command_save_full(&game, GameDB::open(db_file)?)?,
@@ -2318,6 +2327,17 @@ fn main() -> Result<()> {
 			command_show(&GameDB::open(db_file)?, target)?,
 		Command::Add{ target, .. } =>
 			lua_api::command_add(GameDB::open(db_file)?, &target)?,
+		Command::Schema{ table, .. } => match table {
+			None => {
+				RESOURCES.map(|schema,_| { println!("{schema}"); any_ok(()) })?;
+			},
+			Some(s) => {
+				let schema = lua_api::table_schema(&s)?;
+				for crate::schemas::Field { fname, ftype, .. } in schema.iter() {
+					println!("{fname:30}{}", ftype.to_lua());
+				}
+			},
+			},
 		_ => todo!(),
 	};
 	info!("execution terminated with flying colors");

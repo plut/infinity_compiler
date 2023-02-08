@@ -20,6 +20,7 @@ An ad-hoc library is also being built to make this comfortable for mod
 authors (TODO).
 
 ## Resource view
+
 For each resource `X`:
 
  - `X` is the user-facing view of all resources (original and modded).
@@ -27,6 +28,10 @@ For each resource `X`:
  - `res_X` is the table of all original resources;
  - `add_X` is the table of all mod-inserted resources;
  - `edit_X` is the table of all mod changes on this resource;
+ - `out_X` is the view used for saving game resources.
+
+> In general, mods should only interact with the main view `X`.
+> The structure of all other views listed here is **unstable**.
 
 For top-level resources, a few additional tables are used to mark their
 status in the database with respect to the override directory:

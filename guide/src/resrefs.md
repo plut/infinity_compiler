@@ -12,7 +12,7 @@ arbitrary strings (hereafter designated as “longrefs”).
 ## Namespacing
 
 To protect from resource conflicts, mod components generally do not
-access globally.
+access them globally.
 
 To each mod component is attached a *namespace*, in the form of a string.
 Whenever a mod accesses a resource identifier `R`
@@ -29,6 +29,15 @@ assuming that `N` is the current namespace.
 These rules allow referring to either a base game resource (case 3)
 or a resource from another mod (case 2), while still providing namespace
 separation by default (case 1).
+
+### Namespacing and storage
+
+When stored inside the database,
+longrefs are stored as fully-qualified strings
+(in the form `"namespace/identifier"`).
+Original game resrefs are stored in their original form
+as 8-byte strings.
+
 
 ### Implicit resref access
 
