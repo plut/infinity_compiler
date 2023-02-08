@@ -78,7 +78,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">4.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">4.2.</strong> String and translations</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">4.3.</strong> Translations</a></li></ol></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">4.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">4.2.</strong> Game strings</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">4.3.</strong> Translations</a></li></ol></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -269,7 +269,12 @@ This is the</li>
 <li><code>res_X</code> is the table of all original resources;</li>
 <li><code>add_X</code> is the table of all mod-inserted resources;</li>
 <li><code>edit_X</code> is the table of all mod changes on this resource;</li>
+<li><code>out_X</code> is the view used for saving game resources.</li>
 </ul>
+<blockquote>
+<p>In general, mods should only interact with the main view <code>X</code>.
+The structure of all other views listed here is <strong>unstable</strong>.</p>
+</blockquote>
 <p>For top-level resources, a few additional tables are used to mark their
 status in the database with respect to the override directory:</p>
 <ul>
@@ -324,7 +329,7 @@ namely, the characters <code>&quot;+&lt;&gt;/\|?*:</code> are forbidden.</p>
 arbitrary strings (hereafter designated as “longrefs”).</p>
 <h2 id="namespacing-1"><a class="header" href="#namespacing-1">Namespacing</a></h2>
 <p>To protect from resource conflicts, mod components generally do not
-access globally.</p>
+access them globally.</p>
 <p>To each mod component is attached a <em>namespace</em>, in the form of a string.
 Whenever a mod accesses a resource identifier <code>R</code>
 it is translated to a longref in the following way,
@@ -340,6 +345,12 @@ using the empty namespace, e.g. as <code>&quot;/sw1h01&quot;</code>.</li>
 <p>These rules allow referring to either a base game resource (case 3)
 or a resource from another mod (case 2), while still providing namespace
 separation by default (case 1).</p>
+<h3 id="namespacing-and-storage"><a class="header" href="#namespacing-and-storage">Namespacing and storage</a></h3>
+<p>When stored inside the database,
+longrefs are stored as fully-qualified strings
+(in the form <code>&quot;namespace/identifier&quot;</code>).
+Original game resrefs are stored in their original form
+as 8-byte strings.</p>
 <h3 id="implicit-resref-access"><a class="header" href="#implicit-resref-access">Implicit resref access</a></h3>
 <p><strong>TODO:</strong> the Lua interface has the following feature:
 whenever a structure field is of the “resref” type,

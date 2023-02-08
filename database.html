@@ -77,7 +77,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html" class="active"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">4.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">4.2.</strong> String and translations</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">4.3.</strong> Translations</a></li></ol></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html" class="active"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">4.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">4.2.</strong> Game strings</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">4.3.</strong> Translations</a></li></ol></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -160,7 +160,12 @@ This is the</li>
 <li><code>res_X</code> is the table of all original resources;</li>
 <li><code>add_X</code> is the table of all mod-inserted resources;</li>
 <li><code>edit_X</code> is the table of all mod changes on this resource;</li>
+<li><code>out_X</code> is the view used for saving game resources.</li>
 </ul>
+<blockquote>
+<p>In general, mods should only interact with the main view <code>X</code>.
+The structure of all other views listed here is <strong>unstable</strong>.</p>
+</blockquote>
 <p>For top-level resources, a few additional tables are used to mark their
 status in the database with respect to the override directory:</p>
 <ul>
