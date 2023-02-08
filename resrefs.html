@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Internals: Database structure - &#x60;simod&#x60; user documentation</title>
+        <title>Resource identifiers and namespacing - &#x60;simod&#x60; user documentation</title>
         <!-- Custom HTML head -->
         <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
         <meta name="description" content="">
@@ -77,7 +77,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html" class="active"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">5.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">6.</strong> String and translations</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">7.</strong> Translations</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li class="chapter-item expanded "><a href="resrefs.html" class="active"><strong aria-hidden="true">5.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">6.</strong> String and translations</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">7.</strong> Translations</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -136,84 +136,70 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="internals-database-structure"><a class="header" href="#internals-database-structure">Internals: Database structure</a></h1>
-<p><strong>ALL STRINGS ARE UTF-8</strong>. No exceptions; we live in the 21st century.</p>
-<p>The exposed interface for accessing game objects is through a number of
-views:</p>
-<ul>
-<li><code>items</code>, <code>item_abilities</code>, <code>item_effects</code> for game items,</li>
-<li>(other views are <strong>TODO</strong>: we are building high rather than wide for
-now).</li>
-</ul>
-<p>These views implement all the infrastructure necessary for inserting and
-updating game objects; in case more detail is needed, see the
-“Internals” section below.</p>
-<p>This implies that game modding can be performed directly as SQL queries
-on a small number of tables with structure mirroring that of game files.
-An ad-hoc library is also being built to make this comfortable for mod
-authors (TODO).</p>
-<h2 id="resource-view"><a class="header" href="#resource-view">Resource view</a></h2>
-<p>For each resource <code>X</code>:</p>
-<ul>
-<li><code>X</code> is the user-facing view of all resources (original and modded).
-This is the</li>
-<li><code>res_X</code> is the table of all original resources;</li>
-<li><code>add_X</code> is the table of all mod-inserted resources;</li>
-<li><code>edit_X</code> is the table of all mod changes on this resource;</li>
-</ul>
-<p>For top-level resources, a few additional tables are used to mark their
-status in the database with respect to the override directory:</p>
-<ul>
-<li><code>dirty_X</code> is the table listing all resources which have been modified
-and which need to be recompiled to <code>override</code>;</li>
-<li><code>orphan_X</code> is the list of all resources which have been removed from
-the database, but not yet from the <code>override</code> directory.</li>
-</ul>
-<p>A (large) number of triggers are attached to the main view <code>X</code>:</p>
-<ul>
-<li>attempts at modifying <code>X</code> are propagated back to the appropriate table
-(either <code>add_X</code> or <code>edit_X</code>);</li>
-<li>at the same time, modifying <code>X</code> records the resource as dirty in
-<code>dirty_X</code>;</li>
-<li>deleting entries from <code>X</code> marks resources as orphan in <code>orphan_X</code>.
-The <code>res_X</code> table always contains exactly the resources found in
-<code>key/bif</code> and pre-existing override files.
-This table is never touched again after it is built by <code>simod init</code>.</li>
-</ul>
-<h2 id="game-lists-ids-files"><a class="header" href="#game-lists-ids-files">Game lists (<code>IDS</code> files)</a></h2>
-<p>TODO.</p>
-<h2 id="game-tables-2da-files"><a class="header" href="#game-tables-2da-files">Game tables (<code>2DA</code> files)</a></h2>
-<p>TODO.</p>
-<h2 id="scripts"><a class="header" href="#scripts">Scripts</a></h2>
-<p>TODO.</p>
-<h2 id="binary-resources"><a class="header" href="#binary-resources">Binary resources</a></h2>
-<p><strong>TODO:</strong></p>
-<p>Binary resources generally do not need concurrent access between various
-mods and are not handled by the database.
-Where a resref pointing to a binary resource is expected,
-the database uses instead a string referring to a file in the filesystem.</p>
-<p>When the database is saved to the filesystem,
-the filename for these resources is translated to a resref
-using the general algorithm;
-this resref in turn gives the name of the override file
-under which the resource will be saved.</p>
-<h2 id="todo"><a class="header" href="#todo">TODO</a></h2>
-<p>Special cases:</p>
-<ul>
-<li>dialog,</li>
-<li>IDs,</li>
-<li>2da,</li>
-<li>script (de)compiling,</li>
-</ul>
+                        <h1 id="resource-identifiers-and-namespacing"><a class="header" href="#resource-identifiers-and-namespacing">Resource identifiers and namespacing</a></h1>
+<p>In-game resources are identified by “resrefs”, which are 8-byte ASCII
+strings.
+These resrefs are also used as file names in the override directory,
+which puts a number of additional constraints on allowed characters:
+namely, the characters <code>&quot;+&lt;&gt;/\|?*:</code> are forbidden.</p>
+<p>Inside the <code>simod</code> database however, resources are identified by
+arbitrary strings (hereafter designated as “longrefs”).</p>
+<h2 id="namespacing"><a class="header" href="#namespacing">Namespacing</a></h2>
+<p>To protect from resource conflicts, mod components generally do not
+access globally.</p>
+<p>To each mod component is attached a <em>namespace</em>, in the form of a string.
+Whenever a mod accesses a resource identifier <code>R</code>
+it is translated to a longref in the following way,
+assuming that <code>N</code> is the current namespace.</p>
+<ol>
+<li>if the name <code>R</code> does not contain a slash character, then
+the namespace <code>N</code> is prepended: the longref is thus <code>&quot;N/R&quot;</code>;</li>
+<li>if <code>R</code> contains a slash, then it is assumed to be a fully-qualified
+longref.</li>
+<li>as a special case, resources from the base game are accessible
+using the empty namespace, e.g. as <code>&quot;/sw1h01&quot;</code>.</li>
+</ol>
+<p>These rules allow referring to either a base game resource (case 3)
+or a resource from another mod (case 2), while still providing namespace
+separation by default (case 1).</p>
+<h3 id="implicit-resref-access"><a class="header" href="#implicit-resref-access">Implicit resref access</a></h3>
+<p><strong>TODO:</strong> the Lua interface has the following feature:
+whenever a structure field is of the “resref” type,
+it is possible to assign a full structure to this field;
+this will result in the assignment being made
+with the reference to this structure instead.</p>
+<p>For instance,</p>
+<pre><code class="language-lua">small_sword = simod.item(&quot;/sw1h01&quot;);
+store.inventory:push(small_sword); -- only pushes the resref &quot;/sw1h01&quot;
+</code></pre>
+<h2 id="conversion-to-game-format"><a class="header" href="#conversion-to-game-format">Conversion to game format</a></h2>
+<p>The resource identifier strings are converted to the resref format
+when the database is saved to the filesystem.</p>
+<p>More precisely, the <code>resref_dict</code> table contains a dictionary
+between string identifiers and resrefs.
+This table is filled by triggers: whenever a game value
+pointing to a resource is modified,
+the values <code>(&quot;long_resource_name&quot;, null)</code> are inserted.
+As part of the <code>save</code> operation,
+The compiler takes care of replacing all <code>null</code> fields by
+game-unique resref as needed.</p>
+<p>(These resrefs are deduced from the long resource name by truncating and
+enumerating).</p>
+<h3 id="internal-representation-of-resrefs-from-the-base-game"><a class="header" href="#internal-representation-of-resrefs-from-the-base-game">Internal representation of resrefs from the base game</a></h3>
+<p>Internally, resrefs from the base game are imported untouched as
+longrefs (no slash character is prepended; rule 3. above actually removes
+the slash character).
+This means that longrefs without a slash always designate base resources,
+while longrefs with a slash always designate mod-owned resources.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="design.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="database.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
-                            <a rel="next" href="resrefs.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next" href="strrefs.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
                         <div style="clear: both"></div>
@@ -222,10 +208,10 @@ under which the resource will be saved.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="design.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="database.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
-                    <a rel="next" href="resrefs.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next" href="strrefs.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Internals: Database structure - &#x60;simod&#x60; user documentation</title>
+        <title>Translations - &#x60;simod&#x60; user documentation</title>
         <!-- Custom HTML head -->
         <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
         <meta name="description" content="">
@@ -77,7 +77,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html" class="active"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">5.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">6.</strong> String and translations</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">7.</strong> Translations</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">5.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">6.</strong> String and translations</a></li><li class="chapter-item expanded "><a href="translations.html" class="active"><strong aria-hidden="true">7.</strong> Translations</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -136,85 +136,14 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="internals-database-structure"><a class="header" href="#internals-database-structure">Internals: Database structure</a></h1>
-<p><strong>ALL STRINGS ARE UTF-8</strong>. No exceptions; we live in the 21st century.</p>
-<p>The exposed interface for accessing game objects is through a number of
-views:</p>
-<ul>
-<li><code>items</code>, <code>item_abilities</code>, <code>item_effects</code> for game items,</li>
-<li>(other views are <strong>TODO</strong>: we are building high rather than wide for
-now).</li>
-</ul>
-<p>These views implement all the infrastructure necessary for inserting and
-updating game objects; in case more detail is needed, see the
-“Internals” section below.</p>
-<p>This implies that game modding can be performed directly as SQL queries
-on a small number of tables with structure mirroring that of game files.
-An ad-hoc library is also being built to make this comfortable for mod
-authors (TODO).</p>
-<h2 id="resource-view"><a class="header" href="#resource-view">Resource view</a></h2>
-<p>For each resource <code>X</code>:</p>
-<ul>
-<li><code>X</code> is the user-facing view of all resources (original and modded).
-This is the</li>
-<li><code>res_X</code> is the table of all original resources;</li>
-<li><code>add_X</code> is the table of all mod-inserted resources;</li>
-<li><code>edit_X</code> is the table of all mod changes on this resource;</li>
-</ul>
-<p>For top-level resources, a few additional tables are used to mark their
-status in the database with respect to the override directory:</p>
-<ul>
-<li><code>dirty_X</code> is the table listing all resources which have been modified
-and which need to be recompiled to <code>override</code>;</li>
-<li><code>orphan_X</code> is the list of all resources which have been removed from
-the database, but not yet from the <code>override</code> directory.</li>
-</ul>
-<p>A (large) number of triggers are attached to the main view <code>X</code>:</p>
-<ul>
-<li>attempts at modifying <code>X</code> are propagated back to the appropriate table
-(either <code>add_X</code> or <code>edit_X</code>);</li>
-<li>at the same time, modifying <code>X</code> records the resource as dirty in
-<code>dirty_X</code>;</li>
-<li>deleting entries from <code>X</code> marks resources as orphan in <code>orphan_X</code>.
-The <code>res_X</code> table always contains exactly the resources found in
-<code>key/bif</code> and pre-existing override files.
-This table is never touched again after it is built by <code>simod init</code>.</li>
-</ul>
-<h2 id="game-lists-ids-files"><a class="header" href="#game-lists-ids-files">Game lists (<code>IDS</code> files)</a></h2>
-<p>TODO.</p>
-<h2 id="game-tables-2da-files"><a class="header" href="#game-tables-2da-files">Game tables (<code>2DA</code> files)</a></h2>
-<p>TODO.</p>
-<h2 id="scripts"><a class="header" href="#scripts">Scripts</a></h2>
-<p>TODO.</p>
-<h2 id="binary-resources"><a class="header" href="#binary-resources">Binary resources</a></h2>
-<p><strong>TODO:</strong></p>
-<p>Binary resources generally do not need concurrent access between various
-mods and are not handled by the database.
-Where a resref pointing to a binary resource is expected,
-the database uses instead a string referring to a file in the filesystem.</p>
-<p>When the database is saved to the filesystem,
-the filename for these resources is translated to a resref
-using the general algorithm;
-this resref in turn gives the name of the override file
-under which the resource will be saved.</p>
-<h2 id="todo"><a class="header" href="#todo">TODO</a></h2>
-<p>Special cases:</p>
-<ul>
-<li>dialog,</li>
-<li>IDs,</li>
-<li>2da,</li>
-<li>script (de)compiling,</li>
-</ul>
+                        <h1 id="translations"><a class="header" href="#translations">Translations</a></h1>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="design.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="strrefs.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
-                            </a>
-                            <a rel="next" href="resrefs.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <i class="fa fa-angle-right"></i>
                             </a>
                         <div style="clear: both"></div>
                     </nav>
@@ -222,11 +151,8 @@ under which the resource will be saved.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="design.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="strrefs.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
-                    </a>
-                    <a rel="next" href="resrefs.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <i class="fa fa-angle-right"></i>
                     </a>
             </nav>
 
