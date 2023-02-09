@@ -155,156 +155,10 @@ macro_rules! scope_trace {
 }
 pub(crate) use scope_trace;
 } // mod progress
-pub(crate) mod staticstrings {
-//! Fixed-length string used as resource identifier.
-//! 
-//! This is *slightly* different from (TODO) standard implementations in
-//! that (a) no ending zero is necessary (although one can be present,
-//! thus shortening the string), and (b) these strings (used for indexing
-//! game resources) are case-insensitive. (Since the game uses mostly
-//! uppercase, we convert on purpose to lowercase: this facilitates
-//! spotting bugs).
-use std::fmt::{self,Debug,Display,Formatter};
-use std::io::{self,Read,Write};
-use std::cmp::min;
-use crate::struct_io::Pack;
-
-/// A fixed-length string.
-#[derive(Clone,Copy)]
-pub struct StaticString<const N: usize>{ bytes: [u8; N], }
-impl<const N: usize> PartialEq<&str> for StaticString<N> {
-	fn eq(&self, other: &&str) -> bool {
-		for (i, c) in other.bytes().enumerate() {
-			if i >= N { return false }
-			if !c.is_ascii() { return false }
-			if self.bytes[i] != c { return false }
-			if c == 0u8 { return true }
-		}
-		true
-	}
-}
-impl<const N: usize> PartialEq<StaticString<N>> for StaticString<N> {
-	fn eq(&self, other: &StaticString<N>)->bool { self.bytes == other.bytes }
-}
-impl<const N: usize> From<&str> for StaticString<N> {
-	fn from(s: &str) -> Self { Self::from(s.as_bytes()) }
-}
-impl<const N: usize> From<&[u8]> for StaticString<N> {
-	fn from(s: &[u8])->Self {
-		let mut bytes = [0u8; N];
-		let n = min(s.len(), N);
-		bytes[..n].copy_from_slice(&s[..n]);
-		Self { bytes, }
-	}
-}
-impl<const N: usize> AsRef<str> for StaticString<N> {
-	fn as_ref(&self)->&str {
-		let r = self.bytes.iter().enumerate().find_map(|(i, c)| {
-			if *c == 0 { Some(i) } else { None } });
-		let n = r.unwrap_or(N);
-		std::str::from_utf8(&self.bytes[..n]).unwrap()
-	}
-}
-impl<const N: usize> Debug for StaticString<N> {
-	fn fmt(&self, f:&mut Formatter<'_>) -> fmt::Result {
-		// since we write individual chars to `f`,
-		// we need to bring into scope its `Write` implem.:
-		use fmt::Write;
-		f.write_char('"')?;
-		for c in &self.bytes {
-			if *c == 0u8 { break }
-			f.write_char(*c as char)?;
-		}
-		f.write_char('"')?;
-		f.write_fmt(format_args!("{N}"))?;
-		Ok(())
-	}
-}
-impl<const N: usize> Display for StaticString<N> {
-	fn fmt(&self, f:&mut Formatter<'_>) -> fmt::Result {
-		Display::fmt(&self.as_ref(), f)
-	}
-}
-impl<const N: usize> Pack for StaticString<N> {
-	fn unpack(f: &mut impl Read)->io::Result<Self> {
-		let mut x = [0u8; N];
-		f.read_exact(&mut x)?;
-		Ok(Self{ bytes: x, })
-	}
-	fn pack(&self, f: &mut impl Write)->io::Result<()> {
-		f.write_all(&self.bytes)
-	}
-}
-impl<const N: usize> Default for StaticString<N> {
-	fn default()->Self { Self { bytes: [0u8; N] } }
-}
-impl<const N: usize> StaticString<N> {
-	pub fn make_ascii_lowercase(&mut self) { self.bytes.make_ascii_lowercase() }
-}
-/// A struct enumerating fixed-length strings of the following form:
-/// x, x0, x1, .., x00, x01, .., x99, x000, x001, ...
-///
-/// we write additional numbers of l digits in the positions \[n-l:n-1\]
-/// (where n ∈ \[0,7\] and l ∈ \[0,7\]):
-#[derive(Debug)]
-pub struct Generator<const N: usize> {
-	buf: StaticString<N>,
-	n: usize,
-	l: usize,
-	j: usize,
-}
-impl<const N: usize> Generator<N> {
-	/// Initializes the generator from an input string.
-	///
-	/// The string is shortened to no more than N bytes, keeping only a
-	/// small subset of characters guaranteed to be valid in resrefs.
-	pub fn new(source: &str)->Self {
-		let mut buf = StaticString::<N> { bytes: [0u8; N] };
-		let mut n = 0;
-		for c in source.as_bytes() {
-			if c.is_ascii_alphanumeric() || "!#@-_".as_bytes().contains(c) {
-				buf.bytes[n] = c.to_ascii_lowercase();
-				n+= 1;
-				if n >= 8 { break }
-			}
-		}
-		Self { buf, n, l: 0, j: 0, }
-	}
-	/// Advances the generator, producing the next candidate string.
-	pub fn next(&mut self)->&StaticString<N> {
-// 		trace!("resref::fresh({source}), used {n} letters");
-		self.j+= 1;
-		if self.j > 111_111_111 {
-			// This panics after all 111_111_111 possibilities have been
-			// exhausted. Unlikely to happen irl (and then we cannot do much
-			// useful either).
-			// The last number written at any length is always (9*);
-			// we detect this to increase the length.
-			panic!("iteration exhausted");
-		}
-		let mut s = self.j+888_888_888;
-			// we start inserting right-to-left from position n-1
-			// (note: the decrement at the *beginning* of the loop prevents an
-			// usize underflow)
-		let mut i = self.n;
-		let mut is_nines = true;
-		for _ in 0..self.l {
-			i-= 1;
-			let c: u8 = (s % 10) as u8;
-			s/= 10;
-			is_nines = is_nines && (c == 9);
-			self.buf.bytes[i] = 48u8 + c;
-		}
-		if is_nines {
-			if self.n < 7 { self.n+= 1; }
-			self.l+= 1;
-		}
-		&self.buf
-	}
-}
-}// mod staticstrings
 pub(crate) mod struct_io {
-//! Basic types for interaction with SQL.
+//! Basic types for interaction with SQL and binary files.
+//! The main entry points for this module are the traits [`Pack`]
+//! and [`SqlMapped`].
 use crate::prelude::*;
 use rusqlite::{ToSql};
 use rusqlite::types::{ToSqlOutput,FromSql};
@@ -459,6 +313,154 @@ impl<T: Pack+Debug+Default> Pack for NoSql<T> {
 }
 
 } // mod sqltypes
+pub(crate) mod staticstrings {
+//! Fixed-length string used as resource identifier.
+//! 
+//! This is *slightly* different from (TODO) standard implementations in
+//! that (a) no ending zero is necessary (although one can be present,
+//! thus shortening the string), and (b) these strings (used for indexing
+//! game resources) are case-insensitive. (Since the game uses mostly
+//! uppercase, we convert on purpose to lowercase: this facilitates
+//! spotting bugs).
+use std::fmt::{self,Debug,Display,Formatter};
+use std::io::{self,Read,Write};
+use std::cmp::min;
+use crate::struct_io::Pack;
+
+/// A fixed-length string.
+#[derive(Clone,Copy)]
+pub struct StaticString<const N: usize>{ bytes: [u8; N], }
+impl<const N: usize> PartialEq<&str> for StaticString<N> {
+	fn eq(&self, other: &&str) -> bool {
+		for (i, c) in other.bytes().enumerate() {
+			if i >= N { return false }
+			if !c.is_ascii() { return false }
+			if self.bytes[i] != c { return false }
+			if c == 0u8 { return true }
+		}
+		true
+	}
+}
+impl<const N: usize> PartialEq<StaticString<N>> for StaticString<N> {
+	fn eq(&self, other: &StaticString<N>)->bool { self.bytes == other.bytes }
+}
+impl<const N: usize> From<&str> for StaticString<N> {
+	fn from(s: &str) -> Self { Self::from(s.as_bytes()) }
+}
+impl<const N: usize> From<&[u8]> for StaticString<N> {
+	fn from(s: &[u8])->Self {
+		let mut bytes = [0u8; N];
+		let n = min(s.len(), N);
+		bytes[..n].copy_from_slice(&s[..n]);
+		Self { bytes, }
+	}
+}
+impl<const N: usize> AsRef<str> for StaticString<N> {
+	fn as_ref(&self)->&str {
+		let r = self.bytes.iter().enumerate().find_map(|(i, c)| {
+			if *c == 0 { Some(i) } else { None } });
+		let n = r.unwrap_or(N);
+		std::str::from_utf8(&self.bytes[..n]).unwrap()
+	}
+}
+impl<const N: usize> Debug for StaticString<N> {
+	fn fmt(&self, f:&mut Formatter<'_>) -> fmt::Result {
+		// since we write individual chars to `f`,
+		// we need to bring into scope its `Write` implem.:
+		use fmt::Write;
+		f.write_char('"')?;
+		for c in &self.bytes {
+			if *c == 0u8 { break }
+			f.write_char(*c as char)?;
+		}
+		f.write_char('"')?;
+		f.write_fmt(format_args!("{N}"))?;
+		Ok(())
+	}
+}
+impl<const N: usize> Display for StaticString<N> {
+	fn fmt(&self, f:&mut Formatter<'_>) -> fmt::Result {
+		Display::fmt(&self.as_ref(), f)
+	}
+}
+impl<const N: usize> Pack for StaticString<N> {
+	fn unpack(f: &mut impl Read)->io::Result<Self> {
+		let mut x = [0u8; N];
+		f.read_exact(&mut x)?;
+		Ok(Self{ bytes: x, })
+	}
+	fn pack(&self, f: &mut impl Write)->io::Result<()> {
+		f.write_all(&self.bytes)
+	}
+}
+impl<const N: usize> Default for StaticString<N> {
+	fn default()->Self { Self { bytes: [0u8; N] } }
+}
+impl<const N: usize> StaticString<N> {
+	pub fn make_ascii_lowercase(&mut self) { self.bytes.make_ascii_lowercase() }
+}
+/// A struct enumerating fixed-length strings of the following form:
+/// x, x0, x1, .., x00, x01, .., x99, x000, x001, ...
+///
+/// we write additional numbers of l digits in the positions \[n-l:n-1\]
+/// (where n ∈ \[0,7\] and l ∈ \[0,7\]):
+#[derive(Debug)]
+pub struct Generator<const N: usize> {
+	buf: StaticString<N>,
+	n: usize,
+	l: usize,
+	j: usize,
+}
+impl<const N: usize> Generator<N> {
+	/// Initializes the generator from an input string.
+	///
+	/// The string is shortened to no more than N bytes, keeping only a
+	/// small subset of characters guaranteed to be valid in resrefs.
+	pub fn new(source: &str)->Self {
+		let mut buf = StaticString::<N> { bytes: [0u8; N] };
+		let mut n = 0;
+		for c in source.as_bytes() {
+			if c.is_ascii_alphanumeric() || "!#@-_".as_bytes().contains(c) {
+				buf.bytes[n] = c.to_ascii_lowercase();
+				n+= 1;
+				if n >= 8 { break }
+			}
+		}
+		Self { buf, n, l: 0, j: 0, }
+	}
+	/// Advances the generator, producing the next candidate string.
+	pub fn next(&mut self)->&StaticString<N> {
+// 		trace!("resref::fresh({source}), used {n} letters");
+		self.j+= 1;
+		if self.j > 111_111_111 {
+			// This panics after all 111_111_111 possibilities have been
+			// exhausted. Unlikely to happen irl (and then we cannot do much
+			// useful either).
+			// The last number written at any length is always (9*);
+			// we detect this to increase the length.
+			panic!("iteration exhausted");
+		}
+		let mut s = self.j+888_888_888;
+			// we start inserting right-to-left from position n-1
+			// (note: the decrement at the *beginning* of the loop prevents an
+			// usize underflow)
+		let mut i = self.n;
+		let mut is_nines = true;
+		for _ in 0..self.l {
+			i-= 1;
+			let c: u8 = (s % 10) as u8;
+			s/= 10;
+			is_nines = is_nines && (c == 9);
+			self.buf.bytes[i] = 48u8 + c;
+		}
+		if is_nines {
+			if self.n < 7 { self.n+= 1; }
+			self.l+= 1;
+		}
+		&self.buf
+	}
+}
+}// mod staticstrings
 pub(crate) mod gamefiles {
 //! Access to the KEY/BIF side of the database.
 //!
@@ -1382,6 +1384,162 @@ end"#))?;
 	Ok(())
 }
 } // mod schemas
+pub(crate) mod gamestrings {
+//! Access to game strings in database.
+//!
+//! This is the only mod knowing the internals of [`GameString`] struct.
+use crate::prelude::*;
+use crate::progress::{Progress};
+use crate::database::{self,DbInterface};
+use crate::gamefiles::{GameIndex};
+use crate::struct_io::{Pack};
+use crate::resources::Resource;
+use macros::{Pack};
+use rusqlite::ToSql;
+
+#[derive(Debug,Pack)]
+struct TlkHeader {
+	#[header("TLK V1  ")]
+	lang: u16,
+	nstr: u32,
+	offset: u32,
+}
+/// A game string as present in a .tlk file.
+#[derive(Debug,Default,Clone,Pack,Resource)]
+pub struct GameString {
+#[column(strref, usize, "primary key")]
+	flags: u16,
+	sound: Resref,
+	volume: i32,
+	pitch: i32,
+#[column(false)] delta: i32,
+#[column(false)] strlen: i32,
+	string: String,
+}
+/// The iterator used for accessing game strings.
+#[derive(Debug)]
+pub struct GameStringsIterator<'a> {
+	cursor: Cursor<&'a[u8]>,
+	index: usize,
+	nstr: usize,
+	offset: usize,
+}
+impl<'a> TryFrom<&'a [u8]> for GameStringsIterator<'a> {
+	type Error = anyhow::Error;
+	fn try_from(bytes: &'a[u8])->Result<Self> {
+		let mut cursor = Cursor::new(bytes);
+		let header = TlkHeader::unpack(&mut cursor)
+			.context("malformed TLK header")?;
+		Ok(Self { cursor, index: 0, nstr: header.nstr as usize,
+			offset: header.offset as usize })
+	}
+}
+impl Iterator for GameStringsIterator<'_> {
+	type Item = Result<GameString>;
+	/// Iterates over all game strings in the file, returning a `Result`
+	/// indicating whether there was an error in the file.
+	fn next(&mut self)->Option<Self::Item> {
+		if self.index >= self.nstr { return None }
+		let mut s = match GameString::unpack(&mut self.cursor) {
+			Err(e) => return Some(Err(e.into())),
+			Ok(s) => s,
+		};
+
+		let start = self.offset + (s.delta as usize);
+		let end = start + (s.strlen as usize);
+		let buf = self.cursor.get_ref();
+		// string *might* be zero-terminated, in which case we discard:
+		let c = buf[end-1];
+		let end2 = std::cmp::max(start, end-((c==0) as usize));
+		s.string.push_str(std::str::from_utf8(&buf[start..end2]).ok()?);
+		self.index+= 1;
+		Some(Ok(s))
+	}
+}
+impl ExactSizeIterator for GameStringsIterator<'_> {
+	fn len(&self) -> usize { self.nstr }
+}
+/// Saves game strings in one language to the given file.
+pub fn save_language(vec: &[GameString], path: &impl AsRef<Path>)->Result<()> {
+	// FIXME: this could be done with a prepared statement and iterator
+	// (saving the (rather big) memory for the whole vector of strings),
+	// but rusqlite does not export `reset`...
+	let path = path.as_ref();
+	let mut file = fs::File::create(path)
+		.with_context(|| format!("cannot create TLK file: {path:?}"))?;
+	TlkHeader { lang: 0, nstr: vec.len() as u32,
+		offset: (26*vec.len() + 18) as u32 }.pack(&mut file)?;
+	// first string in en.tlk has: (flags: u16=5, offset=0, strlen=9)
+	// second string has (flags: u16=1, offset=9, strlen=63) etc.
+	// (offset=72) etc.
+	let mut delta = 0;
+	for s in vec.iter() {
+		let l = s.string.len() as u32;
+		(s.flags, s.sound, s.volume, s.pitch, delta, l).pack(&mut file)?;
+		delta+= l;
+	}
+	for s in vec {
+		file.write_all(s.string.as_bytes())
+			.with_context(|| format!("cannot write strings to TLK file:{path:?}"))?;
+	}
+	Ok(())
+}
+
+/// Fills all game strings tables from game dialog files.
+pub fn load_languages(db: &impl DbInterface, game: &GameIndex)->Result<()> {
+	let pb = Progress::new(game.languages.len(), "languages");
+	for (langname, dialog) in game.languages.iter() {
+		pb.inc(1);
+		load_language(db, langname, &dialog).with_context(||
+				format!("cannot load language '{langname}' from '{dialog:?}'"))?;
+	}
+	Ok(())
+}
+/// Fills the database table for a single language.
+fn load_language(db: &impl DbInterface, langname: &str, path: &(impl AsRef<Path> + Debug))->Result<()> {
+	let bytes = fs::read(path)
+		.with_context(|| format!("cannot open strings file: {path:?}"))?;
+	let mut q = db.prepare(&format!(r#"insert into "load_strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
+	let itr = GameStringsIterator::try_from(bytes.as_ref())?;
+	let pb = Progress::new(itr.len(), langname);
+	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
+	let mut n_strings = 0;
+	for (strref, x) in itr.enumerate() {
+		let s = x?;
+		pb.inc(1);
+		q.execute((strref, s.flags, s.sound, s.volume, s.pitch, s.string))?;
+		n_strings+= 1;
+	}
+	info!("loaded {n_strings} strings for language \"{langname}\"");
+	Ok(())
+}
+/// For all game languages, saves database strings to "{lang}.tlk" in
+/// current directory.
+///
+/// This also backups those files if needed (i.e. if no backup exists
+/// yet).
+pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
+	use database::DbTypeCheck;
+	let pb = Progress::new(game.languages.len(), "save translations");
+	for (lang, _) in game.languages.iter() {
+		pb.inc(1);
+		let count = 1+db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
+			(), |row| row.get::<_,usize>(0))?;
+		let mut vec = vec![GameString::default(); count];
+		let mut sel_str = GameString::select_query_gen(db, "strings_", lang, "")?;
+		for row in sel_str.iter(())? {
+			if row.is_db_malformed() { continue }
+			let (gamestring, (strref,)) = row?;
+			vec[strref] = gamestring;
+		}
+		let target = format!("{lang}.tlk");
+		save_language(&vec, &target)
+		.with_context(|| format!("could not save strings for language '{lang}'"))?;
+		info!("updated strings in {target:?}; file now contains {count} entries");
+	}
+	Ok(())
+}
+} // mod gamestrings
 pub(crate) mod database {
 //! Access to the SQL side of the database.
 //!
@@ -1809,162 +1967,6 @@ impl Drop for DbInserter<'_> {
 	}
 }
 } // mod resources
-pub(crate) mod gamestrings {
-//! Access to game strings in database.
-//!
-//! This is the only mod knowing the internals of [`GameString`] struct.
-use crate::prelude::*;
-use crate::progress::{Progress};
-use crate::database::{self,DbInterface};
-use crate::gamefiles::{GameIndex};
-use crate::struct_io::{Pack};
-use crate::resources::Resource;
-use macros::{Pack};
-use rusqlite::ToSql;
-
-#[derive(Debug,Pack)]
-struct TlkHeader {
-	#[header("TLK V1  ")]
-	lang: u16,
-	nstr: u32,
-	offset: u32,
-}
-/// A game string as present in a .tlk file.
-#[derive(Debug,Default,Clone,Pack,Resource)]
-pub struct GameString {
-#[column(strref, usize, "primary key")]
-	flags: u16,
-	sound: Resref,
-	volume: i32,
-	pitch: i32,
-#[column(false)] delta: i32,
-#[column(false)] strlen: i32,
-	string: String,
-}
-/// The iterator used for accessing game strings.
-#[derive(Debug)]
-pub struct GameStringsIterator<'a> {
-	cursor: Cursor<&'a[u8]>,
-	index: usize,
-	nstr: usize,
-	offset: usize,
-}
-impl<'a> TryFrom<&'a [u8]> for GameStringsIterator<'a> {
-	type Error = anyhow::Error;
-	fn try_from(bytes: &'a[u8])->Result<Self> {
-		let mut cursor = Cursor::new(bytes);
-		let header = TlkHeader::unpack(&mut cursor)
-			.context("malformed TLK header")?;
-		Ok(Self { cursor, index: 0, nstr: header.nstr as usize,
-			offset: header.offset as usize })
-	}
-}
-impl Iterator for GameStringsIterator<'_> {
-	type Item = Result<GameString>;
-	/// Iterates over all game strings in the file, returning a `Result`
-	/// indicating whether there was an error in the file.
-	fn next(&mut self)->Option<Self::Item> {
-		if self.index >= self.nstr { return None }
-		let mut s = match GameString::unpack(&mut self.cursor) {
-			Err(e) => return Some(Err(e.into())),
-			Ok(s) => s,
-		};
-
-		let start = self.offset + (s.delta as usize);
-		let end = start + (s.strlen as usize);
-		let buf = self.cursor.get_ref();
-		// string *might* be zero-terminated, in which case we discard:
-		let c = buf[end-1];
-		let end2 = std::cmp::max(start, end-((c==0) as usize));
-		s.string.push_str(std::str::from_utf8(&buf[start..end2]).ok()?);
-		self.index+= 1;
-		Some(Ok(s))
-	}
-}
-impl ExactSizeIterator for GameStringsIterator<'_> {
-	fn len(&self) -> usize { self.nstr }
-}
-/// Saves game strings in one language to the given file.
-pub fn save_language(vec: &[GameString], path: &impl AsRef<Path>)->Result<()> {
-	// FIXME: this could be done with a prepared statement and iterator
-	// (saving the (rather big) memory for the whole vector of strings),
-	// but rusqlite does not export `reset`...
-	let path = path.as_ref();
-	let mut file = fs::File::create(path)
-		.with_context(|| format!("cannot create TLK file: {path:?}"))?;
-	TlkHeader { lang: 0, nstr: vec.len() as u32,
-		offset: (26*vec.len() + 18) as u32 }.pack(&mut file)?;
-	// first string in en.tlk has: (flags: u16=5, offset=0, strlen=9)
-	// second string has (flags: u16=1, offset=9, strlen=63) etc.
-	// (offset=72) etc.
-	let mut delta = 0;
-	for s in vec.iter() {
-		let l = s.string.len() as u32;
-		(s.flags, s.sound, s.volume, s.pitch, delta, l).pack(&mut file)?;
-		delta+= l;
-	}
-	for s in vec {
-		file.write_all(s.string.as_bytes())
-			.with_context(|| format!("cannot write strings to TLK file:{path:?}"))?;
-	}
-	Ok(())
-}
-
-/// Fills all game strings tables from game dialog files.
-pub fn load_languages(db: &impl DbInterface, game: &GameIndex)->Result<()> {
-	let pb = Progress::new(game.languages.len(), "languages");
-	for (langname, dialog) in game.languages.iter() {
-		pb.inc(1);
-		load_language(db, langname, &dialog).with_context(||
-				format!("cannot load language '{langname}' from '{dialog:?}'"))?;
-	}
-	Ok(())
-}
-/// Fills the database table for a single language.
-fn load_language(db: &impl DbInterface, langname: &str, path: &(impl AsRef<Path> + Debug))->Result<()> {
-	let bytes = fs::read(path)
-		.with_context(|| format!("cannot open strings file: {path:?}"))?;
-	let mut q = db.prepare(&format!(r#"insert into "load_strings_{langname}" ("strref", "flags", "sound", "volume", "pitch", "string") values (?,?,?,?,?,?)"#))?;
-	let itr = GameStringsIterator::try_from(bytes.as_ref())?;
-	let pb = Progress::new(itr.len(), langname);
-	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
-	let mut n_strings = 0;
-	for (strref, x) in itr.enumerate() {
-		let s = x?;
-		pb.inc(1);
-		q.execute((strref, s.flags, s.sound, s.volume, s.pitch, s.string))?;
-		n_strings+= 1;
-	}
-	info!("loaded {n_strings} strings for language \"{langname}\"");
-	Ok(())
-}
-/// For all game languages, saves database strings to "{lang}.tlk" in
-/// current directory.
-///
-/// This also backups those files if needed (i.e. if no backup exists
-/// yet).
-pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
-	use database::DbTypeCheck;
-	let pb = Progress::new(game.languages.len(), "save translations");
-	for (lang, _) in game.languages.iter() {
-		pb.inc(1);
-		let count = 1+db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
-			(), |row| row.get::<_,usize>(0))?;
-		let mut vec = vec![GameString::default(); count];
-		let mut sel_str = GameString::select_query_gen(db, "strings_", lang, "")?;
-		for row in sel_str.iter(())? {
-			if row.is_db_malformed() { continue }
-			let (gamestring, (strref,)) = row?;
-			vec[strref] = gamestring;
-		}
-		let target = format!("{lang}.tlk");
-		save_language(&vec, &target)
-		.with_context(|| format!("could not save strings for language '{lang}'"))?;
-		info!("updated strings in {target:?}; file now contains {count} entries");
-	}
-	Ok(())
-}
-} // mod gamestrings
 pub(crate) mod lua_api {
 //! Loads mod-supplied Lua files.
 //!
