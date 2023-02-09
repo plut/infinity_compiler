@@ -225,6 +225,42 @@ impl Pack for String { // String is ignored on pack/unpack:
 	fn unpack(_f: &mut impl Read)->io::Result<Self> { Ok(Self::new()) }
 	fn pack(&self, _f: &mut impl Write)->io::Result<()> { Ok(()) }
 }
+
+/// An utility enum defining SQL behaviour for a given resource field type.
+///
+/// This is somewhat different from [`rusqlite::types::Type`]:
+///  - not all SQLite types exist here;
+///  - the `Strref` variant can accept either a string or an integer,
+/// etc.
+#[derive(Debug,Clone,Copy,PartialEq)]
+#[non_exhaustive]
+pub enum FieldType {
+	/// Plain integer.
+	Integer,
+	/// Plain text.
+	Text,
+	/// A resource reference: a string translated using `resref_dict`.
+	Resref,
+	/// A string reference: either an integer or a string translated using
+	/// `strref_dict`.
+	Strref,
+}
+/// A leaf SQL type: this can be converted from, to SQL and knows its own
+/// affinity.
+pub trait SqlLeaf: FromSql + ToSql {
+	const FIELD_TYPE: FieldType;
+}
+impl SqlLeaf for Resref { const FIELD_TYPE: FieldType = FieldType::Resref; }
+impl SqlLeaf for Strref { const FIELD_TYPE: FieldType = FieldType::Strref; }
+// impl SqlLeaf for &str { const FIELD_TYPE: FieldType = FieldType::Text; }
+impl SqlLeaf for String { const FIELD_TYPE: FieldType = FieldType::Text; }
+macro_rules! sqlleaf_int { ($($T:ty),*) => { $(
+	impl SqlLeaf for $T { const FIELD_TYPE: FieldType = FieldType::Integer; }
+)* } }
+sqlleaf_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
+impl<T> SqlLeaf for Option<T> where T: SqlLeaf {
+	const FIELD_TYPE: FieldType = T::FIELD_TYPE;
+}
 /// A struct mapped to a SQL row.
 pub trait SqlMapped: Sized {
 	/// The number of fields in the SQL row.
@@ -240,15 +276,32 @@ pub trait SqlMapped: Sized {
 	fn get_field(&self, i: usize)->ToSqlOutput<'_>;
 	/// Reads a whole [`rusqlite::Row`] into a struct,
 	/// or raises a conversion error.
-	fn from_row_at(r: &rusqlite::Row<'_>, offset: usize)->Result<Self>;
+	fn from_row_at(row: &rusqlite::Row<'_>, offset: usize)->Result<Self>;
+	/// Returns the type of the `i`-th field.
+	fn fieldtype(i: usize)->FieldType;
+	/// Builds the name of the `i`-th field from context.
+	fn fieldname_ctx(ctx: &'static str, i: usize)->&'static str;
+	/// Any supplemental material introduced at table creation
+	/// (constraints, etc.)
+	fn field_create_text(_i: usize)->&'static str { "" }
+	// Provided functions:
 	/// Converts this resource to a struct implementing
 	/// [`rusqlite::Params`], allowing it to be passed to a
 	/// [`rusqlite::Statement`].
 	fn as_params(&self)->rusqlite::ParamsFromIter<SqlMappedIterator<'_,Self>> {
 		rusqlite::params_from_iter(SqlMappedIterator { index: 0, resource: self })
 	}
+	/// Reads a whole [`rusqlite::Row`] into a struct.
+	fn from_row(row: &rusqlite::Row<'_>,)->Result<Self> {
+		Self::from_row_at(row, 0)
+	}
+	/// Returns the name of the `i`-th field, as a string.
+	fn fieldname(i: usize)->&'static str { Self::fieldname_ctx("", i) }
+	/// Returns the schema, which is an iterator over (fieldname,
+	/// fieldtype).
+	fn schema()->SchemaIterator<Self> { SchemaIterator(0, PhantomData) }
 }
-impl<T: ToSql+FromSql> SqlMapped for T {
+impl<T: SqlLeaf> SqlMapped for T {
 	const WIDTH: usize = 1;
 	fn from_row_at(row: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
 		row.get::<_,T>(offset)
@@ -260,6 +313,8 @@ impl<T: ToSql+FromSql> SqlMapped for T {
 		self.to_sql()
 			.expect("cannot convert to SQL")
 	}
+	fn fieldtype(_i: usize)->FieldType { Self::FIELD_TYPE }
+	fn fieldname_ctx(ctx: &'static str, _i: usize)->&'static str { ctx }
 }
 /// An iterator over all fields of a [`SqlMapped`].
 pub struct SqlMappedIterator<'a,T: SqlMapped> {
@@ -275,28 +330,53 @@ impl<'a,T: SqlMapped> Iterator for SqlMappedIterator<'a,T> {
 		Some(f)
 	}
 }
-
-/// A trivial wrapper which prevents a struct from being packed to binary
-/// files, while being pass-through for `SqlMapped`.
-#[derive(Debug)]
-pub struct NotPacked<T: Default+Debug>(pub T);
-impl<T: Default+Debug> Pack for NotPacked<T> {
-	fn unpack(_: &mut impl Read)->io::Result<Self> { Ok(Self(T::default())) }
-	fn pack(&self, _: &mut impl Write)->io::Result<()> { Ok(()) }
+/// An iterator over the [`SqlMapped`] schema.
+pub struct SchemaIterator<T: SqlMapped>(usize, PhantomData<T>);
+impl<T: SqlMapped> Iterator for SchemaIterator<T> {
+	type Item = (&'static str, FieldType);
+	fn next(&mut self)->Option<Self::Item> {
+		if self.0 >= T::WIDTH { return None }
+		let f = (T::fieldname(self.0), T::fieldtype(self.0));
+		self.0+= 1;
+		Some(f)
+	}
 }
-impl<T: SqlMapped+Default+Debug> SqlMapped for NotPacked<T> {
+
+/// A trivial wrapper around a value.
+/// `S` is a flag which decides whether `SqlMapped` is pass-through or
+/// ignored, and likewise for `P` and `Pack`.
+pub struct Wrapper<T, const S: bool, const P: bool>(T);
+impl<T: Debug, const S: bool, const P: bool> Debug for Wrapper<T,S,P> {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+		write!(f, "Wrapper({S},{P},{:?}", self.0)
+	}
+}
+impl<T: Display, const S: bool, const P: bool> Display for Wrapper<T,S,P> {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { write!(f, "{}", self.0) }
+}
+impl<T, const S: bool, const P: bool> From<T> for Wrapper<T,S,P> {
+	fn from(s: T)->Self { Self(s) }
+}
+impl<T: Pack, const S: bool> Pack for Wrapper<T,S,true> {
+	fn unpack(r: &mut impl Read)->io::Result<Self> { T::unpack(r).map(Self) }
+	fn pack(&self, w: &mut impl Write)->io::Result<()> { self.0.pack(w) }
+}
+impl<T: Default, const S: bool> Pack for Wrapper<T,S,false> {
+	fn unpack(_r: &mut impl Read)->io::Result<Self> { Ok(Self(T::default())) }
+	fn pack(&self, _w: &mut impl Write)->io::Result<()> { Ok(()) }
+}
+impl<T: SqlMapped, const P: bool> SqlMapped for Wrapper<T,true,P> {
 	const WIDTH: usize = T::WIDTH;
 	fn from_row_at(row: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
-		T::from_row_at(row, offset).map(|x| Self(x))
+		T::from_row_at(row, offset).map(Self)
 	}
 	fn get_field(&self, i: usize)->ToSqlOutput<'_> { self.0.get_field(i) }
+	fn fieldname_ctx(ctx: &'static str, i: usize)->&'static str {
+		T::fieldname_ctx(ctx, i)
+	}
+	fn fieldtype(i: usize)->FieldType { T::fieldtype(i) }
 }
-
-/// A trivial wrapper which prevents a structure from being inserted into
-/// a SQL table, while being pass-through for `Pack`.
-#[derive(Debug)]
-pub struct NoSql<T: Debug+Default> (T);
-impl<T: Debug+Default> SqlMapped for NoSql<T> {
+impl<T: Default, const P: bool> SqlMapped for Wrapper<T,false,P> {
 	const WIDTH: usize = 0;
 	fn from_row_at(_row: &rusqlite::Row<'_>, _offset: usize)->Result<Self> {
 		Ok(Self(T::default()))
@@ -304,13 +384,18 @@ impl<T: Debug+Default> SqlMapped for NoSql<T> {
 	fn get_field(&self, _i: usize)->ToSqlOutput<'_> {
 		panic!("attempted to insert a NoSql value")
 	}
-}
-impl<T: Pack+Debug+Default> Pack for NoSql<T> {
-	fn unpack(r: &mut impl Read)->io::Result<Self> {
-		T::unpack(r).map(|x| Self(x))
+	fn fieldtype(_i: usize)->FieldType {
+		panic!("attempted to read field type of a NoSql value")
 	}
-	fn pack(&self, w: &mut impl Write)->io::Result<()> { self.0.pack(w) }
+	fn fieldname_ctx(_ctx: &'static str, _i: usize)->&'static str {
+		panic!("attempted to read field name of a NoSql value")
+	}
 }
+impl<T: SqlMapped, const P: bool, const S: bool> Wrapper<T,S,P> {
+	pub fn unwrap(&self)->T where T: Copy { self.0 }
+}
+pub type NoSql<T> = Wrapper<T,false,true>;
+pub type NotPacked<T> = Wrapper<T,true,false>;
 
 } // mod sqltypes
 pub(crate) mod staticstrings {

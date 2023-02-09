@@ -103,17 +103,17 @@ impl AttrParser {
 // 	let b: T = syn::parse2(a).expect("cannot parse!");
 // 	Some(b.into())
 	}
-// 	fn column(&mut self)->FieldInfo {
-// 		let mut field_info = FieldInfo::default();
-// 		match self.get::<syn::Expr>() {
-// 			None => (),
-// 			Some(AttrArg::Str(s)) => field_info.extra = s,
+	fn column(&mut self)->FieldInfo {
+		let mut field_info = FieldInfo::default();
+		match self.get::<syn::Expr>() {
+			None => (),
+			Some(AttrArg::Str(s)) => field_info.extra = s,
 // 			Some(AttrArg::Ident(i)) if i.as_str() == "false" =>
 // 				field_info.no_column = true,
-// 			Some(a) => panic!("unknown argument for 'column' attribute: {:?}", a),
-// 		}
-// 		return field_info
-// 	}
+			Some(a) => panic!("unknown argument for 'column' attribute: {:?}", a),
+		}
+		return field_info
+	}
 }
 impl From<pm2::TokenStream> for AttrParser {
 	fn from(tokens: pm2::TokenStream)->Self {
@@ -176,17 +176,24 @@ struct ResourceInfo {
 	extension: String,
 	restype: u16,
 }
-#[proc_macro_derive(SqlMapped)]
+#[proc_macro_derive(SqlMapped, attributes(column))]
 pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	let mut get_fields = TS2::new();
 	let mut from_row_at = TS2::new();
+	let mut fieldtype = TS2::new();
+	let mut fieldname_ctx = TS2::new();
+	let mut field_create_text = TS2::new();
 	let mut offset = TS2::from(quote!(0usize));
 	let DeriveInput{ ident, data, .. } = parse_macro_input!(tokens);
-	for Field {  ident, ty, .. } in struct_fields(data) {
+	for Field { attrs, ident, ty, .. } in struct_fields(data) {
 		// Read attributes for this field
-// 		let mut field_info = FieldInfo::default();
-// 		for (name, mut args) in attrs.into_iter().map(parse_attr) {
-// 		} // for
+		let mut field_info = FieldInfo::default();
+		for (name, mut args) in attrs.into_iter().map(parse_attr) {
+			match name.as_str() {
+				"column" => field_info = args.column(),
+				_ => ()
+			} // match
+		} // for
 		// before generating the code, `offset` contains the offset at the
 		// start of this field:
 		quote!{
@@ -195,8 +202,23 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 			}
 		}.to_tokens(&mut get_fields);
 		quote!{
-			#ident: #ty::from_row_at(r, offset + (#offset))?,
-		}.to_tokens(&mut from_row_at);
+			if i < #offset + #ty::WIDTH {
+				return #ty::fieldname_ctx(stringify!(ident), i - (#offset))
+			}
+		}.to_tokens(&mut fieldname_ctx);
+		quote!{
+			if i < #offset + #ty::WIDTH {
+				return #ty::fieldtype(i - (#offset))
+			}
+		}.to_tokens(&mut fieldtype);
+		let create_text = field_info.extra;
+		quote!{
+			if i < #offset + #ty::WIDTH {
+				return #create_text
+			}
+		}.to_tokens(&mut field_create_text);
+		quote!{ #ident: #ty::from_row_at(r, offset + (#offset))?, }
+			.to_tokens(&mut from_row_at);
 		// we now update `offset` so that it points to the offset at the start
 		// of next field:
 		quote!{ + #ty::WIDTH }.to_tokens(&mut offset)
@@ -209,6 +231,18 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 		} // get_field
 		fn from_row_at(r: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
 			Ok(Self{ #from_row_at })
+		}
+		fn fieldtype(i: usize)->crate::struct_io::FieldType {
+			#fieldtype
+			panic!("invalid field {} for resource type {}", i, stringify!(ident))
+		}
+		fn fieldname_ctx(_ctx: &'static str, i: usize)->&'static str {
+			#fieldname_ctx
+			panic!("invalid field {} for resource type {}", i, stringify!(ident))
+		}
+		fn field_create_text(i: usize)->&'static str {
+			#field_create_text
+			panic!("invalid field {} for resource type {}", i, stringify!(ident))
 		}
 	});
 	code.into()
