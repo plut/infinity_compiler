@@ -2336,6 +2336,93 @@
 <a href="#2336" id="2336">2336</a>
 <a href="#2337" id="2337">2337</a>
 <a href="#2338" id="2338">2338</a>
+<a href="#2339" id="2339">2339</a>
+<a href="#2340" id="2340">2340</a>
+<a href="#2341" id="2341">2341</a>
+<a href="#2342" id="2342">2342</a>
+<a href="#2343" id="2343">2343</a>
+<a href="#2344" id="2344">2344</a>
+<a href="#2345" id="2345">2345</a>
+<a href="#2346" id="2346">2346</a>
+<a href="#2347" id="2347">2347</a>
+<a href="#2348" id="2348">2348</a>
+<a href="#2349" id="2349">2349</a>
+<a href="#2350" id="2350">2350</a>
+<a href="#2351" id="2351">2351</a>
+<a href="#2352" id="2352">2352</a>
+<a href="#2353" id="2353">2353</a>
+<a href="#2354" id="2354">2354</a>
+<a href="#2355" id="2355">2355</a>
+<a href="#2356" id="2356">2356</a>
+<a href="#2357" id="2357">2357</a>
+<a href="#2358" id="2358">2358</a>
+<a href="#2359" id="2359">2359</a>
+<a href="#2360" id="2360">2360</a>
+<a href="#2361" id="2361">2361</a>
+<a href="#2362" id="2362">2362</a>
+<a href="#2363" id="2363">2363</a>
+<a href="#2364" id="2364">2364</a>
+<a href="#2365" id="2365">2365</a>
+<a href="#2366" id="2366">2366</a>
+<a href="#2367" id="2367">2367</a>
+<a href="#2368" id="2368">2368</a>
+<a href="#2369" id="2369">2369</a>
+<a href="#2370" id="2370">2370</a>
+<a href="#2371" id="2371">2371</a>
+<a href="#2372" id="2372">2372</a>
+<a href="#2373" id="2373">2373</a>
+<a href="#2374" id="2374">2374</a>
+<a href="#2375" id="2375">2375</a>
+<a href="#2376" id="2376">2376</a>
+<a href="#2377" id="2377">2377</a>
+<a href="#2378" id="2378">2378</a>
+<a href="#2379" id="2379">2379</a>
+<a href="#2380" id="2380">2380</a>
+<a href="#2381" id="2381">2381</a>
+<a href="#2382" id="2382">2382</a>
+<a href="#2383" id="2383">2383</a>
+<a href="#2384" id="2384">2384</a>
+<a href="#2385" id="2385">2385</a>
+<a href="#2386" id="2386">2386</a>
+<a href="#2387" id="2387">2387</a>
+<a href="#2388" id="2388">2388</a>
+<a href="#2389" id="2389">2389</a>
+<a href="#2390" id="2390">2390</a>
+<a href="#2391" id="2391">2391</a>
+<a href="#2392" id="2392">2392</a>
+<a href="#2393" id="2393">2393</a>
+<a href="#2394" id="2394">2394</a>
+<a href="#2395" id="2395">2395</a>
+<a href="#2396" id="2396">2396</a>
+<a href="#2397" id="2397">2397</a>
+<a href="#2398" id="2398">2398</a>
+<a href="#2399" id="2399">2399</a>
+<a href="#2400" id="2400">2400</a>
+<a href="#2401" id="2401">2401</a>
+<a href="#2402" id="2402">2402</a>
+<a href="#2403" id="2403">2403</a>
+<a href="#2404" id="2404">2404</a>
+<a href="#2405" id="2405">2405</a>
+<a href="#2406" id="2406">2406</a>
+<a href="#2407" id="2407">2407</a>
+<a href="#2408" id="2408">2408</a>
+<a href="#2409" id="2409">2409</a>
+<a href="#2410" id="2410">2410</a>
+<a href="#2411" id="2411">2411</a>
+<a href="#2412" id="2412">2412</a>
+<a href="#2413" id="2413">2413</a>
+<a href="#2414" id="2414">2414</a>
+<a href="#2415" id="2415">2415</a>
+<a href="#2416" id="2416">2416</a>
+<a href="#2417" id="2417">2417</a>
+<a href="#2418" id="2418">2418</a>
+<a href="#2419" id="2419">2419</a>
+<a href="#2420" id="2420">2420</a>
+<a href="#2421" id="2421">2421</a>
+<a href="#2422" id="2422">2422</a>
+<a href="#2423" id="2423">2423</a>
+<a href="#2424" id="2424">2424</a>
+<a href="#2425" id="2425">2425</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Compiler between IE game files and a SQLite database.
 </span><span class="attr">#![allow(
 	unused_attributes,
@@ -2386,7 +2473,7 @@
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>std::io::{<span class="self">self</span>,Cursor,Read,Write,Seek,SeekFrom};
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>std::path::{Path, PathBuf};
 
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>macros::{Pack,Resource};
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>macros::{Pack,Resource,SqlMapped};
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span><span class="kw">crate</span>::gamefiles::{Resref,Strref};
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span><span class="kw">crate</span>::database::{GameDB,DbInterface};
 <span class="attr">#[allow(unused_imports)]
@@ -2493,6 +2580,164 @@
 }
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>scope_trace;
 } <span class="comment">// mod progress
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>struct_io {
+<span class="doccomment">//! Basic types for interaction with SQL and binary files.
+//! The main entry points for this module are the traits [`Pack`]
+//! and [`SqlMapped`].
+</span><span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
+<span class="kw">use </span>rusqlite::{ToSql};
+<span class="kw">use </span>rusqlite::types::{ToSqlOutput,FromSql};
+
+<span class="kw">pub trait </span>Pack: Sized {
+	<span class="doccomment">/// Reads this object from a binary source.
+	</span><span class="kw">fn </span>unpack(f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt;;
+	<span class="doccomment">/// Writes this objects to a binary sink.
+	</span><span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, _f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; {
+		<span class="macro">error!</span>(<span class="string">&quot;Missing Pack for type: {}&quot;</span>, <span class="kw">crate</span>::type_of(<span class="kw-2">&amp;</span><span class="self">self</span>));
+		<span class="macro">unimplemented!</span>() }
+	<span class="comment">// associated functions:
+	</span><span class="doccomment">/// Reads a vector of objects (of known size) from a binary source.
+	</span><span class="kw">fn </span>vecunpack(<span class="kw-2">mut </span>f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read, n: usize)-&gt;io::Result&lt;Vec&lt;<span class="self">Self</span>&gt;&gt; {
+		(<span class="number">0</span>..n).map(|<span class="kw">_</span>| { <span class="self">Self</span>::unpack(<span class="kw-2">&amp;mut </span>f) }).collect()
+	}
+	<span class="doccomment">/// Helper function used to check forced headers.
+	</span><span class="kw">fn </span>read_bytes(f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read, n: usize)-&gt;io::Result&lt;Vec&lt;u8&gt;&gt; {
+		<span class="kw">let </span><span class="kw-2">mut </span>buf = <span class="macro">vec!</span>[<span class="number">0u8</span>; n];
+<span class="comment">// 		let mut buf = Vec::&lt;u8&gt;::with_capacity(n);
+// 		unsafe { buf.set_len(n); }
+		</span>f.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>; <span class="prelude-val">Ok</span>(buf)
+	}
+	<span class="doccomment">/// function which checks that a header is correct.
+	</span><span class="kw">fn </span>unpack_header(f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read, hdr: <span class="kw-2">&amp;</span>str)-&gt;io::Result&lt;()&gt; {
+		<span class="kw">let </span>buf = <span class="self">Self</span>::read_bytes(f, hdr.len())<span class="question-mark">?</span>;
+		<span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>buf[..], hdr.as_bytes());
+		<span class="prelude-val">Ok</span>(())
+	}
+}
+<span class="macro">macro_rules! </span>pack_tuple {
+	( )=&gt; { };
+	(<span class="macro-nonterminal">$A</span>:ident$(,<span class="macro-nonterminal">$B</span>:ident)<span class="kw-2">*</span>$(,)<span class="question-mark">?</span>) =&gt; {
+		<span class="kw">impl</span>&lt;A: Pack,$(<span class="macro-nonterminal">$B</span>: Pack),<span class="kw-2">*</span>&gt; Pack <span class="kw">for </span>(A,$(<span class="macro-nonterminal">$B</span>,)<span class="kw-2">*</span>) {
+			<span class="kw">fn </span>unpack(f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt; {
+				<span class="prelude-val">Ok</span>((A::unpack(f)<span class="question-mark">?</span>, $(<span class="macro-nonterminal">$B::unpack</span>(f)<span class="question-mark">?</span>,)<span class="kw-2">*</span>))
+			}
+			<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; {
+				<span class="attr">#[allow(non_snake_case)]
+				</span><span class="kw">let </span>(A, $(<span class="macro-nonterminal">$B</span>,)<span class="kw-2">*</span>) = <span class="self">self</span>;
+				A.pack(f)<span class="question-mark">?</span>; $(<span class="macro-nonterminal">$B</span>.pack(f)<span class="question-mark">?</span>;)* <span class="prelude-val">Ok</span>(())
+			}
+		}
+		<span class="macro">pack_tuple!</span>{$(<span class="macro-nonterminal">$B</span>),<span class="kw-2">*</span>} <span class="comment">// recursive call for tail of tuple
+	</span>};
+}
+<span class="macro">pack_tuple!</span>(A,B,C,D,E,F);
+<span class="macro">macro_rules! </span>unpack_int {
+	<span class="comment">// this would be better with a trait, but to_le_bytes (etc.) is not
+	// part of a trait (even in crate `num`).
+	</span>($(<span class="macro-nonterminal">$T</span>:ty),<span class="kw-2">*</span>) =&gt; { $(<span class="kw">impl </span>Pack <span class="kw">for </span><span class="macro-nonterminal">$T </span>{
+			<span class="kw">fn </span>unpack(f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt; {
+				<span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; std::mem::size_of::&lt;<span class="macro-nonterminal">$T</span>&gt;()];
+				f.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
+				<span class="prelude-val">Ok</span>(&lt;<span class="macro-nonterminal">$T</span>&gt;::from_le_bytes(buf))
+			}
+			<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; {
+				f.write_all(<span class="kw-2">&amp;</span><span class="self">self</span>.to_le_bytes())
+			}
+	})* }
+}
+<span class="macro">unpack_int!</span>(i8,i16,i32,i64,u8,u16,u32,u64);
+<span class="kw">impl </span>Pack <span class="kw">for </span>String { <span class="comment">// String is ignored on pack/unpack:
+	</span><span class="kw">fn </span>unpack(_f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt; { <span class="prelude-val">Ok</span>(<span class="self">Self</span>::new()) }
+	<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, _f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; { <span class="prelude-val">Ok</span>(()) }
+}
+<span class="doccomment">/// A struct mapped to a SQL row.
+</span><span class="kw">pub trait </span>SqlMapped: Sized {
+	<span class="doccomment">/// The number of fields in the SQL row.
+	</span><span class="kw">const </span>WIDTH: usize;
+	<span class="doccomment">/// Returns the `i`-th field of the resource,
+	/// wrapped in a [`rusqlite::types::ToSlqOutput`]
+	/// for trivial insertion into a SQL statement.
+	/// **NOTE**: rusqlite does not allow pushing `Result&lt;ToSqlOutput&gt;`
+	/// values back into a [`rusqlite::ParamsFromIter`] iterator,
+	/// so we need to unwrap those values.
+	/// Since we do so from a controlled struct, this should not panic;
+	/// however, it would be better to be able to propagate errors.
+	</span><span class="kw">fn </span>get_field(<span class="kw-2">&amp;</span><span class="self">self</span>, i: usize)-&gt;ToSqlOutput&lt;<span class="lifetime">&#39;_</span>&gt;;
+	<span class="doccomment">/// Reads a whole [`rusqlite::Row`] into a struct,
+	/// or raises a conversion error.
+	</span><span class="kw">fn </span>from_row_at(r: <span class="kw-2">&amp;</span>rusqlite::Row&lt;<span class="lifetime">&#39;_</span>&gt;, offset: usize)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;;
+	<span class="doccomment">/// Converts this resource to a struct implementing
+	/// [`rusqlite::Params`], allowing it to be passed to a
+	/// [`rusqlite::Statement`].
+	</span><span class="kw">fn </span>as_params(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;rusqlite::ParamsFromIter&lt;SqlMappedIterator&lt;<span class="lifetime">&#39;_</span>,<span class="self">Self</span>&gt;&gt; {
+		rusqlite::params_from_iter(SqlMappedIterator { index: <span class="number">0</span>, resource: <span class="self">self </span>})
+	}
+}
+<span class="kw">impl</span>&lt;T: ToSql+FromSql&gt; SqlMapped <span class="kw">for </span>T {
+	<span class="kw">const </span>WIDTH: usize = <span class="number">1</span>;
+	<span class="kw">fn </span>from_row_at(row: <span class="kw-2">&amp;</span>rusqlite::Row&lt;<span class="lifetime">&#39;_</span>&gt;, offset: usize)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+		row.get::&lt;<span class="kw">_</span>,T&gt;(offset)
+			.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;cannot read SQL value as {}&quot;</span>,
+				std::any::type_name::&lt;T&gt;()))
+	}
+	<span class="kw">fn </span>get_field(<span class="kw-2">&amp;</span><span class="self">self</span>, i: usize)-&gt;ToSqlOutput&lt;<span class="lifetime">&#39;_</span>&gt; {
+		<span class="macro">assert_eq!</span>(i, <span class="number">0</span>);
+		<span class="self">self</span>.to_sql()
+			.expect(<span class="string">&quot;cannot convert to SQL&quot;</span>)
+	}
+}
+<span class="doccomment">/// An iterator over all fields of a [`SqlMapped`].
+</span><span class="kw">pub struct </span>SqlMappedIterator&lt;<span class="lifetime">&#39;a</span>,T: SqlMapped&gt; {
+	index: usize,
+	resource: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>T
+}
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>,T: SqlMapped&gt; Iterator <span class="kw">for </span>SqlMappedIterator&lt;<span class="lifetime">&#39;a</span>,T&gt; {
+	<span class="kw">type </span>Item = ToSqlOutput&lt;<span class="lifetime">&#39;a</span>&gt;;
+	<span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
+		<span class="kw">if </span><span class="self">self</span>.index &gt;= T::WIDTH { <span class="kw">return </span><span class="prelude-val">None </span>}
+		<span class="kw">let </span>f = <span class="self">self</span>.resource.get_field(<span class="self">self</span>.index);
+		<span class="self">self</span>.index+= <span class="number">1</span>;
+		<span class="prelude-val">Some</span>(f)
+	}
+}
+
+<span class="doccomment">/// A trivial wrapper which prevents a struct from being packed to binary
+/// files, while being pass-through for `SqlMapped`.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>NotPacked&lt;T: Default+Debug&gt;(<span class="kw">pub </span>T);
+<span class="kw">impl</span>&lt;T: Default+Debug&gt; Pack <span class="kw">for </span>NotPacked&lt;T&gt; {
+	<span class="kw">fn </span>unpack(<span class="kw">_</span>: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt; { <span class="prelude-val">Ok</span>(<span class="self">Self</span>(T::default())) }
+	<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw">_</span>: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; { <span class="prelude-val">Ok</span>(()) }
+}
+<span class="kw">impl</span>&lt;T: SqlMapped+Default+Debug&gt; SqlMapped <span class="kw">for </span>NotPacked&lt;T&gt; {
+	<span class="kw">const </span>WIDTH: usize = T::WIDTH;
+	<span class="kw">fn </span>from_row_at(row: <span class="kw-2">&amp;</span>rusqlite::Row&lt;<span class="lifetime">&#39;_</span>&gt;, offset: usize)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+		T::from_row_at(row, offset).map(|x| <span class="self">Self</span>(x))
+	}
+	<span class="kw">fn </span>get_field(<span class="kw-2">&amp;</span><span class="self">self</span>, i: usize)-&gt;ToSqlOutput&lt;<span class="lifetime">&#39;_</span>&gt; { <span class="self">self</span>.<span class="number">0</span>.get_field(i) }
+}
+
+<span class="doccomment">/// A trivial wrapper which prevents a structure from being inserted into
+/// a SQL table, while being pass-through for `Pack`.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>NoSql&lt;T: Debug+Default&gt; (T);
+<span class="kw">impl</span>&lt;T: Debug+Default&gt; SqlMapped <span class="kw">for </span>NoSql&lt;T&gt; {
+	<span class="kw">const </span>WIDTH: usize = <span class="number">0</span>;
+	<span class="kw">fn </span>from_row_at(_row: <span class="kw-2">&amp;</span>rusqlite::Row&lt;<span class="lifetime">&#39;_</span>&gt;, _offset: usize)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+		<span class="prelude-val">Ok</span>(<span class="self">Self</span>(T::default()))
+	}
+	<span class="kw">fn </span>get_field(<span class="kw-2">&amp;</span><span class="self">self</span>, _i: usize)-&gt;ToSqlOutput&lt;<span class="lifetime">&#39;_</span>&gt; {
+		<span class="macro">panic!</span>(<span class="string">&quot;attempted to insert a NoSql value&quot;</span>)
+	}
+}
+<span class="kw">impl</span>&lt;T: Pack+Debug+Default&gt; Pack <span class="kw">for </span>NoSql&lt;T&gt; {
+	<span class="kw">fn </span>unpack(r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt; {
+		T::unpack(r).map(|x| <span class="self">Self</span>(x))
+	}
+	<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, w: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; { <span class="self">self</span>.<span class="number">0</span>.pack(w) }
+}
+
+} <span class="comment">// mod sqltypes
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>staticstrings {
 <span class="doccomment">//! Fixed-length string used as resource identifier.
 //! 
@@ -2505,7 +2750,7 @@
 </span><span class="kw">use </span>std::fmt::{<span class="self">self</span>,Debug,Display,Formatter};
 <span class="kw">use </span>std::io::{<span class="self">self</span>,Read,Write};
 <span class="kw">use </span>std::cmp::min;
-<span class="kw">use </span><span class="kw">crate</span>::gamefiles::Pack;
+<span class="kw">use </span><span class="kw">crate</span>::struct_io::Pack;
 
 <span class="doccomment">/// A fixed-length string.
 </span><span class="attr">#[derive(Clone,Copy)]
@@ -2655,6 +2900,7 @@
 //! Visibility barrier: this mod is the only place using the internals of
 //! key/bif game files.
 </span><span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
+<span class="kw">use </span><span class="kw">crate</span>::struct_io::{Pack};
 <span class="kw">use </span>rusqlite::types::{FromSql,ToSql, ValueRef};
 
 <span class="kw">use </span>io::BufReader;
@@ -2670,72 +2916,7 @@
 /// integer types (little-endian) and for strings (they are ignored on
 /// output and empty on input). For composite types, the implementation
 /// is produces by the `[Pack]` derive macro.
-</span><span class="kw">pub trait </span>Pack: Sized {
-	<span class="doccomment">/// Reads this object from a binary source.
-	</span><span class="kw">fn </span>unpack(f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt;;
-	<span class="doccomment">/// Writes this objects to a binary sink.
-	</span><span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, _f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; {
-		<span class="macro">error!</span>(<span class="string">&quot;Missing Pack for type: {}&quot;</span>, <span class="kw">crate</span>::type_of(<span class="kw-2">&amp;</span><span class="self">self</span>));
-		<span class="macro">unimplemented!</span>() }
-	<span class="doccomment">/// Reads a vector of objects (of known size) from a binary source.
-	</span><span class="kw">fn </span>vecunpack(<span class="kw-2">mut </span>f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read, n: usize)-&gt;io::Result&lt;Vec&lt;<span class="self">Self</span>&gt;&gt; {
-		(<span class="number">0</span>..n).map(|<span class="kw">_</span>| { <span class="self">Self</span>::unpack(<span class="kw-2">&amp;mut </span>f) }).collect()
-	}
-
-	<span class="comment">// associated functions:
-	</span><span class="doccomment">/// Helper function used to check forced headers.
-	</span><span class="kw">fn </span>read_bytes(f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read, n: usize)-&gt;io::Result&lt;Vec&lt;u8&gt;&gt; {
-		<span class="kw">let </span><span class="kw-2">mut </span>buf = <span class="macro">vec!</span>[<span class="number">0u8</span>; n];
-<span class="comment">// 		let mut buf = Vec::&lt;u8&gt;::with_capacity(n);
-// 		unsafe { buf.set_len(n); }
-		</span>f.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>; <span class="prelude-val">Ok</span>(buf)
-	}
-
-	<span class="doccomment">/// function which checks that a header is correct.
-	</span><span class="kw">fn </span>unpack_header(f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read, hdr: <span class="kw-2">&amp;</span>str)-&gt;io::Result&lt;()&gt; {
-		<span class="kw">let </span>buf = <span class="self">Self</span>::read_bytes(f, hdr.len())<span class="question-mark">?</span>;
-		<span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>buf[..], hdr.as_bytes());
-		<span class="prelude-val">Ok</span>(())
-	}
-}
-<span class="macro">macro_rules! </span>pack_tuple {
-	( )=&gt; { };
-	(<span class="macro-nonterminal">$A</span>:ident$(,<span class="macro-nonterminal">$B</span>:ident)<span class="kw-2">*</span>$(,)<span class="question-mark">?</span>) =&gt; {
-		<span class="kw">impl</span>&lt;A: Pack,$(<span class="macro-nonterminal">$B</span>: Pack),<span class="kw-2">*</span>&gt; Pack <span class="kw">for </span>(A,$(<span class="macro-nonterminal">$B</span>,)<span class="kw-2">*</span>) {
-			<span class="kw">fn </span>unpack(f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt; {
-				<span class="prelude-val">Ok</span>((A::unpack(f)<span class="question-mark">?</span>, $(<span class="macro-nonterminal">$B::unpack</span>(f)<span class="question-mark">?</span>,)<span class="kw-2">*</span>))
-			}
-			<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; {
-				<span class="attr">#[allow(non_snake_case)]
-				</span><span class="kw">let </span>(A, $(<span class="macro-nonterminal">$B</span>,)<span class="kw-2">*</span>) = <span class="self">self</span>;
-				A.pack(f)<span class="question-mark">?</span>; $(<span class="macro-nonterminal">$B</span>.pack(f)<span class="question-mark">?</span>;)* <span class="prelude-val">Ok</span>(())
-			}
-		}
-		<span class="macro">pack_tuple!</span>{$(<span class="macro-nonterminal">$B</span>),<span class="kw-2">*</span>} <span class="comment">// recursive call for tail of tuple
-	</span>};
-}
-<span class="macro">pack_tuple!</span>(A,B,C,D,E,F);
-<span class="macro">macro_rules! </span>unpack_int {
-	<span class="comment">// this would be better with a trait, but to_le_bytes (etc.) is not
-	// part of a trait (even in crate `num`).
-	</span>($(<span class="macro-nonterminal">$T</span>:ty),<span class="kw-2">*</span>) =&gt; { $(<span class="kw">impl </span>Pack <span class="kw">for </span><span class="macro-nonterminal">$T </span>{
-			<span class="kw">fn </span>unpack(f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt; {
-				<span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0u8</span>; std::mem::size_of::&lt;<span class="macro-nonterminal">$T</span>&gt;()];
-				f.read_exact(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
-				<span class="prelude-val">Ok</span>(&lt;<span class="macro-nonterminal">$T</span>&gt;::from_le_bytes(buf))
-			}
-			<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; {
-				f.write_all(<span class="kw-2">&amp;</span><span class="self">self</span>.to_le_bytes())
-			}
-	})* }
-}
-<span class="macro">unpack_int!</span>(i8,i16,i32,i64,u8,u16,u32,u64);
-<span class="kw">impl </span>Pack <span class="kw">for </span>String { <span class="comment">// String is ignored on pack/unpack:
-	</span><span class="kw">fn </span>unpack(_f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt; { <span class="prelude-val">Ok</span>(<span class="self">Self</span>::new()) }
-	<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, _f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; { <span class="prelude-val">Ok</span>(()) }
-}
-
-<span class="doccomment">/// A resource reference as used by the game: case-insensitive 8-bytes
+/// A resource reference as used by the game: case-insensitive 8-bytes
 /// ascii string.
 ///
 /// (Note that, since `Pack` does not know how to work with
@@ -2756,9 +2937,7 @@
 	}
 	<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; { <span class="self">self</span>.name.pack(f) }
 }
-<span class="kw">impl </span>SqlType <span class="kw">for </span>Resref {
-	<span class="kw">const </span>SQL_TYPE: FieldType = FieldType::Resref;
-}
+<span class="kw">impl </span>SqlType <span class="kw">for </span>Resref { <span class="kw">const </span>SQL_TYPE: FieldType = FieldType::Resref; }
 <span class="kw">impl </span>ToSql <span class="kw">for </span>Resref {
 	<span class="kw">fn </span>to_sql(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;rusqlite::Result&lt;rusqlite::types::ToSqlOutput&lt;<span class="lifetime">&#39;_</span>&gt;&gt; { <span class="self">self</span>.name.as_ref().to_sql() }
 }
@@ -3188,9 +3367,9 @@
 <span class="kw">impl </span>FieldType {
 	<span class="kw">pub const fn </span>affinity(<span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str {
 		<span class="kw">match </span><span class="self">self </span>{
-			FieldType::Rowid |
-			FieldType::Integer | FieldType::Strref =&gt; <span class="string">r#&quot;integer default 0&quot;#</span>,
-			FieldType::Text | FieldType::Resref =&gt; <span class="string">r#&quot;text default &quot;&quot;&quot;#</span>,
+			<span class="self">Self</span>::Rowid |
+			<span class="self">Self</span>::Integer | <span class="self">Self</span>::Strref =&gt; <span class="string">r#&quot;integer default 0&quot;#</span>,
+			<span class="self">Self</span>::Text | <span class="self">Self</span>::Resref =&gt; <span class="string">r#&quot;text default &quot;&quot;&quot;#</span>,
 		}
 	}
 	<span class="kw">pub const fn </span>to_lua(<span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str {
@@ -3208,24 +3387,16 @@
 <span class="kw">impl</span>&lt;T&gt; SqlType <span class="kw">for </span><span class="prelude-ty">Option</span>&lt;T&gt; <span class="kw">where </span>T: SqlType {
 	<span class="kw">const </span>SQL_TYPE: FieldType = T::SQL_TYPE;
 }
-<span class="kw">impl </span>SqlType <span class="kw">for </span><span class="kw-2">&amp;</span>str {
-	<span class="kw">const </span>SQL_TYPE: FieldType = FieldType::Text;
-}
-<span class="kw">impl </span>SqlType <span class="kw">for </span>String {
-	<span class="kw">const </span>SQL_TYPE: FieldType = FieldType::Text;
-}
+<span class="kw">impl </span>SqlType <span class="kw">for </span><span class="kw-2">&amp;</span>str { <span class="kw">const </span>SQL_TYPE: FieldType = FieldType::Text; }
+<span class="kw">impl </span>SqlType <span class="kw">for </span>String { <span class="kw">const </span>SQL_TYPE: FieldType = FieldType::Text; }
 <span class="macro">macro_rules! </span>sqltype_int {
 	($(<span class="macro-nonterminal">$T</span>:ty),<span class="kw-2">*</span>) =&gt; { $(<span class="kw">impl </span>SqlType <span class="kw">for </span><span class="macro-nonterminal">$T </span>{
 		<span class="kw">const </span>SQL_TYPE: FieldType = FieldType::Integer;
 	})* }
 }
 <span class="macro">sqltype_int!</span>{i8,i16,i32,i64,u8,u16,u32,u64,usize}
-<span class="comment">// impl&lt;T&gt; SqlType for T where T: num::Integer {
-// 	const SQL_TYPE: FieldType = FieldType::Integer;
-// }
-// II. Everything connected to the table schemas (but not to Connection;
-// only as SQL strings).
-</span><span class="doccomment">/// Description of a field in a game resource.
+
+<span class="doccomment">/// Description of a field in a game resource.
 </span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>Field&lt;<span class="lifetime">&#39;a</span>&gt; {
 	<span class="doccomment">/// Name of this column.
@@ -3638,6 +3809,162 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 	<span class="prelude-val">Ok</span>(())
 }
 } <span class="comment">// mod schemas
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gamestrings {
+<span class="doccomment">//! Access to game strings in database.
+//!
+//! This is the only mod knowing the internals of [`GameString`] struct.
+</span><span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
+<span class="kw">use </span><span class="kw">crate</span>::progress::{Progress};
+<span class="kw">use </span><span class="kw">crate</span>::database::{<span class="self">self</span>,DbInterface};
+<span class="kw">use </span><span class="kw">crate</span>::gamefiles::{GameIndex};
+<span class="kw">use </span><span class="kw">crate</span>::struct_io::{Pack};
+<span class="kw">use </span><span class="kw">crate</span>::resources::Resource;
+<span class="kw">use </span>macros::{Pack};
+<span class="kw">use </span>rusqlite::ToSql;
+
+<span class="attr">#[derive(Debug,Pack)]
+</span><span class="kw">struct </span>TlkHeader {
+	<span class="attr">#[header(<span class="string">&quot;TLK V1  &quot;</span>)]
+	</span>lang: u16,
+	nstr: u32,
+	offset: u32,
+}
+<span class="doccomment">/// A game string as present in a .tlk file.
+</span><span class="attr">#[derive(Debug,Default,Clone,Pack,Resource)]
+</span><span class="kw">pub struct </span>GameString {
+<span class="attr">#[column(strref, usize, <span class="string">&quot;primary key&quot;</span>)]
+	</span>flags: u16,
+	sound: Resref,
+	volume: i32,
+	pitch: i32,
+<span class="attr">#[column(<span class="bool-val">false</span>)] </span>delta: i32,
+<span class="attr">#[column(<span class="bool-val">false</span>)] </span>strlen: i32,
+	string: String,
+}
+<span class="doccomment">/// The iterator used for accessing game strings.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>GameStringsIterator&lt;<span class="lifetime">&#39;a</span>&gt; {
+	cursor: Cursor&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a</span>[u8]&gt;,
+	index: usize,
+	nstr: usize,
+	offset: usize,
+}
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>&gt; TryFrom&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>[u8]&gt; <span class="kw">for </span>GameStringsIterator&lt;<span class="lifetime">&#39;a</span>&gt; {
+	<span class="kw">type </span>Error = anyhow::Error;
+	<span class="kw">fn </span>try_from(bytes: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a</span>[u8])-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+		<span class="kw">let </span><span class="kw-2">mut </span>cursor = Cursor::new(bytes);
+		<span class="kw">let </span>header = TlkHeader::unpack(<span class="kw-2">&amp;mut </span>cursor)
+			.context(<span class="string">&quot;malformed TLK header&quot;</span>)<span class="question-mark">?</span>;
+		<span class="prelude-val">Ok</span>(<span class="self">Self </span>{ cursor, index: <span class="number">0</span>, nstr: header.nstr <span class="kw">as </span>usize,
+			offset: header.offset <span class="kw">as </span>usize })
+	}
+}
+<span class="kw">impl </span>Iterator <span class="kw">for </span>GameStringsIterator&lt;<span class="lifetime">&#39;_</span>&gt; {
+	<span class="kw">type </span>Item = <span class="prelude-ty">Result</span>&lt;GameString&gt;;
+	<span class="doccomment">/// Iterates over all game strings in the file, returning a `Result`
+	/// indicating whether there was an error in the file.
+	</span><span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
+		<span class="kw">if </span><span class="self">self</span>.index &gt;= <span class="self">self</span>.nstr { <span class="kw">return </span><span class="prelude-val">None </span>}
+		<span class="kw">let </span><span class="kw-2">mut </span>s = <span class="kw">match </span>GameString::unpack(<span class="kw-2">&amp;mut </span><span class="self">self</span>.cursor) {
+			<span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(e.into())),
+			<span class="prelude-val">Ok</span>(s) =&gt; s,
+		};
+
+		<span class="kw">let </span>start = <span class="self">self</span>.offset + (s.delta <span class="kw">as </span>usize);
+		<span class="kw">let </span>end = start + (s.strlen <span class="kw">as </span>usize);
+		<span class="kw">let </span>buf = <span class="self">self</span>.cursor.get_ref();
+		<span class="comment">// string *might* be zero-terminated, in which case we discard:
+		</span><span class="kw">let </span>c = buf[end-<span class="number">1</span>];
+		<span class="kw">let </span>end2 = std::cmp::max(start, end-((c==<span class="number">0</span>) <span class="kw">as </span>usize));
+		s.string.push_str(std::str::from_utf8(<span class="kw-2">&amp;</span>buf[start..end2]).ok()<span class="question-mark">?</span>);
+		<span class="self">self</span>.index+= <span class="number">1</span>;
+		<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(s))
+	}
+}
+<span class="kw">impl </span>ExactSizeIterator <span class="kw">for </span>GameStringsIterator&lt;<span class="lifetime">&#39;_</span>&gt; {
+	<span class="kw">fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize { <span class="self">self</span>.nstr }
+}
+<span class="doccomment">/// Saves game strings in one language to the given file.
+</span><span class="kw">pub fn </span>save_language(vec: <span class="kw-2">&amp;</span>[GameString], path: <span class="kw-2">&amp;</span><span class="kw">impl </span>AsRef&lt;Path&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
+	<span class="comment">// FIXME: this could be done with a prepared statement and iterator
+	// (saving the (rather big) memory for the whole vector of strings),
+	// but rusqlite does not export `reset`...
+	</span><span class="kw">let </span>path = path.as_ref();
+	<span class="kw">let </span><span class="kw-2">mut </span>file = fs::File::create(path)
+		.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;cannot create TLK file: {path:?}&quot;</span>))<span class="question-mark">?</span>;
+	TlkHeader { lang: <span class="number">0</span>, nstr: vec.len() <span class="kw">as </span>u32,
+		offset: (<span class="number">26</span><span class="kw-2">*</span>vec.len() + <span class="number">18</span>) <span class="kw">as </span>u32 }.pack(<span class="kw-2">&amp;mut </span>file)<span class="question-mark">?</span>;
+	<span class="comment">// first string in en.tlk has: (flags: u16=5, offset=0, strlen=9)
+	// second string has (flags: u16=1, offset=9, strlen=63) etc.
+	// (offset=72) etc.
+	</span><span class="kw">let </span><span class="kw-2">mut </span>delta = <span class="number">0</span>;
+	<span class="kw">for </span>s <span class="kw">in </span>vec.iter() {
+		<span class="kw">let </span>l = s.string.len() <span class="kw">as </span>u32;
+		(s.flags, s.sound, s.volume, s.pitch, delta, l).pack(<span class="kw-2">&amp;mut </span>file)<span class="question-mark">?</span>;
+		delta+= l;
+	}
+	<span class="kw">for </span>s <span class="kw">in </span>vec {
+		file.write_all(s.string.as_bytes())
+			.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;cannot write strings to TLK file:{path:?}&quot;</span>))<span class="question-mark">?</span>;
+	}
+	<span class="prelude-val">Ok</span>(())
+}
+
+<span class="doccomment">/// Fills all game strings tables from game dialog files.
+</span><span class="kw">pub fn </span>load_languages(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, game: <span class="kw-2">&amp;</span>GameIndex)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
+	<span class="kw">let </span>pb = Progress::new(game.languages.len(), <span class="string">&quot;languages&quot;</span>);
+	<span class="kw">for </span>(langname, dialog) <span class="kw">in </span>game.languages.iter() {
+		pb.inc(<span class="number">1</span>);
+		load_language(db, langname, <span class="kw-2">&amp;</span>dialog).with_context(||
+				<span class="macro">format!</span>(<span class="string">&quot;cannot load language &#39;{langname}&#39; from &#39;{dialog:?}&#39;&quot;</span>))<span class="question-mark">?</span>;
+	}
+	<span class="prelude-val">Ok</span>(())
+}
+<span class="doccomment">/// Fills the database table for a single language.
+</span><span class="kw">fn </span>load_language(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, langname: <span class="kw-2">&amp;</span>str, path: <span class="kw-2">&amp;</span>(<span class="kw">impl </span>AsRef&lt;Path&gt; + Debug))-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
+	<span class="kw">let </span>bytes = fs::read(path)
+		.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;cannot open strings file: {path:?}&quot;</span>))<span class="question-mark">?</span>;
+	<span class="kw">let </span><span class="kw-2">mut </span>q = db.prepare(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">r#&quot;insert into &quot;load_strings_{langname}&quot; (&quot;strref&quot;, &quot;flags&quot;, &quot;sound&quot;, &quot;volume&quot;, &quot;pitch&quot;, &quot;string&quot;) values (?,?,?,?,?,?)&quot;#</span>))<span class="question-mark">?</span>;
+	<span class="kw">let </span>itr = GameStringsIterator::try_from(bytes.as_ref())<span class="question-mark">?</span>;
+	<span class="kw">let </span>pb = Progress::new(itr.len(), langname);
+	db.execute(<span class="string">r#&quot;update &quot;global&quot; set &quot;strref_count&quot;=?&quot;#</span>, (itr.len(),))<span class="question-mark">?</span>;
+	<span class="kw">let </span><span class="kw-2">mut </span>n_strings = <span class="number">0</span>;
+	<span class="kw">for </span>(strref, x) <span class="kw">in </span>itr.enumerate() {
+		<span class="kw">let </span>s = x<span class="question-mark">?</span>;
+		pb.inc(<span class="number">1</span>);
+		q.execute((strref, s.flags, s.sound, s.volume, s.pitch, s.string))<span class="question-mark">?</span>;
+		n_strings+= <span class="number">1</span>;
+	}
+	<span class="macro">info!</span>(<span class="string">&quot;loaded {n_strings} strings for language \&quot;{langname}\&quot;&quot;</span>);
+	<span class="prelude-val">Ok</span>(())
+}
+<span class="doccomment">/// For all game languages, saves database strings to &quot;{lang}.tlk&quot; in
+/// current directory.
+///
+/// This also backups those files if needed (i.e. if no backup exists
+/// yet).
+</span><span class="kw">pub fn </span>save(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, game: <span class="kw-2">&amp;</span>GameIndex)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
+	<span class="kw">use </span>database::DbTypeCheck;
+	<span class="kw">let </span>pb = Progress::new(game.languages.len(), <span class="string">&quot;save translations&quot;</span>);
+	<span class="kw">for </span>(lang, <span class="kw">_</span>) <span class="kw">in </span>game.languages.iter() {
+		pb.inc(<span class="number">1</span>);
+		<span class="kw">let </span>count = <span class="number">1</span>+db.query_row(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">r#&quot;select max(&quot;strref&quot;) from &quot;strings_{lang}&quot;&quot;#</span>),
+			(), |row| row.get::&lt;<span class="kw">_</span>,usize&gt;(<span class="number">0</span>))<span class="question-mark">?</span>;
+		<span class="kw">let </span><span class="kw-2">mut </span>vec = <span class="macro">vec!</span>[GameString::default(); count];
+		<span class="kw">let </span><span class="kw-2">mut </span>sel_str = GameString::select_query_gen(db, <span class="string">&quot;strings_&quot;</span>, lang, <span class="string">&quot;&quot;</span>)<span class="question-mark">?</span>;
+		<span class="kw">for </span>row <span class="kw">in </span>sel_str.iter(())<span class="question-mark">? </span>{
+			<span class="kw">if </span>row.is_db_malformed() { <span class="kw">continue </span>}
+			<span class="kw">let </span>(gamestring, (strref,)) = row<span class="question-mark">?</span>;
+			vec[strref] = gamestring;
+		}
+		<span class="kw">let </span>target = <span class="macro">format!</span>(<span class="string">&quot;{lang}.tlk&quot;</span>);
+		save_language(<span class="kw-2">&amp;</span>vec, <span class="kw-2">&amp;</span>target)
+		.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;could not save strings for language &#39;{lang}&#39;&quot;</span>))<span class="question-mark">?</span>;
+		<span class="macro">info!</span>(<span class="string">&quot;updated strings in {target:?}; file now contains {count} entries&quot;</span>);
+	}
+	<span class="prelude-val">Ok</span>(())
+}
+} <span class="comment">// mod gamestrings
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>database {
 <span class="doccomment">//! Access to the SQL side of the database.
 //!
@@ -4065,159 +4392,6 @@ from &quot;new_strings&quot;
 	}
 }
 } <span class="comment">// mod resources
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gamestrings {
-<span class="doccomment">//! Access to game strings in database.
-//!
-//! This is the only mod knowing the internals of [`GameString`] struct.
-</span><span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
-<span class="kw">use </span><span class="kw">crate</span>::progress::{Progress};
-<span class="kw">use </span><span class="kw">crate</span>::database::{<span class="self">self</span>,DbInterface};
-<span class="kw">use </span><span class="kw">crate</span>::gamefiles::{Pack,GameIndex};
-<span class="kw">use </span><span class="kw">crate</span>::resources::Resource;
-
-<span class="attr">#[derive(Debug,Pack)]
-</span><span class="kw">struct </span>TlkHeader {
-	<span class="attr">#[header(<span class="string">&quot;TLK V1  &quot;</span>)]
-	</span>lang: u16,
-	nstr: u32,
-	offset: u32,
-}
-<span class="doccomment">/// A game string as present in a .tlk file.
-</span><span class="attr">#[derive(Debug,Default,Clone,Pack,Resource)]
-</span><span class="kw">pub struct </span>GameString {
-<span class="attr">#[column(strref, usize, <span class="string">&quot;primary key&quot;</span>)]
-	</span>flags: u16,
-	sound: Resref,
-	volume: i32,
-	pitch: i32,
-<span class="attr">#[column(<span class="bool-val">false</span>)] </span>delta: i32,
-<span class="attr">#[column(<span class="bool-val">false</span>)] </span>strlen: i32,
-	string: String,
-}
-<span class="doccomment">/// The iterator used for accessing game strings.
-</span><span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>GameStringsIterator&lt;<span class="lifetime">&#39;a</span>&gt; {
-	cursor: Cursor&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a</span>[u8]&gt;,
-	index: usize,
-	nstr: usize,
-	offset: usize,
-}
-<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>&gt; TryFrom&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>[u8]&gt; <span class="kw">for </span>GameStringsIterator&lt;<span class="lifetime">&#39;a</span>&gt; {
-	<span class="kw">type </span>Error = anyhow::Error;
-	<span class="kw">fn </span>try_from(bytes: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a</span>[u8])-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-		<span class="kw">let </span><span class="kw-2">mut </span>cursor = Cursor::new(bytes);
-		<span class="kw">let </span>header = TlkHeader::unpack(<span class="kw-2">&amp;mut </span>cursor)
-			.context(<span class="string">&quot;malformed TLK header&quot;</span>)<span class="question-mark">?</span>;
-		<span class="prelude-val">Ok</span>(<span class="self">Self </span>{ cursor, index: <span class="number">0</span>, nstr: header.nstr <span class="kw">as </span>usize,
-			offset: header.offset <span class="kw">as </span>usize })
-	}
-}
-<span class="kw">impl </span>Iterator <span class="kw">for </span>GameStringsIterator&lt;<span class="lifetime">&#39;_</span>&gt; {
-	<span class="kw">type </span>Item = <span class="prelude-ty">Result</span>&lt;GameString&gt;;
-	<span class="doccomment">/// Iterates over all game strings in the file, returning a `Result`
-	/// indicating whether there was an error in the file.
-	</span><span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
-		<span class="kw">if </span><span class="self">self</span>.index &gt;= <span class="self">self</span>.nstr { <span class="kw">return </span><span class="prelude-val">None </span>}
-		<span class="kw">let </span><span class="kw-2">mut </span>s = <span class="kw">match </span>GameString::unpack(<span class="kw-2">&amp;mut </span><span class="self">self</span>.cursor) {
-			<span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(e.into())),
-			<span class="prelude-val">Ok</span>(s) =&gt; s,
-		};
-
-		<span class="kw">let </span>start = <span class="self">self</span>.offset + (s.delta <span class="kw">as </span>usize);
-		<span class="kw">let </span>end = start + (s.strlen <span class="kw">as </span>usize);
-		<span class="kw">let </span>buf = <span class="self">self</span>.cursor.get_ref();
-		<span class="comment">// string *might* be zero-terminated, in which case we discard:
-		</span><span class="kw">let </span>c = buf[end-<span class="number">1</span>];
-		<span class="kw">let </span>end2 = std::cmp::max(start, end-((c==<span class="number">0</span>) <span class="kw">as </span>usize));
-		s.string.push_str(std::str::from_utf8(<span class="kw-2">&amp;</span>buf[start..end2]).ok()<span class="question-mark">?</span>);
-		<span class="self">self</span>.index+= <span class="number">1</span>;
-		<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(s))
-	}
-}
-<span class="kw">impl </span>ExactSizeIterator <span class="kw">for </span>GameStringsIterator&lt;<span class="lifetime">&#39;_</span>&gt; {
-	<span class="kw">fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize { <span class="self">self</span>.nstr }
-}
-<span class="doccomment">/// Saves game strings in one language to the given file.
-</span><span class="kw">pub fn </span>save_language(vec: <span class="kw-2">&amp;</span>[GameString], path: <span class="kw-2">&amp;</span><span class="kw">impl </span>AsRef&lt;Path&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-	<span class="comment">// FIXME: this could be done with a prepared statement and iterator
-	// (saving the (rather big) memory for the whole vector of strings),
-	// but rusqlite does not export `reset`...
-	</span><span class="kw">let </span>path = path.as_ref();
-	<span class="kw">let </span><span class="kw-2">mut </span>file = fs::File::create(path)
-		.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;cannot create TLK file: {path:?}&quot;</span>))<span class="question-mark">?</span>;
-	TlkHeader { lang: <span class="number">0</span>, nstr: vec.len() <span class="kw">as </span>u32,
-		offset: (<span class="number">26</span><span class="kw-2">*</span>vec.len() + <span class="number">18</span>) <span class="kw">as </span>u32 }.pack(<span class="kw-2">&amp;mut </span>file)<span class="question-mark">?</span>;
-	<span class="comment">// first string in en.tlk has: (flags: u16=5, offset=0, strlen=9)
-	// second string has (flags: u16=1, offset=9, strlen=63) etc.
-	// (offset=72) etc.
-	</span><span class="kw">let </span><span class="kw-2">mut </span>delta = <span class="number">0</span>;
-	<span class="kw">for </span>s <span class="kw">in </span>vec.iter() {
-		<span class="kw">let </span>l = s.string.len() <span class="kw">as </span>u32;
-		(s.flags, s.sound, s.volume, s.pitch, delta, l).pack(<span class="kw-2">&amp;mut </span>file)<span class="question-mark">?</span>;
-		delta+= l;
-	}
-	<span class="kw">for </span>s <span class="kw">in </span>vec {
-		file.write_all(s.string.as_bytes())
-			.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;cannot write strings to TLK file:{path:?}&quot;</span>))<span class="question-mark">?</span>;
-	}
-	<span class="prelude-val">Ok</span>(())
-}
-
-<span class="doccomment">/// Fills all game strings tables from game dialog files.
-</span><span class="kw">pub fn </span>load_languages(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, game: <span class="kw-2">&amp;</span>GameIndex)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-	<span class="kw">let </span>pb = Progress::new(game.languages.len(), <span class="string">&quot;languages&quot;</span>);
-	<span class="kw">for </span>(langname, dialog) <span class="kw">in </span>game.languages.iter() {
-		pb.inc(<span class="number">1</span>);
-		load_language(db, langname, <span class="kw-2">&amp;</span>dialog).with_context(||
-				<span class="macro">format!</span>(<span class="string">&quot;cannot load language &#39;{langname}&#39; from &#39;{dialog:?}&#39;&quot;</span>))<span class="question-mark">?</span>;
-	}
-	<span class="prelude-val">Ok</span>(())
-}
-<span class="doccomment">/// Fills the database table for a single language.
-</span><span class="kw">fn </span>load_language(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, langname: <span class="kw-2">&amp;</span>str, path: <span class="kw-2">&amp;</span>(<span class="kw">impl </span>AsRef&lt;Path&gt; + Debug))-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-	<span class="kw">let </span>bytes = fs::read(path)
-		.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;cannot open strings file: {path:?}&quot;</span>))<span class="question-mark">?</span>;
-	<span class="kw">let </span><span class="kw-2">mut </span>q = db.prepare(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">r#&quot;insert into &quot;load_strings_{langname}&quot; (&quot;strref&quot;, &quot;flags&quot;, &quot;sound&quot;, &quot;volume&quot;, &quot;pitch&quot;, &quot;string&quot;) values (?,?,?,?,?,?)&quot;#</span>))<span class="question-mark">?</span>;
-	<span class="kw">let </span>itr = GameStringsIterator::try_from(bytes.as_ref())<span class="question-mark">?</span>;
-	<span class="kw">let </span>pb = Progress::new(itr.len(), langname);
-	db.execute(<span class="string">r#&quot;update &quot;global&quot; set &quot;strref_count&quot;=?&quot;#</span>, (itr.len(),))<span class="question-mark">?</span>;
-	<span class="kw">let </span><span class="kw-2">mut </span>n_strings = <span class="number">0</span>;
-	<span class="kw">for </span>(strref, x) <span class="kw">in </span>itr.enumerate() {
-		<span class="kw">let </span>s = x<span class="question-mark">?</span>;
-		pb.inc(<span class="number">1</span>);
-		q.execute((strref, s.flags, s.sound, s.volume, s.pitch, s.string))<span class="question-mark">?</span>;
-		n_strings+= <span class="number">1</span>;
-	}
-	<span class="macro">info!</span>(<span class="string">&quot;loaded {n_strings} strings for language \&quot;{langname}\&quot;&quot;</span>);
-	<span class="prelude-val">Ok</span>(())
-}
-<span class="doccomment">/// For all game languages, saves database strings to &quot;{lang}.tlk&quot; in
-/// current directory.
-///
-/// This also backups those files if needed (i.e. if no backup exists
-/// yet).
-</span><span class="kw">pub fn </span>save(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, game: <span class="kw-2">&amp;</span>GameIndex)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-	<span class="kw">use </span>database::DbTypeCheck;
-	<span class="kw">let </span>pb = Progress::new(game.languages.len(), <span class="string">&quot;save translations&quot;</span>);
-	<span class="kw">for </span>(lang, <span class="kw">_</span>) <span class="kw">in </span>game.languages.iter() {
-		pb.inc(<span class="number">1</span>);
-		<span class="kw">let </span>count = <span class="number">1</span>+db.query_row(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">r#&quot;select max(&quot;strref&quot;) from &quot;strings_{lang}&quot;&quot;#</span>),
-			(), |row| row.get::&lt;<span class="kw">_</span>,usize&gt;(<span class="number">0</span>))<span class="question-mark">?</span>;
-		<span class="kw">let </span><span class="kw-2">mut </span>vec = <span class="macro">vec!</span>[GameString::default(); count];
-		<span class="kw">let </span><span class="kw-2">mut </span>sel_str = GameString::select_query_gen(db, <span class="string">&quot;strings_&quot;</span>, lang, <span class="string">&quot;&quot;</span>)<span class="question-mark">?</span>;
-		<span class="kw">for </span>row <span class="kw">in </span>sel_str.iter(())<span class="question-mark">? </span>{
-			<span class="kw">if </span>row.is_db_malformed() { <span class="kw">continue </span>}
-			<span class="kw">let </span>(gamestring, (strref,)) = row<span class="question-mark">?</span>;
-			vec[strref] = gamestring;
-		}
-		<span class="kw">let </span>target = <span class="macro">format!</span>(<span class="string">&quot;{lang}.tlk&quot;</span>);
-		save_language(<span class="kw-2">&amp;</span>vec, <span class="kw-2">&amp;</span>target)
-		.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;could not save strings for language &#39;{lang}&#39;&quot;</span>))<span class="question-mark">?</span>;
-		<span class="macro">info!</span>(<span class="string">&quot;updated strings in {target:?}; file now contains {count} entries&quot;</span>);
-	}
-	<span class="prelude-val">Ok</span>(())
-}
-} <span class="comment">// mod gamestrings
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>lua_api {
 <span class="doccomment">//! Loads mod-supplied Lua files.
 //!
