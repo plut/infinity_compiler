@@ -48,7 +48,7 @@ pub(crate) use std::fs::{self,File};
 pub(crate) use std::io::{self,Cursor,Read,Write,Seek,SeekFrom};
 pub(crate) use std::path::{Path, PathBuf};
 
-pub(crate) use macros::{Pack,Resource};
+pub(crate) use macros::{Pack,Resource,SqlMapped};
 pub(crate) use crate::gamefiles::{Resref,Strref};
 pub(crate) use crate::database::{GameDB,DbInterface};
 #[allow(unused_imports)]
@@ -167,7 +167,7 @@ pub(crate) mod staticstrings {
 use std::fmt::{self,Debug,Display,Formatter};
 use std::io::{self,Read,Write};
 use std::cmp::min;
-use crate::gamefiles::Pack;
+use crate::struct_io::Pack;
 
 /// A fixed-length string.
 #[derive(Clone,Copy)]
@@ -303,35 +303,12 @@ impl<const N: usize> Generator<N> {
 	}
 }
 }// mod staticstrings
-pub(crate) mod gamefiles {
-//! Access to the KEY/BIF side of the database.
-//!
-//! Main interface:
-//!  - [`Pack`] trait: defines binary I/O for game structures;
-//!  - [`Resref`], [`Strref`]: indices used in game structures;
-//!  - [`GameIndex`] type and iterator: abstraction used for reading game files.
-//!
-//! A lot of structs in this file (e.g. [`KeyHdr`], [`BifIndex`]) are
-//! exact mirrors of entries in game files and left undocumented.
-//!
-//! Visibility barrier: this mod is the only place using the internals of
-//! key/bif game files.
+pub(crate) mod struct_io {
+//! Basic types for interaction with SQL.
 use crate::prelude::*;
-use rusqlite::types::{FromSql,ToSql, ValueRef};
+use rusqlite::{ToSql};
+use rusqlite::types::{ToSqlOutput,FromSql};
 
-use io::BufReader;
-
-use crate::progress::{Progress};
-use crate::schemas::{SqlType,FieldType};
-use crate::staticstrings::{StaticString};
-
-// I. Basic types: StaticString, Resref, Strref etc.
-/// Binary I/O for game structures; implemented by derive macro.
-///
-/// We have a default implementation for fixed-width
-/// integer types (little-endian) and for strings (they are ignored on
-/// output and empty on input). For composite types, the implementation
-/// is produces by the `[Pack]` derive macro.
 pub trait Pack: Sized {
 	/// Reads this object from a binary source.
 	fn unpack(f: &mut impl Read)->io::Result<Self>;
@@ -339,12 +316,11 @@ pub trait Pack: Sized {
 	fn pack(&self, _f: &mut impl Write)->io::Result<()> {
 		error!("Missing Pack for type: {}", crate::type_of(&self));
 		unimplemented!() }
+	// associated functions:
 	/// Reads a vector of objects (of known size) from a binary source.
 	fn vecunpack(mut f: &mut impl Read, n: usize)->io::Result<Vec<Self>> {
 		(0..n).map(|_| { Self::unpack(&mut f) }).collect()
 	}
-
-	// associated functions:
 	/// Helper function used to check forced headers.
 	fn read_bytes(f: &mut impl Read, n: usize)->io::Result<Vec<u8>> {
 		let mut buf = vec![0u8; n];
@@ -352,7 +328,6 @@ pub trait Pack: Sized {
 // 		unsafe { buf.set_len(n); }
 		f.read_exact(&mut buf)?; Ok(buf)
 	}
-
 	/// function which checks that a header is correct.
 	fn unpack_header(f: &mut impl Read, hdr: &str)->io::Result<()> {
 		let buf = Self::read_bytes(f, hdr.len())?;
@@ -396,7 +371,124 @@ impl Pack for String { // String is ignored on pack/unpack:
 	fn unpack(_f: &mut impl Read)->io::Result<Self> { Ok(Self::new()) }
 	fn pack(&self, _f: &mut impl Write)->io::Result<()> { Ok(()) }
 }
+/// A struct mapped to a SQL row.
+pub trait SqlMapped: Sized {
+	/// The number of fields in the SQL row.
+	const WIDTH: usize;
+	/// Returns the `i`-th field of the resource,
+	/// wrapped in a [`rusqlite::types::ToSlqOutput`]
+	/// for trivial insertion into a SQL statement.
+	/// **NOTE**: rusqlite does not allow pushing `Result<ToSqlOutput>`
+	/// values back into a [`rusqlite::ParamsFromIter`] iterator,
+	/// so we need to unwrap those values.
+	/// Since we do so from a controlled struct, this should not panic;
+	/// however, it would be better to be able to propagate errors.
+	fn get_field(&self, i: usize)->ToSqlOutput<'_>;
+	/// Reads a whole [`rusqlite::Row`] into a struct,
+	/// or raises a conversion error.
+	fn from_row_at(r: &rusqlite::Row<'_>, offset: usize)->Result<Self>;
+	/// Converts this resource to a struct implementing
+	/// [`rusqlite::Params`], allowing it to be passed to a
+	/// [`rusqlite::Statement`].
+	fn as_params(&self)->rusqlite::ParamsFromIter<SqlMappedIterator<'_,Self>> {
+		rusqlite::params_from_iter(SqlMappedIterator { index: 0, resource: self })
+	}
+}
+impl<T: ToSql+FromSql> SqlMapped for T {
+	const WIDTH: usize = 1;
+	fn from_row_at(row: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
+		row.get::<_,T>(offset)
+			.with_context(|| format!("cannot read SQL value as {}",
+				std::any::type_name::<T>()))
+	}
+	fn get_field(&self, i: usize)->ToSqlOutput<'_> {
+		assert_eq!(i, 0);
+		self.to_sql()
+			.expect("cannot convert to SQL")
+	}
+}
+/// An iterator over all fields of a [`SqlMapped`].
+pub struct SqlMappedIterator<'a,T: SqlMapped> {
+	index: usize,
+	resource: &'a T
+}
+impl<'a,T: SqlMapped> Iterator for SqlMappedIterator<'a,T> {
+	type Item = ToSqlOutput<'a>;
+	fn next(&mut self)->Option<Self::Item> {
+		if self.index >= T::WIDTH { return None }
+		let f = self.resource.get_field(self.index);
+		self.index+= 1;
+		Some(f)
+	}
+}
 
+/// A trivial wrapper which prevents a struct from being packed to binary
+/// files, while being pass-through for `SqlMapped`.
+#[derive(Debug)]
+pub struct NotPacked<T: Default+Debug>(pub T);
+impl<T: Default+Debug> Pack for NotPacked<T> {
+	fn unpack(_: &mut impl Read)->io::Result<Self> { Ok(Self(T::default())) }
+	fn pack(&self, _: &mut impl Write)->io::Result<()> { Ok(()) }
+}
+impl<T: SqlMapped+Default+Debug> SqlMapped for NotPacked<T> {
+	const WIDTH: usize = T::WIDTH;
+	fn from_row_at(row: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
+		T::from_row_at(row, offset).map(|x| Self(x))
+	}
+	fn get_field(&self, i: usize)->ToSqlOutput<'_> { self.0.get_field(i) }
+}
+
+/// A trivial wrapper which prevents a structure from being inserted into
+/// a SQL table, while being pass-through for `Pack`.
+#[derive(Debug)]
+pub struct NoSql<T: Debug+Default> (T);
+impl<T: Debug+Default> SqlMapped for NoSql<T> {
+	const WIDTH: usize = 0;
+	fn from_row_at(_row: &rusqlite::Row<'_>, _offset: usize)->Result<Self> {
+		Ok(Self(T::default()))
+	}
+	fn get_field(&self, _i: usize)->ToSqlOutput<'_> {
+		panic!("attempted to insert a NoSql value")
+	}
+}
+impl<T: Pack+Debug+Default> Pack for NoSql<T> {
+	fn unpack(r: &mut impl Read)->io::Result<Self> {
+		T::unpack(r).map(|x| Self(x))
+	}
+	fn pack(&self, w: &mut impl Write)->io::Result<()> { self.0.pack(w) }
+}
+
+} // mod sqltypes
+pub(crate) mod gamefiles {
+//! Access to the KEY/BIF side of the database.
+//!
+//! Main interface:
+//!  - [`Pack`] trait: defines binary I/O for game structures;
+//!  - [`Resref`], [`Strref`]: indices used in game structures;
+//!  - [`GameIndex`] type and iterator: abstraction used for reading game files.
+//!
+//! A lot of structs in this file (e.g. [`KeyHdr`], [`BifIndex`]) are
+//! exact mirrors of entries in game files and left undocumented.
+//!
+//! Visibility barrier: this mod is the only place using the internals of
+//! key/bif game files.
+use crate::prelude::*;
+use crate::struct_io::{Pack};
+use rusqlite::types::{FromSql,ToSql, ValueRef};
+
+use io::BufReader;
+
+use crate::progress::{Progress};
+use crate::schemas::{SqlType,FieldType};
+use crate::staticstrings::{StaticString};
+
+// I. Basic types: StaticString, Resref, Strref etc.
+/// Binary I/O for game structures; implemented by derive macro.
+///
+/// We have a default implementation for fixed-width
+/// integer types (little-endian) and for strings (they are ignored on
+/// output and empty on input). For composite types, the implementation
+/// is produces by the `[Pack]` derive macro.
 /// A resource reference as used by the game: case-insensitive 8-bytes
 /// ascii string.
 ///
@@ -418,9 +510,7 @@ impl Pack for Resref {
 	}
 	fn pack(&self, f: &mut impl Write)->io::Result<()> { self.name.pack(f) }
 }
-impl SqlType for Resref {
-	const SQL_TYPE: FieldType = FieldType::Resref;
-}
+impl SqlType for Resref { const SQL_TYPE: FieldType = FieldType::Resref; }
 impl ToSql for Resref {
 	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> { self.name.as_ref().to_sql() }
 }
@@ -850,9 +940,9 @@ pub enum FieldType {
 impl FieldType {
 	pub const fn affinity(self)->&'static str {
 		match self {
-			FieldType::Rowid |
-			FieldType::Integer | FieldType::Strref => r#"integer default 0"#,
-			FieldType::Text | FieldType::Resref => r#"text default """#,
+			Self::Rowid |
+			Self::Integer | Self::Strref => r#"integer default 0"#,
+			Self::Text | Self::Resref => r#"text default """#,
 		}
 	}
 	pub const fn to_lua(self)->&'static str {
@@ -870,23 +960,15 @@ pub trait SqlType { const SQL_TYPE: FieldType; }
 impl<T> SqlType for Option<T> where T: SqlType {
 	const SQL_TYPE: FieldType = T::SQL_TYPE;
 }
-impl SqlType for &str {
-	const SQL_TYPE: FieldType = FieldType::Text;
-}
-impl SqlType for String {
-	const SQL_TYPE: FieldType = FieldType::Text;
-}
+impl SqlType for &str { const SQL_TYPE: FieldType = FieldType::Text; }
+impl SqlType for String { const SQL_TYPE: FieldType = FieldType::Text; }
 macro_rules! sqltype_int {
 	($($T:ty),*) => { $(impl SqlType for $T {
 		const SQL_TYPE: FieldType = FieldType::Integer;
 	})* }
 }
 sqltype_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
-// impl<T> SqlType for T where T: num::Integer {
-// 	const SQL_TYPE: FieldType = FieldType::Integer;
-// }
-// II. Everything connected to the table schemas (but not to Connection;
-// only as SQL strings).
+
 /// Description of a field in a game resource.
 #[derive(Debug)]
 pub struct Field<'a> {
@@ -1734,8 +1816,11 @@ pub(crate) mod gamestrings {
 use crate::prelude::*;
 use crate::progress::{Progress};
 use crate::database::{self,DbInterface};
-use crate::gamefiles::{Pack,GameIndex};
+use crate::gamefiles::{GameIndex};
+use crate::struct_io::{Pack};
 use crate::resources::Resource;
+use macros::{Pack};
+use rusqlite::ToSql;
 
 #[derive(Debug,Pack)]
 struct TlkHeader {

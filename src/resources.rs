@@ -20,11 +20,18 @@
 //! 3. For subresources: a `rowid` alias (`integer primary key`).
 //!    (Top-level resources don't need this:
 //!    they have the resref as their primary key).
+//!
+//! The `integer primary key` is needed even for subresources:
+//! namely, we want these to have a persistent identifier
+//! for joins with the edit tables.
 use crate::prelude::*;
 use macros::{produce_resource_list};
+use rusqlite::ToSql;
+use rusqlite::types::{ToSqlOutput};
+use crate::struct_io::{Pack,SqlMapped};
 use crate::schemas::{Schema};
 use crate::database::{DbTypeCheck,DbInterface,DbInserter,TypedStatement};
-use crate::gamefiles::{Pack,Restype};
+use crate::gamefiles::{Restype};
 
 /// Interface for a game resource.
 ///
@@ -34,6 +41,18 @@ use crate::gamefiles::{Pack,Restype};
 /// interaction with the database (`ins`, `sel`). Concrete
 /// implementations are provided by the `Resource` derive macro.
 pub trait Resource: Sized {
+	/// Returns the `i`-th field of the resource,
+	/// wrapped in a [`rusqlite::types::ToSlqOutput`]
+	/// for trivial insertion into a SQL statement.
+	/// **NOTE**: rusqlite does not allow pushing `Result<ToSqlOutput>`
+	/// values back into a [`rusqlite::ParamsFromIter`] iterator,
+	/// so we need to unwrap those values.
+	/// Since we do so from a controlled struct, this should not panic;
+	/// however, it would be better to be able to propagate errors.
+	fn get_field(&self, i: usize)->ToSqlOutput<'_>;
+	/// Reads a whole [`rusqlite::Row`] into a struct,
+	/// or raises a conversion error.
+// 	fn from_row(r: &rusqlite::Row<'_>)->Result<Self>;
 	/// Additional data saved in the same row as a game object; usually
 	/// some identifier for the object (e.g. its resref).
 	type Context;
@@ -147,6 +166,14 @@ pub fn restype_from_extension(ext: &str)->Restype {
 	is_arrow: u16,
 	is_bolt: u16,
 	is_bullet: u16,
+}
+#[derive(Pack,SqlMapped)]
+pub struct Item1 {
+#[header("ITM V1  ")]
+	unidentified_name: Strref,
+	name: Strref,
+	replacement: Resref,
+	flags: u32,
 }
 /// An item effect, corresponding to a .itm file.
 #[derive(Debug,Pack,Resource)]

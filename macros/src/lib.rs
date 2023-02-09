@@ -103,6 +103,17 @@ impl AttrParser {
 // 	let b: T = syn::parse2(a).expect("cannot parse!");
 // 	Some(b.into())
 	}
+// 	fn column(&mut self)->FieldInfo {
+// 		let mut field_info = FieldInfo::default();
+// 		match self.get::<syn::Expr>() {
+// 			None => (),
+// 			Some(AttrArg::Str(s)) => field_info.extra = s,
+// 			Some(AttrArg::Ident(i)) if i.as_str() == "false" =>
+// 				field_info.no_column = true,
+// 			Some(a) => panic!("unknown argument for 'column' attribute: {:?}", a),
+// 		}
+// 		return field_info
+// 	}
 }
 impl From<pm2::TokenStream> for AttrParser {
 	fn from(tokens: pm2::TokenStream)->Self {
@@ -135,7 +146,7 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 		quote!{ self.#ident.pack(f)?; }.to_tokens(&mut writef);
 	}
 	let code = quote! {
-		impl crate::gamefiles::Pack for #ident {
+		impl crate::struct_io::Pack for #ident {
 			fn unpack(f: &mut impl std::io::Read)->std::io::Result<Self> {
 				#readf; Ok(Self{ #build })
 			}
@@ -165,13 +176,51 @@ struct ResourceInfo {
 	extension: String,
 	restype: u16,
 }
+#[proc_macro_derive(SqlMapped)]
+pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
+	let mut get_fields = TS2::new();
+	let mut from_row_at = TS2::new();
+	let mut offset = TS2::from(quote!(0usize));
+	let DeriveInput{ ident, data, .. } = parse_macro_input!(tokens);
+	for Field {  ident, ty, .. } in struct_fields(data) {
+		// Read attributes for this field
+// 		let mut field_info = FieldInfo::default();
+// 		for (name, mut args) in attrs.into_iter().map(parse_attr) {
+// 		} // for
+		// before generating the code, `offset` contains the offset at the
+		// start of this field:
+		quote!{
+			if i < #offset + #ty::WIDTH {
+				return self.#ident.get_field(i - (#offset))
+			}
+		}.to_tokens(&mut get_fields);
+		quote!{
+			#ident: #ty::from_row_at(r, offset + (#offset))?,
+		}.to_tokens(&mut from_row_at);
+		// we now update `offset` so that it points to the offset at the start
+		// of next field:
+		quote!{ + #ty::WIDTH }.to_tokens(&mut offset)
+	}
+	let code = quote! (impl crate::struct_io::SqlMapped for #ident {
+		const WIDTH: usize = #offset;
+		fn get_field(&self, i: usize)->rusqlite::types::ToSqlOutput {
+			#get_fields
+			panic!("invalid field {} for resource type {}", i, stringify!(ident))
+		} // get_field
+		fn from_row_at(r: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
+			Ok(Self{ #from_row_at })
+		}
+	});
+	code.into()
+}
 
 #[proc_macro_derive(Resource, attributes(column,resource))]
-pub fn derive_table(tokens: TokenStream) -> TokenStream {
+pub fn derive_resource(tokens: TokenStream) -> TokenStream {
 	let mut context = Vec::<(String, syn::Type, String)>::new();
 	let mut schema = TS2::new();
 	let mut params = TS2::new();
 	let mut build = TS2::new();
+	let mut get_fields = TS2::new();
 	let mut ncol = 0usize;
 // 	let ty_i64: syn::Type = syn::parse_str("i64").unwrap();
 	let add_schema = |fieldname: &str, ty: &syn::Type, extra: &str| {
@@ -203,6 +252,10 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 		add_schema(fieldname.as_str(), &ty, current.extra.as_str())
 			.to_tokens(&mut schema);
 		quote!{ self.#ident, }.to_tokens(&mut params);
+		quote!{ #ncol => self.#ident.to_sql()
+			.expect(concat!("could not convert value to SQL: ", stringify!(#ident))),
+			}
+			.to_tokens(&mut get_fields);
 		quote!{ #ident: row.get::<_,#ty>(#ncol)
 			.context(concat!("cannot read field ", stringify!(#ncol)))?, }
 			.to_tokens(&mut build);
@@ -244,6 +297,11 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	let ResourceInfo { name, extension, restype, .. } = resource_info;
 	let mut code = quote! {
 		impl #generics crate::resources::Resource for #ident #generics {
+			fn get_field(&self, i: usize)->rusqlite::types::ToSqlOutput {
+				match i { #get_fields
+					_ => panic!("invalid field {} for resource type {}", i, stringify!(ident))
+				}
+			}
 			type Context = (#ctx);
 			const SCHEMA: crate::schemas::Schema<'static> = crate::schemas::Schema{
 				name: #name,
@@ -261,9 +319,7 @@ pub fn derive_table(tokens: TokenStream) -> TokenStream {
 	};
 // 	println!("\x1b[31m Context for {}: {}\x1b[m",
 // 		toks_to_string(&ident), toks_to_string(&ctx));
-	if name.is_empty() {
 // 		println!("\x1b[36m{}\x1b[m", code);
-	}
 	if !name.is_empty() {
 		// The type name as a string:
 		let type_name = toks_to_string(&ident);

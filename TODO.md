@@ -1,5 +1,10 @@
- - rust join_lazy_fmt / joinery / lazy_format
-  join_lazy: à l'envers
+# Resources
+                      payload index rowid resref ability_count
+stored in game files  x                          x
+stored in db          x       x     x     x
+in lua structs        x                   x
+visible to lua user   x
+
 # Override
  - [x] improve backup procedure: a full backup as part of init
  - [x] a mod `base_types` for chaff such as SqlType etc.

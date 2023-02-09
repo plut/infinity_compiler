@@ -1,5 +1,10 @@
 function loadstring(s) return load(s) end
 --[[ todo
+
+ - each res/subres is aware of its SQL primary key
+   (needed for update)
+ - it also has an `index` which serves only for sorting
+ 
  - subresources
  - control type on assignment
  - assign an object to a resref field: use obj.resref
