@@ -554,7 +554,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	_ => panic!("bad programming"),
 	} // match
 	let code = quote!{
-		impl crate::schemas::Resource for #ident {
+		impl Resource for #ident {
 			fn schema()->crate::schemas::Schema {
 				crate::schemas::Schema {
 					name: #table_name,
@@ -861,16 +861,14 @@ pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 			pub fn len(&self)->usize { #n }
 			/// Calls a closure for each resource type in the game.
 			pub fn map<U,E,F>(&self, f:F)->Result<AllResources<U>,E>
-			where U: Debug,
-				F: Fn(&T)->Result<U,E> {
+			where U: Debug, F: Fn(&T)->Result<U,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData, #map })
 			}
-// 			/// Calls a closure for each resource type in the game.
-// 			pub fn map_mut<U,E,F>(&self, f:F)->Result<AllResources0<U>,E>
-// 			where U: Debug,
-// 				F: FnMut(&T)->Result<U,E> {
-// 				Ok(AllResources { _marker: std::marker::PhantomData, #map })
-// 			}
+			/// Calls a closure for each resource type in the game.
+			pub fn map_mut<U,E,F>(&self, mut f:F)->Result<AllResources<U>,E>
+			where U: Debug, F: FnMut(&T)->Result<U,E> {
+				Ok(AllResources { _marker: std::marker::PhantomData, #map })
+			}
 			/// Given a SQL table name, returns the schema for this table,
 			/// or throws an appropriate error.
 			pub fn by_name_ref(&self, table_name: &str)->Result<&T> {

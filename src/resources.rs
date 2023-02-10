@@ -27,62 +27,29 @@
 use crate::prelude::*;
 use macros::{produce_resource_list,all_resources,Resource};
 use crate::struct_io::{Pack,SqlRow,NotPacked,NoSql};
-use crate::schemas::{Schema,Resource,Schema0};
+use crate::schemas::{Schema};
 use crate::database::{DbTypeCheck,DbInterface,DbInserter,TypedStatement};
 use crate::gamefiles::{Restype};
 
-#[derive(Pack)]
-struct Repack<T>(T);
+/// One of the resource tables stored in the database.
+///
+/// Methods attached to this trait are those which depend **both** on
+///  - having a full schema (with table name, etc.), and
+///  - having access to the attached (Rust) type (for typed inserts,
+///  etc.).
+/// Methods depending only on the list of columns of the schema and the
+/// Rust struct go to [`SqlRow`].
+/// Methods depending only on the schema go to [`Schema`].
+/// Methods depending only on the list of columns from the schema (i.e.
+/// the intersection of both cases) go to [`ColumnWriter`]
+pub trait Resource: SqlRow {
+	fn schema()->Schema;
+	/// Particular case of SELECT statement used for saving to game files.
+	fn select_query(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
+		Self::select_query_gen(db, "save_", Self::schema().name, s)
+	}
+}
 
-/// Interface for a game resource.
-///
-/// This trait is implemented by the corresponding derive macro.
-///
-/// This is the main trait for game resources, containing the low-level
-/// interaction with the database (`ins`, `sel`). Concrete
-/// implementations are provided by the `Resource0` derive macro.
-pub trait Resource0: Sized {
-	/// Reads a whole [`rusqlite::Row`] into a struct,
-	/// or raises a conversion error.
-// 	fn from_row(r: &rusqlite::Row<'_>)->Result<Self>;
-	/// Additional data saved in the same row as a game object; usually
-	/// some identifier for the object (e.g. its resref).
-	type Context;
-	/// The internal description of the fields of this structure, as used
-	/// to produce SQL statements.
-	const SCHEMA: Schema0<'static>;
-	/// The low-level insert function for an object to a database row.
-	fn ins(&self, s: &mut Statement<'_>, key: &Self::Context)->rusqlite::Result<()>;
-	/// The low-level select function from a database row to an object.
-	fn sel(r: &rusqlite::Row<'_>)->Result<(Self, Self::Context)>;
-// 	/// The select Statement for an object.
-// 	///
-// 	/// The ID field (if present) is not selected. (This is used only for
-// 	/// building game files, where this field is not used anyway).
-// 	///
-// 	/// The name of the table is `{n1}{n2}`; since many tables are built in
-// 	/// two parts (e.g. `load_{name}`, `strings_{lang}`),
-// 	/// this avoids calling `format!` on the
-// 	/// caller side and slightly simplifies the API.
-// 	///
-// 	/// This returns a [`Result<TypedStatement>`]: it is possible to iterate
-// 	/// over the result and recover structures of the original type.
-// 	fn select_query_gen(db: &impl DbInterface, n1: impl Display, n2: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
-// 		let s = Self::SCHEMA.select_statement(n1, n2, cond);
-// 		Ok(TypedStatement::new(db.prepare(&s)?))
-// 	}
-// 	/// Particular case of SELECT statement used for saving to game files.
-// 	fn select_query(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
-// 		Self::select_query_gen(db, "save_", Self::SCHEMA, s)
-// 	}
-}
-/// Those resources which are associated to a global table.
-pub trait NamedTable: Resource0 {
-	/// Returns the associated field (e.g. `.item`) in an `AllResources0` table.
-	fn find_field<T: Debug>(all: &AllResources0<T>)->&T;
-	/// Same as above; `mut` case.
-	fn find_field_mut<T: Debug>(all: &mut AllResources0<T>)->&mut T;
-}
 /// When provided with a file extension, return the corresponding Restype.
 pub fn restype_from_extension(ext: &str)->Restype {
 	match RESOURCES.map(|schema, _| {
@@ -96,111 +63,6 @@ pub fn restype_from_extension(ext: &str)->Restype {
 	}
 }
 
-/// An effect inside a .itm file (either global or in an ability).
-#[derive(Debug,Pack,Resource0)]
-#[allow(missing_copy_implementations)]
-#[resource(item_effects)] pub struct ItemEffect0 {
-#[column(itemref, Resref, r#"references "items"("itemref") on delete cascade"#)]
-#[column(abref, usize, r#"references "item_abilities"("abref") on delete cascade"#)]
-// itemref is used only for sorting:
-#[column(effectref, usize)]
-	opcode: u16, //opcode,
-	target: u8, // EffectTarget,
-	power: u8,
-	parameter1: u32,
-	parameter2: u32,
-	timing_mode: u8, // TimingMode,
-	dispel_mode: u8, // DispelMode,
-	duration: u32,
-	proba1: u8,
-	proba2: u8,
-	resource: Resref,
-	dice_thrown: i32,
-	dice_sides: i32,
-	saving_throw_type: u32,
-	saving_throw_bonus: i32,
-	stacking_id: u32,
-}
-/// An ability inside a .itm file.
-#[derive(Debug,Pack,Resource0)]
-#[allow(missing_copy_implementations)]
-#[resource(item_abilities)] pub struct ItemAbility0 {
-#[column(itemref, Resref, r#"references "items"("itemref") on delete cascade"#)]
-#[column(abref, usize)]
-	attack_type: u8, // AttackType,
-	must_identify: u8,
-	location: u8,
-	alternative_dice_sides: u8,
-	use_icon: Resref,
-	target_type: u8, // TargetType,
-	target_count: u8,
-	range: u16,
-	launcher_required: u8,
-	alternative_dice_thrown: u8,
-	speed_factor: u8,
-	alternative_damage_bonus: u8,
-	thac0_bonus: u16,
-	dice_sides: u8,
-	primary_type: u8,
-	dice_thrown: u8,
-	secondary_type: u8,
-	damage_bonus: u16,
-	damage_type: u16, // DamageType,
-#[column(false)] effect_count: u16, // = 0,
-#[column(false)] effect_index: u16, // = 0,
-	max_charges: u16,
-	depletion: u16,
-	flags: u32,
-	projectile_animation: u16,
-	overhand_chance: u16,
-	backhand_chance: u16,
-	thrust_chance: u16,
-	is_arrow: u16,
-	is_bolt: u16,
-	is_bullet: u16,
-}
-/// An item effect, corresponding to a .itm file.
-#[derive(Debug,Pack,Resource0)]
-#[allow(missing_copy_implementations)]
-#[resource(items,"itm",0x03ed)] pub struct Item0 {
-#[header("ITM V1  ")]
-#[column(itemref, Resref)]
-	unidentified_name: Strref,
-	name: Strref,
-	replacement: Resref,
-	flags: u32, // ItemFlags,
-	itemtype: u16, // ItemType,
-	usability: u32, // UsabilityFlags,
-	animation: u16, // StaticString<2>,
-	min_level: u16,
-	min_strength: u16,
-	min_strengthbonus: u8,
-	kit1: u8,
-	min_intelligence: u8,
-	kit2: u8,
-	min_dexterity: u8,
-	kit3: u8,
-	min_wisdom: u8,
-	kit4: u8,
-	min_constitution: u8,
-	proficiency: u8, // WProf,
-	min_charisma: u16,
-	price: u32,
-	stack_amount: u16,
-	inventory_icon: Resref,
-	lore: u16,
-	ground_icon: Resref,
-	weight: i32,
-	unidentified_description: Strref,
-	description: Strref,
-	description_icon: Resref,
-	enchantment: i32,
-#[column(false)] abilities_offset: u32,
-#[column(false)] abilities_count: u16,
-#[column(false)] effect_offset: u32,
-#[column(false)] effect_index: u16,
-#[column(false)] equip_effect_count: u16,
-}
 /// A game item, corresponding to a .itm file.
 #[derive(Debug,Pack,SqlRow,Resource)]
 #[topresource("items", "itm", 0x03ed)]
@@ -537,3 +399,4 @@ Attack type: {atype}",
 //  - and the constant `RESOURCES`, which holds the parent resources.
 produce_resource_list!();
 all_resources!();
+

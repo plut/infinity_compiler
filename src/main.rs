@@ -65,9 +65,11 @@ impl Display for Error {
 }
 impl std::error::Error for Error { }
 
+/// Just like `write!` except that it is unwrapped.
 macro_rules! uwrite {
 	($($a:tt)*) => { write!($($a)*).unwrap() }
 }
+pub(crate) use uwrite;
 
 }
 pub(crate) mod progress {
@@ -162,7 +164,7 @@ use crate::prelude::*;
 use rusqlite::{ToSql};
 use rusqlite::types::{ToSqlOutput,FromSql};
 use crate::database::TypedStatement;
-use crate::schemas::{Field};
+use crate::schemas::{Field,ColumnWriter};
 
 /// A type which may be packed to binary.
 ///
@@ -328,10 +330,8 @@ pub trait SqlRow: Sized {
 	/// This returns a [`Result<TypedStatement>`]: it is possible to iterate
 	/// over the result and recover structures of the original type.
 	fn select_query_gen(db: &impl DbInterface, n1: impl Display, n2: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
-		let fields = Self::fields();
-		let s = crate::schemas::Columns::<NullDisplay>::from(&fields, NullDisplay())
-			.select_sql(n1, n2, cond);
-		Ok(TypedStatement::new(db.prepare(&s)?))
+		let t = Self::fields().cols().select_sql(n1, n2, cond);
+		Ok(TypedStatement::new(db.prepare(&t)?))
 	}
 }
 impl<T: SqlLeaf> SqlRow for T {
@@ -1022,19 +1022,10 @@ pub(crate) mod schemas {
 //! This mod groups everything which has access to the content of the
 //! [`Schema0`] struct.
 use crate::prelude::*;
-use crate::resources::{RESOURCES};
+use crate::resources::{all_schemas};
 use crate::gamefiles::Restype;
-use crate::struct_io::{SqlRow,FieldType};
-use crate::database::TypedStatement;
+use crate::struct_io::{FieldType};
 
-/// One of the resource tables stored in the database.
-pub trait Resource: SqlRow {
-	fn schema()->Schema;
-	/// Particular case of SELECT statement used for saving to game files.
-	fn select_query(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
-		Self::select_query_gen(db, "save_", Self::schema().name, s)
-	}
-}
 #[derive(Debug)]
 pub enum SchemaResource {
 #[allow(dead_code)]
@@ -1096,6 +1087,43 @@ impl Display for Field {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		write!(f, r#""{n}""#, n = self.fname)
 	}
+}
+
+pub trait ColumnWriter {
+	type Elt: Display;
+	type Iter: ExactSizeIterator<Item=Self::Elt>;
+	fn as_iter(&self)->Self::Iter;
+	fn prefixed<P: Display>(self, prefix: P)->ColumnPrefixed<Self, P>
+	where Self: Sized { ColumnPrefixed(self, prefix) }
+	fn cols(self)->ColumnPrefixed<Self, NullDisplay> where Self: Sized {
+		ColumnPrefixed(self, NullDisplay())
+	}
+	fn len(&self)->usize { self.as_iter().len() }
+}
+impl<'a> ColumnWriter for &'a[Field] {
+	type Elt = &'a Field;
+	type Iter = std::slice::Iter<'a,Field>;
+	fn as_iter(&self)->Self::Iter { self.iter() }
+}
+/// An utility type to write column headers
+/// joined by commas and with a possible prefix (used for "new.").
+pub struct ColumnPrefixed<W,P>(W,P);
+impl<W: ColumnWriter, P: Display> Display for ColumnPrefixed<W, P> {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+		let mut isfirst = true;
+		for element in self.0.as_iter() {
+			if isfirst { isfirst = false; } else { write!(f, ",")?; }
+			write!(f, r#" {prefix}"{element}""#, prefix = self.1)?;
+		}
+		Ok(())
+	}
+}
+impl<W: ColumnWriter, T: Display> ColumnPrefixed<W,T> {
+	/// Returns the SQL select statement for this schema, as a String.
+	pub fn select_sql(self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
+		format!(r#"select {self} from "{n1}{n2}" {condition}"#)
+	}
+	pub fn len(&self)->usize { self.0.len() }
 }
 
 /// Description of several fields.
@@ -1208,20 +1236,6 @@ impl Schema {
 	pub fn resref(&self)->&'static str { self.fields[self.resref_idx()].fname }
 	/// Returns the name of the primary key.
 	pub fn primary(&self)->&'static str { self.fields[self.fields.len()-1].fname }
-// 	/// Complete columns.
-// 	/// Returns an object implementing [`std::fmt::Display`] to write the
-// 	/// column headers for this schema in a SQL query.
-// 	pub fn columns(&self)->Columns<'_,NullDisplay> {
-// 		Columns(&self.fields[..self.before_id()], NullDisplay())
-// 	}
-	/// Columns of payload + context; no id.
-	///
-	/// In other words: these are the columns which can be inserted (id is
-	/// automatically computed by sqlite).
-	///
-	pub fn iter(&self)->Columns<'_,NullDisplay> {
-		Columns(&self.fields, NullDisplay())
-	}
 	/// Returns the SQL statement creating a given table with this schema.
 	///
 	/// The parameters are the table name (not necessarily matching the
@@ -1232,9 +1246,9 @@ impl Schema {
 		for Field { fname, ftype, extra, .. } in self.fields.iter() {
 			if isfirst { isfirst = false; }
 			else { s.push(','); }
-			write!(&mut s, "\n \"{fname}\" {} {extra}", ftype.affinity()).unwrap();
+			uwrite!(&mut s, "\n \"{fname}\" {} {extra}", ftype.affinity());
 		}
-		write!(&mut s, "{more})").unwrap();
+		uwrite!(&mut s, "{more})");
 		s
 	}
 	/// Returns the SQL statement creating the main view for this schema.
@@ -1242,11 +1256,11 @@ impl Schema {
 		let Schema { name, .. } = self;
 		let primary = self.primary();
 		let mut view = format!(r#"create view "{name}" as
-	with "u" as (select {f} from "load_{name}" union select {f} from "add_{name}") select "#, f = self.iter());
+	with "u" as (select {f} from "load_{name}" union select {f} from "add_{name}") select "#, f = self.fields.cols());
 		for Field {fname, .. } in self.fields[..self.fields.len()-1].iter() {
-			write!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{primary}" and "field"='{fname}' order by rowid desc limit 1), "{fname}") as "{fname}", "#).unwrap();
+			uwrite!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{primary}" and "field"='{fname}' order by rowid desc limit 1), "{fname}") as "{fname}", "#);
 		}
-		write!(&mut view, r#""{primary}" from "u""#).unwrap();
+		uwrite!(&mut view, r#""{primary}" from "u""#);
 		view
 	}
 	/// Returns the SQL for creating the output view of a resource.
@@ -1255,28 +1269,28 @@ impl Schema {
 		let mut select = format!(r#"create view "save_{self}" as select"#);
 		let mut source = format!(r#"
 from "{self}" as "a""#);
-		for Field { fname: f, ftype, .. } in self.iter() {
+		for Field { fname: f, ftype, .. } in self.fields.iter() {
 			match ftype {
 				FieldType::Resref => {
 					let a = format!(r#""a"."{f}""#);
 					let b = format!(r#""b_{f}""#);
-					write!(&mut select, r#"
-case when {a} in (select "resref" from "resref_orig") then {a} else ifnull({b}."resref", '') end as "{f}","#).unwrap();
-					write!(&mut source, r#"
-left join "resref_dict" as {b} on {a} = {b}."key""#).unwrap();
+					uwrite!(&mut select, r#"
+case when {a} in (select "resref" from "resref_orig") then {a} else ifnull({b}."resref", '') end as "{f}","#);
+					uwrite!(&mut source, r#"
+left join "resref_dict" as {b} on {a} = {b}."key""#);
 				},
 				FieldType::Strref => {
 					let a = format!(r#""a"."{f}""#);
 					let b = format!(r#""b_{f}""#);
-					write!(&mut select, r#"
-case when typeof({a}) == 'integer' then {a} else ifnull({b}."strref", 0) end as "{f}","#).unwrap();
-					write!(&mut source, r#"
-left join "strref_dict" as {b} on {a} = {b}."native""#).unwrap();
+					uwrite!(&mut select, r#"
+case when typeof({a}) == 'integer' then {a} else ifnull({b}."strref", 0) end as "{f}","#);
+					uwrite!(&mut source, r#"
+left join "strref_dict" as {b} on {a} = {b}."native""#);
 				},
-				_ => write!(&mut select, r#""a"."{f}","#).unwrap()
+				_ => uwrite!(&mut select, r#""a"."{f}","#),
 			}
 		}
-		write!(&mut select, r#""a"."{parent_key}" as "key"{source}"#).unwrap();
+		uwrite!(&mut select, r#""a"."{parent_key}" as "key"{source}"#);
 		select
 	}
 	/// Creates all tables and views in the database associated with a
@@ -1321,7 +1335,7 @@ end"#))?;
 		// `trans` (for update triggers) and `trans_insert` (for insert
 		// trigger).
 		let mut trans_insert = String::new();
-		for Field {fname, ftype, ..} in self.iter() {
+		for Field {fname, ftype, ..} in self.fields.iter() {
 			let trans = match ftype {
 			FieldType::Resref => format!(
 	r#"insert or ignore into "resref_dict" values (new."{fname}", null);"#),
@@ -1348,7 +1362,7 @@ begin
 	{trans_insert}
 	insert into "add_{name}" ({cols}) values ({newcols});
 	insert or ignore into "{dirtytable}" values (new."{parent_key}");
-end"#, cols = self.iter(), newcols = self.iter().with_prefix("new.")))?;
+end"#, cols = self.fields.cols(), newcols = self.fields.prefixed("new.")))?;
 		f(format!(
 r#"create trigger "delete_{name}"
 instead of delete on "{name}"
@@ -1373,9 +1387,8 @@ end"#))?;
 	/// this is used when initializing the database to ignore resources
 	/// which are superseded by override files.
 	pub fn insert_statement(&self, or: impl Display, prefix: impl Display)->String {
-		let name = &self.name;
-		let cols = self.iter();
-		let mut s = format!("insert {or} into \"{prefix}{name}\" ({cols}) values (");
+		let cols = self.fields.cols();
+		let mut s = format!("insert {or} into \"{prefix}{self}\" ({cols}) values (");
 		for c in 0..cols.len()  {
 			if c > 0 { s.push(','); }
 			s.push('?');
@@ -1398,11 +1411,11 @@ from ("#);
 r#"create trigger "update_strrefs"
 after insert on "strref_dict"
 begin"#);
-	RESOURCES.map_mut(|schema,_| {
+	all_schemas().map_mut(|schema| {
 		let resref = schema.resref();
-		let parent = schema.parent_table;
+		let parent = schema.parent_table();
 		let mut is_first_field = true;
-		for Field { fname, ftype, .. } in schema.iter() {
+		for Field { fname, ftype, .. } in schema.fields.iter() {
 			if *ftype != FieldType::Strref { continue }
 			if is_first { is_first = false; }
 			else { write!(&mut create, "\n\tunion ")?; }
@@ -2125,6 +2138,7 @@ from "new_strings"
 				trace!("found resource {}.{:#04x}", resref, restype.value);
 				base.register(&resref)
 					.with_context(|| format!("could not register resref:{resref}"))?;
+				#[allow(clippy::single_match)]
 				match restype {
 				Item::RESTYPE => Item::load_from_handle(&mut base, resref, handle)?,
 				_ => (),
@@ -2157,8 +2171,7 @@ impl<'a> DbInserter<'a> {
 			db.prepare(&schema.insert_statement("or ignore", "load_"))
 			.with_context(|| format!("insert statement for table '{schema}'"))
 		)?,
-		resource_count: all_schemas().map(|schema|
-			any_ok((schema.name, 0)))?,
+		resource_count: all_schemas().map(|schema| any_ok((schema.name, 0)))?,
 		add_resref: db.prepare(
 			r#"insert or ignore into "resref_orig" values (?)"#)?,
 		add_override: db.prepare(
