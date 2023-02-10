@@ -12,13 +12,13 @@
 )]
 use proc_macro::TokenStream;
 use proc_macro2 as pm2;
-type TS2 = pm2::TokenStream;
+type TS = pm2::TokenStream;
 use regex::Regex;
 use quote::{quote, ToTokens};
 use syn::{self, DeriveInput, parse_macro_input, Attribute};
 use syn::{Data::Struct, DataStruct};
 use syn::{Expr, ExprLit, ExprPath};
-use syn::{Field, Fields::Named};
+use syn::{Field, Fields::Named, Fields::Unnamed};
 use syn::{punctuated::Punctuated, token::Comma};
 
 #[derive(Debug)] struct ResourceDef(String, String);
@@ -39,13 +39,102 @@ fn push_resource(rdef: ResourceDef) {
 // }
 
 fn toks_to_string(a: &impl quote::ToTokens) -> String {
-	let mut ts = TS2::new();
+	let mut ts = TS::new();
 	a.to_tokens(&mut ts);
 	ts.to_string()
 }
-fn struct_fields(data: syn::Data) -> Punctuated<Field, Comma> {
+#[derive(Debug)]
+enum FieldNameRef<'a> {
+	Named(&'a syn::Ident),
+	Numbered(usize),
+}
+impl quote::ToTokens for FieldNameRef<'_> {
+	fn to_tokens(&self, tokens: &mut TS) {
+		match self {
+			Self::Named(ident) => ident.to_tokens(tokens),
+			Self::Numbered(n) => pm2::Literal::usize_unsuffixed(*n).to_tokens(tokens)
+		}
+	}
+}
+#[derive(Debug)]
+struct FieldRef<'a> {
+	name: FieldNameRef<'a>,
+	ty: &'a syn::Type,
+	attrs: &'a [syn::Attribute],
+}
+#[derive(Debug,Default)]
+struct Fields {
+	names: Option::<Vec<syn::Ident>>,
+	types: Vec::<syn::Type>,
+	attrs: Vec::<Vec<syn::Attribute>>,
+}
+impl Fields {
+	fn iter<'a>(&'a self)->FieldsIter<'_> { FieldsIter(&self, 0) }
+	fn build_from(&self, vals: &[TS])->TS {
+		let mut r = TS::new();
+		if let Some(v) = &self.names {
+			for (ident, val) in std::iter::zip(v.iter(), vals.iter()) {
+				quote!(#ident: #val,).to_tokens(&mut r);
+			}
+			quote!( Self { #r } ).into()
+		} else {
+			for val in vals.iter() {
+				quote!(#val,).to_tokens(&mut r);
+			}
+			quote!( Self( #r ) ).into()
+		}
+	}
+}
+impl From<syn::Data> for Fields {
+	fn from(source: syn::Data)->Self {
+		let fields = match source {
+			Struct(DataStruct{ fields, .. }) => fields,
+		_ => panic!("expected a struct"),
+		};
+		match fields {
+		syn::Fields::Unit => Self::default(),
+		syn::Fields::Named(s) => {
+			let mut f = Self { names: Some(Vec::<_>::new()), ..Default::default() };
+			for syn::Field { ident, ty, attrs, .. } in s.named {
+				f.names.as_mut().unwrap().push(ident.unwrap());
+				f.types.push(ty);
+				f.attrs.push(attrs);
+			}
+			f
+		},
+		syn::Fields::Unnamed(s) => {
+			let mut f = Self::default();
+			for syn::Field { ty, attrs, .. } in s.unnamed {
+				f.types.push(ty);
+				f.attrs.push(attrs);
+			}
+			f
+		},
+		} // match
+	}
+}
+struct FieldsIter<'a>(&'a Fields, usize);
+impl<'a> Iterator for FieldsIter<'a> {
+	type Item = FieldRef<'a>;
+	fn next(&mut self)->Option<Self::Item> {
+		let i = self.1;
+		if i >= self.0.types.len() { return None }
+		let r = FieldRef {
+			name: match &self.0.names {
+				Some(v) => FieldNameRef::Named(&v[i]),
+				None => FieldNameRef::Numbered(i),
+			},
+			ty: &self.0.types[i],
+			attrs: &self.0.attrs[i],
+		};
+		self.1 = i+1;
+		Some(r)
+	}
+}
+fn struct_fields(data: syn::Data)->Vec<syn::Field> {
 	match data {
-		Struct(DataStruct{ fields: Named(f), ..}) => f.named,
+		Struct(DataStruct{ fields: Named(f), ..}) =>
+			f.named.into_iter().collect(),
 // 		Struct(DataStruct{ fields: Unnamed(f), .. }) => f.unnamed,
 		_ => panic!("only struct with named fields!") }
 }
@@ -78,6 +167,9 @@ impl From<syn::Type> for AttrArg {
 }
 fn parse_attr(Attribute { path, tokens, .. }: Attribute)->(String, AttrParser) {
 	(path.get_ident().unwrap().to_string(), tokens.into())
+}
+fn parse_attr1(Attribute { path, tokens, .. }: &Attribute)->(String, AttrParser) {
+	(path.get_ident().unwrap().to_string(), (*tokens).clone().into())
 }
 
 struct AttrParser(std::vec::IntoIter<pm2::TokenStream>);
@@ -128,41 +220,112 @@ impl From<pm2::TokenStream> for AttrParser {
 
 #[proc_macro_derive(Pack, attributes(header))]
 pub fn derive_pack(tokens: TokenStream) -> TokenStream {
-	let DeriveInput{ ident, data, .. } = parse_macro_input!(tokens);
-	let flist = struct_fields(data);
+	let DeriveInput{ ident, generics, data, .. } = parse_macro_input!(tokens);
+	let fields = Fields::from(data);
 
-	let mut readf = TS2::new();
-	let mut build = TS2::new();
-	let mut writef = TS2::new();
+	let mut readv = Vec::<TS>::new();
+	let mut readf = TS::new();
+	let mut writef = TS::new();
+	let mut where_pack = TS::from(quote!{ where });
+	for gen in generics.params.iter() {
+		if let syn::GenericParam::Type(t) = gen {
+			quote!{ #t: Pack, }.to_tokens(&mut where_pack);
+		}
+	}
 
-	for Field { attrs, ident, ty, .. } in flist {
-		for (name, mut args) in attrs.into_iter().map(parse_attr) {
+	for FieldRef { name, attrs, ty } in fields.iter() {
+		for (name, mut args) in attrs.into_iter().map(parse_attr1) {
 			match name.as_str() {
 				"header" => pack_attr_header(&mut readf, &mut writef, &mut args),
 				&_ => () };
 		}
-		quote!{ let #ident = #ty::unpack(f)?; }.to_tokens(&mut readf);
-		quote!{ #ident, }.to_tokens(&mut build);
-		quote!{ self.#ident.pack(f)?; }.to_tokens(&mut writef);
+		readv.push(quote!{#ty::unpack(f)?}.into());
+		quote!{ self.#name.pack(f)?; }.to_tokens(&mut writef);
 	}
+	let readf = fields.build_from(&readv);
 	let code = quote! {
-		impl crate::struct_io::Pack for #ident {
+		impl #generics crate::struct_io::Pack for #ident #generics
+		#where_pack {
 			fn unpack(f: &mut impl std::io::Read)->std::io::Result<Self> {
-				#readf; Ok(Self{ #build })
+				Ok(#readf)
 			}
 			fn pack(&self, f: &mut impl std::io::Write)->std::io::Result<()> {
-				#writef; Ok(())
+				#writef Ok(())
 			}
 		}
 	};
-// 	println!("{}", code);
 	code.into()
 } // Pack
-fn pack_attr_header(readf: &mut TS2, writef: &mut TS2, args: &mut AttrParser) {
+fn pack_attr_header(readf: &mut TS, writef: &mut TS, args: &mut AttrParser) {
 	if let Some(AttrArg::Str(s)) = args.get::<syn::Expr>() {
 		quote!{ Self::unpack_header(f, #s)?; }.to_tokens(readf);
 		quote!{ f.write_all(#s.as_bytes())?; }.to_tokens(writef);
 	}
+}
+
+/// This macro derives several traits for a newtype:
+///  - `Debug` when all fields are `Debug`,
+///  - `Display` when all fields are `Display`,
+///  - `From` for a length-1 newtype,
+///  - `unpack()` implem.,
+#[proc_macro_derive(Newtype)]
+pub fn derive_newtype(tokens: TokenStream)->TokenStream {
+	let DeriveInput{ ident, generics, data, .. } = parse_macro_input!(tokens);
+	let fields = Fields::from(data);
+	if fields.types.len() != 1 {
+		panic!("Newtype must be used only for length-1 wrappers...");
+	}
+	let FieldRef { name, ty, .. } = fields.iter().next().unwrap();
+	let mut where_debug = TS::new();
+	let mut where_display = TS::new();
+	let mut where_clone = TS::new();
+	let mut where_copy = TS::new();
+	let mut gen_params = TS::new();
+	for gen in generics.params.iter() {
+		match gen {
+		syn::GenericParam::Type(t) => {
+			quote!{ #t: Debug, }.to_tokens(&mut where_debug);
+			quote!{ #t: Display, }.to_tokens(&mut where_display);
+			quote!{ #t: Clone, }.to_tokens(&mut where_clone);
+			quote!{ #t: Copy, }.to_tokens(&mut where_copy);
+			t.ident.to_tokens(&mut gen_params);
+		},
+		syn::GenericParam::Lifetime(l) => l.lifetime.to_tokens(&mut gen_params),
+		syn::GenericParam::Const(c) => c.ident.to_tokens(&mut gen_params),
+		}//match
+		quote!{,}.to_tokens(&mut gen_params);
+	}
+	let from = fields.build_from(&[quote!{ source }]);
+	let clone = fields.build_from(&[quote!{ self.#name.clone() }]);
+	let code = quote!{
+		impl #generics Debug for #ident<#gen_params> where #where_debug {
+			fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+				write!(f, "{}({:?})", stringify!(#ident), self.#name)
+			}
+		}
+		impl #generics Display for #ident<#gen_params> where #where_display {
+			fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+				Display::fmt(&self.#name, f)
+			}
+		}
+		impl #generics Clone for #ident<#gen_params> where #where_clone {
+			fn clone(&self)->Self { #clone }
+		}
+		impl #generics Copy for #ident<#gen_params> where #where_copy { }
+		impl #generics From<#ty> for #ident<#gen_params> {
+			fn from(source: #ty)->Self { #from }
+		}
+		impl #generics AsRef<#ty> for #ident<#gen_params> {
+			fn as_ref(&self)->&#ty { &self.#name }
+		}
+		impl #generics AsMut<#ty> for #ident<#gen_params> {
+			fn as_mut(&mut self)->&mut #ty { &mut self.#name }
+		}
+		impl #generics #ident<#gen_params> {
+			pub fn unwrap(self)->#ty { self.#name }
+		}
+	};
+	code.into()
 }
 
 #[derive(Default,Debug)]
@@ -176,19 +339,21 @@ struct ResourceInfo {
 	extension: String,
 	restype: u16,
 }
-#[proc_macro_derive(SqlMapped, attributes(column))]
+#[proc_macro_derive(SqlRow, attributes(column))]
 pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
-	let mut get_fields = TS2::new();
-	let mut from_row_at = TS2::new();
-	let mut fieldtype = TS2::new();
-	let mut fieldname_ctx = TS2::new();
-	let mut field_create_text = TS2::new();
-	let mut offset = TS2::from(quote!(0usize));
+	let mut get_fields = TS::new();
+	let mut from_row_at_v = Vec::<TS>::new();
+	let mut fieldtype = TS::new();
+	let mut fieldname_ctx = TS::new();
+	let mut field_create_text = TS::new();
+	let mut primary_index = TS::from(quote!(None));
+	let mut offset = TS::from(quote!(0usize));
 	let DeriveInput{ ident, data, .. } = parse_macro_input!(tokens);
-	for Field { attrs, ident, ty, .. } in struct_fields(data) {
+	let fields = Fields::from(data);
+	for FieldRef { name, attrs, ty, .. } in fields.iter() {
 		// Read attributes for this field
 		let mut field_info = FieldInfo::default();
-		for (name, mut args) in attrs.into_iter().map(parse_attr) {
+		for (name, mut args) in attrs.into_iter().map(parse_attr1) {
 			match name.as_str() {
 				"column" => field_info = args.column(),
 				_ => ()
@@ -198,7 +363,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 		// start of this field:
 		quote!{
 			if i < #offset + #ty::WIDTH {
-				return self.#ident.get_field(i - (#offset))
+				return self.#name.get_field(i - (#offset))
 			}
 		}.to_tokens(&mut get_fields);
 		quote!{
@@ -211,26 +376,31 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 				return #ty::fieldtype(i - (#offset))
 			}
 		}.to_tokens(&mut fieldtype);
+		// this will use the highest-numbered field labeled as "primary" as
+		// the primary key:
+		if field_info.extra.contains("primary") {
+			quote!{ .or(Some(#offset)) }.to_tokens(&mut primary_index);
+		}
 		let create_text = field_info.extra;
 		quote!{
 			if i < #offset + #ty::WIDTH {
 				return #create_text
 			}
 		}.to_tokens(&mut field_create_text);
-		quote!{ #ident: #ty::from_row_at(r, offset + (#offset))?, }
-			.to_tokens(&mut from_row_at);
+		from_row_at_v.push(quote!{ #ty::from_row_at(r, offset + (#offset))? });
 		// we now update `offset` so that it points to the offset at the start
 		// of next field:
 		quote!{ + #ty::WIDTH }.to_tokens(&mut offset)
 	}
-	let code = quote! (impl crate::struct_io::SqlMapped for #ident {
+	let from_row_at = fields.build_from(&from_row_at_v);
+	let code = quote! (impl crate::struct_io::SqlRow for #ident {
 		const WIDTH: usize = #offset;
 		fn get_field(&self, i: usize)->rusqlite::types::ToSqlOutput {
 			#get_fields
 			panic!("invalid field {} for resource type {}", i, stringify!(ident))
 		} // get_field
 		fn from_row_at(r: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
-			Ok(Self{ #from_row_at })
+			Ok(#from_row_at)
 		}
 		fn fieldtype(i: usize)->crate::struct_io::FieldType {
 			#fieldtype
@@ -244,6 +414,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 			#field_create_text
 			panic!("invalid field {} for resource type {}", i, stringify!(ident))
 		}
+		fn primary_index()->Option<usize> { #primary_index }
 	});
 	code.into()
 }
@@ -251,10 +422,10 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 #[proc_macro_derive(Resource, attributes(column,resource))]
 pub fn derive_resource(tokens: TokenStream) -> TokenStream {
 	let mut context = Vec::<(String, syn::Type, String)>::new();
-	let mut schema = TS2::new();
-	let mut params = TS2::new();
-	let mut build = TS2::new();
-	let mut get_fields = TS2::new();
+	let mut schema = TS::new();
+	let mut params = TS::new();
+	let mut build = TS::new();
+	let mut get_fields = TS::new();
 	let mut ncol = 0usize;
 // 	let ty_i64: syn::Type = syn::parse_str("i64").unwrap();
 	let add_schema = |fieldname: &str, ty: &syn::Type, extra: &str| {
@@ -297,8 +468,8 @@ pub fn derive_resource(tokens: TokenStream) -> TokenStream {
 	}
 	let payload_len = ncol;
 	// Build the context part of the schema from the attributes:
-	let mut ctx = TS2::new();
-	let mut build_key = TS2::new();
+	let mut ctx = TS::new();
+	let mut build_key = TS::new();
 	for (keycol_in, (fieldname, ty, extra)) in context.iter().enumerate() {
 		add_schema(fieldname.as_str(), ty, extra.as_str()).to_tokens(&mut schema);
 		let kc = pm2::Literal::isize_unsuffixed(keycol_in as isize);

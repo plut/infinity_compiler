@@ -48,13 +48,15 @@ pub(crate) use std::fs::{self,File};
 pub(crate) use std::io::{self,Cursor,Read,Write,Seek,SeekFrom};
 pub(crate) use std::path::{Path, PathBuf};
 
-pub(crate) use macros::{Pack,Resource,SqlMapped};
+pub(crate) use macros::{Pack,Resource,SqlRow,Newtype};
 pub(crate) use crate::gamefiles::{Resref,Strref};
 pub(crate) use crate::database::{GameDB,DbInterface};
 #[allow(unused_imports)]
 pub(crate) use crate::progress::{Progress,scope_trace,NullDisplay,DisplayExt};
 
 pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
+#[derive(Newtype)]
+struct Foobar(i32);
 
 #[derive(Debug)]
 pub(crate) enum Error{
@@ -158,11 +160,17 @@ pub(crate) use scope_trace;
 pub(crate) mod struct_io {
 //! Basic types for interaction with SQL and binary files.
 //! The main entry points for this module are the traits [`Pack`]
-//! and [`SqlMapped`].
+//! and [`SqlRow`].
 use crate::prelude::*;
 use rusqlite::{ToSql};
 use rusqlite::types::{ToSqlOutput,FromSql};
 
+/// A type which may be packed to binary.
+///
+/// This trait is implemented by the derive macro.
+/// The macro may be applied to both named and unnamed structs,
+/// as well as (in some limited cases) for parametrized structs
+/// (in which case it will require that all fields implement `Pack`).
 pub trait Pack: Sized {
 	/// Reads this object from a binary source.
 	fn unpack(f: &mut impl Read)->io::Result<Self>;
@@ -262,7 +270,7 @@ impl<T> SqlLeaf for Option<T> where T: SqlLeaf {
 	const FIELD_TYPE: FieldType = T::FIELD_TYPE;
 }
 /// A struct mapped to a SQL row.
-pub trait SqlMapped: Sized {
+pub trait SqlRow: Sized {
 	/// The number of fields in the SQL row.
 	const WIDTH: usize;
 	/// Returns the `i`-th field of the resource,
@@ -284,12 +292,13 @@ pub trait SqlMapped: Sized {
 	/// Any supplemental material introduced at table creation
 	/// (constraints, etc.)
 	fn field_create_text(_i: usize)->&'static str { "" }
+	fn primary_index()->Option<usize>;
 	// Provided functions:
 	/// Converts this resource to a struct implementing
 	/// [`rusqlite::Params`], allowing it to be passed to a
 	/// [`rusqlite::Statement`].
-	fn as_params(&self)->rusqlite::ParamsFromIter<SqlMappedIterator<'_,Self>> {
-		rusqlite::params_from_iter(SqlMappedIterator { index: 0, resource: self })
+	fn as_params(&self)->rusqlite::ParamsFromIter<SqlRowIterator<'_,Self>> {
+		rusqlite::params_from_iter(SqlRowIterator(0, self))
 	}
 	/// Reads a whole [`rusqlite::Row`] into a struct.
 	fn from_row(row: &rusqlite::Row<'_>,)->Result<Self> {
@@ -297,11 +306,14 @@ pub trait SqlMapped: Sized {
 	}
 	/// Returns the name of the `i`-th field, as a string.
 	fn fieldname(i: usize)->&'static str { Self::fieldname_ctx("", i) }
-	/// Returns the schema, which is an iterator over (fieldname,
-	/// fieldtype).
+	/// Return the `i`-th element of schema
+	fn field_info(i: usize)->(&'static str, FieldType, &'static str) {
+		(Self::fieldname(i), Self::fieldtype(i), Self::field_create_text(i))
+	}
+	/// Returns the schema: an iterator returning (fieldname, fieldtype).
 	fn schema()->SchemaIterator<Self> { SchemaIterator(0, PhantomData) }
 }
-impl<T: SqlLeaf> SqlMapped for T {
+impl<T: SqlLeaf> SqlRow for T {
 	const WIDTH: usize = 1;
 	fn from_row_at(row: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
 		row.get::<_,T>(offset)
@@ -315,48 +327,45 @@ impl<T: SqlLeaf> SqlMapped for T {
 	}
 	fn fieldtype(_i: usize)->FieldType { Self::FIELD_TYPE }
 	fn fieldname_ctx(ctx: &'static str, _i: usize)->&'static str { ctx }
+	fn primary_index()->Option<usize> { None }
 }
-/// An iterator over all fields of a [`SqlMapped`].
-pub struct SqlMappedIterator<'a,T: SqlMapped> {
-	index: usize,
-	resource: &'a T
-}
-impl<'a,T: SqlMapped> Iterator for SqlMappedIterator<'a,T> {
+/// An iterator over all fields of a [`SqlRow`].
+pub struct SqlRowIterator<'a,T: SqlRow> (usize, &'a T);
+impl<'a,T: SqlRow> Iterator for SqlRowIterator<'a,T> {
 	type Item = ToSqlOutput<'a>;
 	fn next(&mut self)->Option<Self::Item> {
-		if self.index >= T::WIDTH { return None }
-		let f = self.resource.get_field(self.index);
-		self.index+= 1;
-		Some(f)
-	}
-}
-/// An iterator over the [`SqlMapped`] schema.
-pub struct SchemaIterator<T: SqlMapped>(usize, PhantomData<T>);
-impl<T: SqlMapped> Iterator for SchemaIterator<T> {
-	type Item = (&'static str, FieldType);
-	fn next(&mut self)->Option<Self::Item> {
 		if self.0 >= T::WIDTH { return None }
-		let f = (T::fieldname(self.0), T::fieldtype(self.0));
+		let f = self.1.get_field(self.0);
 		self.0+= 1;
 		Some(f)
 	}
 }
+impl<T: SqlRow> ExactSizeIterator for SqlRowIterator<'_,T> {
+	fn len(&self)->usize { T::WIDTH }
+}
 
-/// A trivial wrapper around a value.
-/// `S` is a flag which decides whether `SqlMapped` is pass-through or
-/// ignored, and likewise for `P` and `Pack`.
-pub struct Wrapper<T, const S: bool, const P: bool>(T);
-impl<T: Debug, const S: bool, const P: bool> Debug for Wrapper<T,S,P> {
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		write!(f, "Wrapper({S},{P},{:?}", self.0)
+// TODO: move everything about SchemaIterator to a new function.
+/// An iterator over the [`SqlRow`] schema.
+pub struct SchemaIterator<T: SqlRow>(usize, PhantomData<T>);
+impl<T: SqlRow> Iterator for SchemaIterator<T> {
+	type Item = (&'static str, FieldType, &'static str);
+	fn next(&mut self)->Option<Self::Item> {
+		if self.0 >= T::WIDTH { return None }
+		let f = T::field_info(self.0);
+		self.0+= 1;
+		Some(f)
 	}
 }
-impl<T: Display, const S: bool, const P: bool> Display for Wrapper<T,S,P> {
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { write!(f, "{}", self.0) }
+impl<T: SqlRow> ExactSizeIterator for SchemaIterator<T> {
+	fn len(&self)->usize { T::WIDTH }
 }
-impl<T, const S: bool, const P: bool> From<T> for Wrapper<T,S,P> {
-	fn from(s: T)->Self { Self(s) }
-}
+
+use macros::Newtype;
+/// A trivial wrapper around a value.
+/// `S` is a flag which decides whether `SqlRow` is pass-through or
+/// ignored, and likewise for `P` and `Pack`.
+#[derive(Newtype)]
+pub struct Wrapper<T, const S: bool, const P: bool>(T);
 impl<T: Pack, const S: bool> Pack for Wrapper<T,S,true> {
 	fn unpack(r: &mut impl Read)->io::Result<Self> { T::unpack(r).map(Self) }
 	fn pack(&self, w: &mut impl Write)->io::Result<()> { self.0.pack(w) }
@@ -365,7 +374,7 @@ impl<T: Default, const S: bool> Pack for Wrapper<T,S,false> {
 	fn unpack(_r: &mut impl Read)->io::Result<Self> { Ok(Self(T::default())) }
 	fn pack(&self, _w: &mut impl Write)->io::Result<()> { Ok(()) }
 }
-impl<T: SqlMapped, const P: bool> SqlMapped for Wrapper<T,true,P> {
+impl<T: SqlRow, const P: bool> SqlRow for Wrapper<T,true,P> {
 	const WIDTH: usize = T::WIDTH;
 	fn from_row_at(row: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
 		T::from_row_at(row, offset).map(Self)
@@ -375,8 +384,9 @@ impl<T: SqlMapped, const P: bool> SqlMapped for Wrapper<T,true,P> {
 		T::fieldname_ctx(ctx, i)
 	}
 	fn fieldtype(i: usize)->FieldType { T::fieldtype(i) }
+	fn primary_index()->Option<usize> { T::primary_index() }
 }
-impl<T: Default, const P: bool> SqlMapped for Wrapper<T,false,P> {
+impl<T: Default, const P: bool> SqlRow for Wrapper<T,false,P> {
 	const WIDTH: usize = 0;
 	fn from_row_at(_row: &rusqlite::Row<'_>, _offset: usize)->Result<Self> {
 		Ok(Self(T::default()))
@@ -390,9 +400,9 @@ impl<T: Default, const P: bool> SqlMapped for Wrapper<T,false,P> {
 	fn fieldname_ctx(_ctx: &'static str, _i: usize)->&'static str {
 		panic!("attempted to read field name of a NoSql value")
 	}
-}
-impl<T: SqlMapped, const P: bool, const S: bool> Wrapper<T,S,P> {
-	pub fn unwrap(&self)->T where T: Copy { self.0 }
+	fn primary_index()->Option<usize> {
+		panic!("attempted to compute primary index of a NoSql value")
+	}
 }
 pub type NoSql<T> = Wrapper<T,false,true>;
 pub type NotPacked<T> = Wrapper<T,true,false>;
@@ -414,20 +424,20 @@ use crate::struct_io::Pack;
 
 /// A fixed-length string.
 #[derive(Clone,Copy)]
-pub struct StaticString<const N: usize>{ bytes: [u8; N], }
+pub struct StaticString<const N: usize>([u8; N]);
 impl<const N: usize> PartialEq<&str> for StaticString<N> {
 	fn eq(&self, other: &&str) -> bool {
 		for (i, c) in other.bytes().enumerate() {
 			if i >= N { return false }
 			if !c.is_ascii() { return false }
-			if self.bytes[i] != c { return false }
+			if self.0[i] != c { return false }
 			if c == 0u8 { return true }
 		}
 		true
 	}
 }
 impl<const N: usize> PartialEq<StaticString<N>> for StaticString<N> {
-	fn eq(&self, other: &StaticString<N>)->bool { self.bytes == other.bytes }
+	fn eq(&self, other: &StaticString<N>)->bool { self.0 == other.0 }
 }
 impl<const N: usize> From<&str> for StaticString<N> {
 	fn from(s: &str) -> Self { Self::from(s.as_bytes()) }
@@ -437,15 +447,15 @@ impl<const N: usize> From<&[u8]> for StaticString<N> {
 		let mut bytes = [0u8; N];
 		let n = min(s.len(), N);
 		bytes[..n].copy_from_slice(&s[..n]);
-		Self { bytes, }
+		Self(bytes)
 	}
 }
 impl<const N: usize> AsRef<str> for StaticString<N> {
 	fn as_ref(&self)->&str {
-		let r = self.bytes.iter().enumerate().find_map(|(i, c)| {
+		let r = self.0.iter().enumerate().find_map(|(i, c)| {
 			if *c == 0 { Some(i) } else { None } });
 		let n = r.unwrap_or(N);
-		std::str::from_utf8(&self.bytes[..n]).unwrap()
+		std::str::from_utf8(&self.0[..n]).unwrap()
 	}
 }
 impl<const N: usize> Debug for StaticString<N> {
@@ -454,7 +464,7 @@ impl<const N: usize> Debug for StaticString<N> {
 		// we need to bring into scope its `Write` implem.:
 		use fmt::Write;
 		f.write_char('"')?;
-		for c in &self.bytes {
+		for c in &self.0 {
 			if *c == 0u8 { break }
 			f.write_char(*c as char)?;
 		}
@@ -468,21 +478,24 @@ impl<const N: usize> Display for StaticString<N> {
 		Display::fmt(&self.as_ref(), f)
 	}
 }
+/// This Pack implementation is manual because (1) the derive macro has
+/// some difficulties with const parameters, and (2) [u8;N] is not `Pack`
+/// anyway.
 impl<const N: usize> Pack for StaticString<N> {
 	fn unpack(f: &mut impl Read)->io::Result<Self> {
 		let mut x = [0u8; N];
 		f.read_exact(&mut x)?;
-		Ok(Self{ bytes: x, })
+		Ok(Self(x))
 	}
 	fn pack(&self, f: &mut impl Write)->io::Result<()> {
-		f.write_all(&self.bytes)
+		f.write_all(&self.0)
 	}
 }
 impl<const N: usize> Default for StaticString<N> {
-	fn default()->Self { Self { bytes: [0u8; N] } }
+	fn default()->Self { Self([0u8; N]) }
 }
 impl<const N: usize> StaticString<N> {
-	pub fn make_ascii_lowercase(&mut self) { self.bytes.make_ascii_lowercase() }
+	pub fn make_ascii_lowercase(&mut self) { self.0.make_ascii_lowercase() }
 }
 /// A struct enumerating fixed-length strings of the following form:
 /// x, x0, x1, .., x00, x01, .., x99, x000, x001, ...
@@ -502,11 +515,11 @@ impl<const N: usize> Generator<N> {
 	/// The string is shortened to no more than N bytes, keeping only a
 	/// small subset of characters guaranteed to be valid in resrefs.
 	pub fn new(source: &str)->Self {
-		let mut buf = StaticString::<N> { bytes: [0u8; N] };
+		let mut buf = StaticString::<N>::default();
 		let mut n = 0;
 		for c in source.as_bytes() {
 			if c.is_ascii_alphanumeric() || "!#@-_".as_bytes().contains(c) {
-				buf.bytes[n] = c.to_ascii_lowercase();
+				buf.0[n] = c.to_ascii_lowercase();
 				n+= 1;
 				if n >= 8 { break }
 			}
@@ -536,7 +549,7 @@ impl<const N: usize> Generator<N> {
 			let c: u8 = (s % 10) as u8;
 			s/= 10;
 			is_nines = is_nines && (c == 9);
-			self.buf.bytes[i] = 48u8 + c;
+			self.buf.0[i] = 48u8 + c;
 		}
 		if is_nines {
 			if self.n < 7 { self.n+= 1; }

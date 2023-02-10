@@ -28,10 +28,13 @@ use crate::prelude::*;
 use macros::{produce_resource_list};
 use rusqlite::ToSql;
 use rusqlite::types::{ToSqlOutput};
-use crate::struct_io::{Pack,SqlMapped,NotPacked,NoSql};
+use crate::struct_io::{Pack,SqlRow,NotPacked,NoSql};
 use crate::schemas::{Schema};
 use crate::database::{DbTypeCheck,DbInterface,DbInserter,TypedStatement};
 use crate::gamefiles::{Restype};
+
+#[derive(Pack)]
+struct Repack<T>(T);
 
 /// Interface for a game resource.
 ///
@@ -167,118 +170,6 @@ pub fn restype_from_extension(ext: &str)->Restype {
 	is_bolt: u16,
 	is_bullet: u16,
 }
-/// A game item, corresponding to a .itm file.
-#[derive(Pack,SqlMapped)]
-pub struct Item1 {
-#[header("ITM V1  ")]
-	unidentified_name: Strref,
-	name: Strref,
-	replacement: Resref,
-	flags: u32, // ItemFlags,
-	itemtype: u16, // ItemType,
-	usability: u32, // UsabilityFlags,
-	animation: u16, // StaticString<2>,
-	min_level: u16,
-	min_strength: u16,
-	min_strengthbonus: u8,
-	kit1: u8,
-	min_intelligence: u8,
-	kit2: u8,
-	min_dexterity: u8,
-	kit3: u8,
-	min_wisdom: u8,
-	kit4: u8,
-	min_constitution: u8,
-	proficiency: u8, // WProf,
-	min_charisma: u16,
-	price: u32,
-	stack_amount: u16,
-	inventory_icon: Resref,
-	lore: u16,
-	ground_icon: Resref,
-	weight: i32,
-	unidentified_description: Strref,
-	description: Strref,
-	description_icon: Resref,
-	enchantment: i32,
-	abilities_offset: NoSql::<u32>,
-	abilities_count: NoSql::<u16>,
-	effect_offset: NoSql::<u32>,
-	effect_index: NoSql::<u16>,
-	equip_effect_count: NoSql::<u16>,
-#[column("primary key")]
-	itemref: NotPacked::<Resref>,
-}
-/// An ability inside a .itm file.
-#[derive(Debug,Pack,SqlMapped)]
-#[allow(missing_copy_implementations)]
-// #[resource(item_abilities)]
-pub struct ItemAbility1 {
-	attack_type: u8, // AttackType,
-	must_identify: u8,
-	location: u8,
-	alternative_dice_sides: u8,
-	use_icon: Resref,
-	target_type: u8, // TargetType,
-	target_count: u8,
-	range: u16,
-	launcher_required: u8,
-	alternative_dice_thrown: u8,
-	speed_factor: u8,
-	alternative_damage_bonus: u8,
-	thac0_bonus: u16,
-	dice_sides: u8,
-	primary_type: u8,
-	dice_thrown: u8,
-	secondary_type: u8,
-	damage_bonus: u16,
-	damage_type: u16, // DamageType,
-	effect_count: NoSql::<u16>, // = 0,
-	effect_index: NoSql::<u16>, // = 0,
-	max_charges: u16,
-	depletion: u16,
-	flags: u32,
-	projectile_animation: u16,
-	overhand_chance: u16,
-	backhand_chance: u16,
-	thrust_chance: u16,
-	is_arrow: u16,
-	is_bolt: u16,
-	is_bullet: u16,
-#[column(r#"references "items"("itemref") on delete cascade"#)]
-	itemref: NotPacked::<Resref>,
-	index: NotPacked::<usize>,
-#[column(r#"primary key"#)]
-	id: NotPacked::<Option<i64>>,
-}
-/// An effect inside a .itm file (either global or in an ability).
-#[derive(Debug,Pack,SqlMapped)]
-#[allow(missing_copy_implementations)]
-// #[resource(item_effects)]
-pub struct ItemEffect1 {
-	opcode: u16, //opcode,
-	target: u8, // EffectTarget,
-	power: u8,
-	parameter1: u32,
-	parameter2: u32,
-	timing_mode: u8, // TimingMode,
-	dispel_mode: u8, // DispelMode,
-	duration: u32,
-	proba1: u8,
-	proba2: u8,
-	resource: Resref,
-	dice_thrown: i32,
-	dice_sides: i32,
-	saving_throw_type: u32,
-	saving_throw_bonus: i32,
-	stacking_id: u32,
-	itemref: NotPacked::<Resref>,
-#[column(r#"references "item_abilities"("id") on delete cascade"#)]
-	ability: NotPacked::<i64>,
-	index: NotPacked::<usize>,
-#[column(r#"primary key"#)]
-	id: NotPacked::<Option<i64>>,
-}
 /// An item effect, corresponding to a .itm file.
 #[derive(Debug,Pack,Resource)]
 #[allow(missing_copy_implementations)]
@@ -321,6 +212,126 @@ pub struct ItemEffect1 {
 #[column(false)] effect_index: u16,
 #[column(false)] equip_effect_count: u16,
 }
+/// A game item, corresponding to a .itm file.
+#[derive(Pack,SqlRow)]
+pub struct Item1 {
+#[header("ITM V1  ")]
+	unidentified_name: Strref,
+	name: Strref,
+	replacement: Resref,
+	flags: u32, // ItemFlags,
+	itemtype: u16, // ItemType,
+	usability: u32, // UsabilityFlags,
+	animation: u16, // StaticString<2>,
+	min_level: u16,
+	min_strength: u16,
+	min_strengthbonus: u8,
+	kit1: u8,
+	min_intelligence: u8,
+	kit2: u8,
+	min_dexterity: u8,
+	kit3: u8,
+	min_wisdom: u8,
+	kit4: u8,
+	min_constitution: u8,
+	proficiency: u8, // WProf,
+	min_charisma: u16,
+	price: u32,
+	stack_amount: u16,
+	inventory_icon: Resref,
+	lore: u16,
+	ground_icon: Resref,
+	weight: i32,
+	unidentified_description: Strref,
+	description: Strref,
+	description_icon: Resref,
+	enchantment: i32,
+	abilities_offset: NoSql::<u32>,
+	abilities_count: NoSql::<u16>,
+	effect_offset: NoSql::<u32>,
+	effect_index: NoSql::<u16>,
+	equip_effect_count: NoSql::<u16>,
+#[column("primary key")]
+	itemref: NotPacked::<Resref>,
+}
+/// An ability inside a .itm file.
+#[derive(Debug,Pack,SqlRow)]
+#[allow(missing_copy_implementations)]
+// #[resource(item_abilities)]
+pub struct ItemAbility1 {
+	attack_type: u8, // AttackType,
+	must_identify: u8,
+	location: u8,
+	alternative_dice_sides: u8,
+	use_icon: Resref,
+	target_type: u8, // TargetType,
+	target_count: u8,
+	range: u16,
+	launcher_required: u8,
+	alternative_dice_thrown: u8,
+	speed_factor: u8,
+	alternative_damage_bonus: u8,
+	thac0_bonus: u16,
+	dice_sides: u8,
+	primary_type: u8,
+	dice_thrown: u8,
+	secondary_type: u8,
+	damage_bonus: u16,
+	damage_type: u16, // DamageType,
+	effect_count: NoSql::<u16>, // = 0,
+	effect_index: NoSql::<u16>, // = 0,
+	max_charges: u16,
+	depletion: u16,
+	flags: u32,
+	projectile_animation: u16,
+	overhand_chance: u16,
+	backhand_chance: u16,
+	thrust_chance: u16,
+	is_arrow: u16,
+	is_bolt: u16,
+	is_bullet: u16,
+#[column(r#"references "items"("itemref") on delete cascade"#)]
+	itemref: NotPacked::<Resref>,
+	index: NotPacked::<u16>,
+#[column(r#"primary key"#)]
+	id: NotPacked::<Option<i64>>,
+}
+/// An effect inside a .itm file (either global or in an ability).
+#[derive(Debug,Pack,SqlRow)]
+#[allow(missing_copy_implementations)]
+// #[resource(item_effects)]
+pub struct ItemEffect1 {
+	opcode: u16, //opcode,
+	target: u8, // EffectTarget,
+	power: u8,
+	parameter1: u32,
+	parameter2: u32,
+	timing_mode: u8, // TimingMode,
+	dispel_mode: u8, // DispelMode,
+	duration: u32,
+	proba1: u8,
+	proba2: u8,
+	resource: Resref,
+	dice_thrown: i32,
+	dice_sides: i32,
+	saving_throw_type: u32,
+	saving_throw_bonus: i32,
+	stacking_id: u32,
+	itemref: NotPacked::<Resref>,
+#[column(r#"references "item_abilities"("id") on delete cascade"#)]
+	ability: NotPacked::<i64>,
+	index: NotPacked::<u16>,
+#[column(r#"primary key"#)]
+	id: NotPacked::<Option<i64>>,
+}
+
+pub trait TopResourceData: SqlRow {
+	/// The name of the main SQL view associated with this resource.
+	const NAME: &'static str;
+	/// The associated restype (a wrapped u16).
+	const RESTYPE: Restype;
+}
+
 /// A top-level resource (i.e. saved to its own file in the override
 /// directory).
 pub trait ToplevelResource: NamedTable {
@@ -394,7 +405,7 @@ impl ToplevelResource for Item {
 				.with_context(|| format!("cannot unpack item ability {}/{}",
 					ab_index, item.abilities_count))?;
 			ab.itemref = resref.into();
-			ab.index = (ab_index as usize).into();
+			ab.index = ab_index.into();
 			db.tables.item_abilities.execute(ab.as_params())
 				.context("inserting into 'item_abilities'")?;
 			ab_n.push(ab.effect_count.unwrap());
@@ -407,7 +418,7 @@ impl ToplevelResource for Item {
 					j+1, item.equip_effect_count.unwrap()))?;
 			eff.itemref = resref.into();
 			eff.ability = 0.into();
-			eff.index = (j as usize).into();
+			eff.index = j.into();
 			db.tables.item_effects.execute(eff.as_params())
 				.context("inserting into 'item_effects'")?;
 		}
@@ -417,7 +428,7 @@ impl ToplevelResource for Item {
 					.with_context(|| format!("cannot unpack item effect {}/{} for ability {}", j+1, n, i+1))?;
 				eff.itemref = resref.into();
 				eff.ability = (1+i as i64).into();
-				eff.index = (j as usize).into();
+				eff.index = j.into();
 				db.tables.item_effects.execute(eff.as_params())
 					.context("inserting into 'item_effects'")?;
 			}
@@ -521,4 +532,3 @@ Attack type: {atype}",
 //  - its implementation of `map()`,
 //  - and the constant `RESOURCES`, which holds the parent resources.
 produce_resource_list!();
-

@@ -5,6 +5,18 @@ stored in db          x       x     x     x
 in lua structs        x                   x
 visible to lua user   x
 
+schema has: primary key
+
+all resources have: table name (primary key)
+main resources have: resource type, extension
+subresources have: sorting, parent key, parent resource
+all resources are recorded in table 
+
+
+convert Resref, Strref, Restype to Wrappers
+use derive_more...
+
+
 # Override
  - [x] improve backup procedure: a full backup as part of init
  - [x] a mod `base_types` for chaff such as SqlType etc.
