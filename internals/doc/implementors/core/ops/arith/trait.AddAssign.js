@@ -1,0 +1,3 @@
+(function() {var implementors = {
+"infinity_compiler":[["impl&lt;T, I&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/1.67.0/core/ops/arith/trait.AddAssign.html\" title=\"trait core::ops::arith::AddAssign\">AddAssign</a>&lt;I&gt; for <a class=\"struct\" href=\"infinity_compiler/struct_io/struct.NoSql.html\" title=\"struct infinity_compiler::struct_io::NoSql\">NoSql</a>&lt;T&gt;<span class=\"where fmt-newline\">where<br>&nbsp;&nbsp;&nbsp;&nbsp;T: <a class=\"trait\" href=\"https://doc.rust-lang.org/1.67.0/core/ops/arith/trait.AddAssign.html\" title=\"trait core::ops::arith::AddAssign\">AddAssign</a>&lt;I&gt;,</span>"]]
+};if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()
