@@ -10,8 +10,13 @@ schema has: primary key
 all resources have: table name (primary key)
 main resources have: resource type, extension
 subresources have: sorting, parent key, parent resource
-all resources are recorded in table 
 
+for top:
+resource(items,"itm",0x03ed)
+for sub:
+resource(item_abilities,itemref,items)
+
++ keep resources organized by table name only (
 
 convert Resref, Strref, Restype to Wrappers
 use derive_more...

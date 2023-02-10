@@ -42,7 +42,7 @@ pub(crate) use std::fs::{self,File};
 pub(crate) use std::io::{self,Cursor,Read,Write,Seek,SeekFrom};
 pub(crate) use std::path::{Path, PathBuf};
 
-pub(crate) use macros::{Pack,Resource,SqlRow,Newtype};
+pub(crate) use macros::{Pack,Resource0,SqlRow,Newtype};
 pub(crate) use crate::gamefiles::{Resref,Strref};
 pub(crate) use crate::database::{GameDB,DbInterface};
 pub(crate) use crate::progress::{Progress,scope_trace,NullDisplay,DisplayExt};
@@ -244,6 +244,7 @@ pub enum FieldType {
 	/// A string reference: either an integer or a string translated using
 	/// `strref_dict`.
 	Strref,
+	Rowid,
 }
 /// A leaf SQL type: this can be converted from, to SQL and knows its own
 /// affinity.
@@ -299,11 +300,12 @@ pub trait SqlRow: Sized {
 	/// Returns the name of the `i`-th field, as a string.
 	fn fieldname(i: usize)->&'static str { Self::fieldname_ctx("", i) }
 	/// Return the `i`-th element of schema
-	fn field_info(i: usize)->(&'static str, FieldType, &'static str) {
-		(Self::fieldname(i), Self::fieldtype(i), Self::field_create_text(i))
+	fn field_info(i: usize)->crate::schemas::Field {
+		crate::schemas::Field { fname: Self::fieldname(i),
+			ftype: Self::fieldtype(i), extra: Self::field_create_text(i) }
 	}
 	/// Returns the schema: an iterator returning (fieldname, fieldtype).
-	fn schema()->SchemaIterator<Self> { SchemaIterator(0, PhantomData) }
+	fn schema_itr()->SchemaIterator<Self> { SchemaIterator(0, PhantomData) }
 }
 impl<T: SqlLeaf> SqlRow for T {
 	const WIDTH: usize = 1;
@@ -340,7 +342,7 @@ impl<T: SqlRow> ExactSizeIterator for SqlRowIterator<'_,T> {
 /// An iterator over the [`SqlRow`] schema.
 pub struct SchemaIterator<T: SqlRow>(usize, PhantomData<T>);
 impl<T: SqlRow> Iterator for SchemaIterator<T> {
-	type Item = (&'static str, FieldType, &'static str);
+	type Item = crate::schemas::Field;
 	fn next(&mut self)->Option<Self::Item> {
 		if self.0 >= T::WIDTH { return None }
 		let f = T::field_info(self.0);
@@ -569,7 +571,8 @@ use rusqlite::types::{FromSql,ToSql, ValueRef};
 use io::BufReader;
 
 use crate::progress::{Progress};
-use crate::schemas::{SqlType,FieldType};
+use crate::struct_io::{FieldType};
+use crate::schemas::{SqlType};
 use crate::staticstrings::{StaticString};
 
 // I. Basic types: StaticString, Resref, Strref etc.
@@ -1002,32 +1005,28 @@ pub(crate) mod schemas {
 //! Inner description of SQL table.
 //!
 //! This mod groups everything which has access to the content of the
-//! [`Schema`] struct.
+//! [`Schema0`] struct.
 use crate::prelude::*;
-use crate::resources::RESOURCES;
+use crate::resources::{RESOURCES,AllResources};
+use crate::gamefiles::Restype;
+use crate::struct_io::{SqlRow,FieldType};
 
-/// An utility enum defining SQL behaviour for a given resource field type.
-///
-/// This is somewhat different from [`rusqlite::types::Type`]:
-///  - not all SQLite types exist here;
-///  - the `Strref` variant can accept either a string or an integer,
-/// etc.
-#[derive(Debug,Clone,Copy,PartialEq)]
-#[non_exhaustive]
-pub enum FieldType {
-	/// Plain integer.
-	Integer,
-	/// Plain text.
-	Text,
-	/// A resource reference: a string translated using `resref_dict`.
-	Resref,
-	/// A string reference: either an integer or a string translated using
-	/// `strref_dict`.
-	Strref,
-	/// The primary key. This value is not inserted, but recovered via
-	/// [`rusqlite::Connection::last_insert_rowid`].
-	Rowid,
+/// Constant (static) data attached to a named resource table.
+pub trait Resource: SqlRow {
+	fn schema()->Schema;
 }
+#[derive(Debug)]
+pub enum SchemaResource {
+	Top { extension: &'static str, restype: Restype, },
+	Sub { parent: &'static str, link: &'static str },
+}
+#[derive(Debug)]
+pub struct Schema {
+	pub table_name: &'static str,
+	pub resource: SchemaResource,
+	pub fields: Vec<Field>,
+}
+
 impl FieldType {
 	pub const fn affinity(self)->&'static str {
 		match self {
@@ -1062,21 +1061,21 @@ sqltype_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
 
 /// Description of a field in a game resource.
 #[derive(Debug)]
-pub struct Field<'a> {
+pub struct Field {
 	/// Name of this column.
-	pub fname: &'a str,
+	pub fname: &'static str,
 	/// Content type of this column.
 	pub ftype: FieldType,
 	/// Any extra information given to SQLite when creating the table.
-	pub extra: &'a str,
+	pub extra: &'static str,
 }
-impl<'a> Field<'a> {
-	pub const fn new<T: SqlType>(fname: &'a str, extra: &'a str)->Self {
+impl Field {
+	pub const fn new<T: SqlType>(fname: &'static str, extra: &'static str)->Self {
 		Self { fname, ftype: T::SQL_TYPE, extra }
 	}
 }
 /// This is a useful help for writing SQL statements.
-impl Display for Field<'_> {
+impl Display for Field {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		write!(f, r#""{n}""#, n = self.fname)
 	}
@@ -1090,13 +1089,13 @@ impl Display for Field<'_> {
 ///  - it implements [`Display`] (joined with commas) so that we may
 ///  easily build SQL statements.
 ///
-/// The methods from [`Schema`] might return various distinct instances
+/// The methods from [`Schema0`] might return various distinct instances
 /// from this (e.g. payload, full columns, or context columns).
 #[derive(Debug)]
-pub struct Columns<'a,T>(&'a [Field<'a>],T);
+pub struct Columns<'a,T>(&'a [Field],T);
 impl<'a,T> IntoIterator for Columns<'a,T> {
-	type Item = &'a Field<'a>;
-	type IntoIter = std::slice::Iter<'a,Field<'a>>;
+	type Item = &'a Field;
+	type IntoIter = std::slice::Iter<'a,Field>;
 	fn into_iter(self)->Self::IntoIter { self.0.iter() }
 }
 impl<'a,T> Columns<'a, T> {
@@ -1123,8 +1122,8 @@ impl<T: Display> Display for Columns<'_,T> {
 /// This contains all relevant information to fully define a resource
 /// on the SQL side.
 ///
-/// In practice there exists exactly one [`Schema`] instance per
-/// resource, and it is compiled by the [`Resource`] derive macro.
+/// In practice there exists exactly one [`Schema0`] instance per
+/// resource, and it is compiled by the [`Resource0`] derive macro.
 ///
 /// The structure of the schema is always as follows:
 /// 1. **Payload fields.** These are the fields present in game files.
@@ -1138,7 +1137,7 @@ impl<T: Display> Display for Columns<'_,T> {
 /// In all cases, the primary key is guaranteed to be the last field,
 /// while context starts at the resref fields.
 /// This structure allows handling context as a (contiguous) slice of fields;
-/// see [`Schema::iter`], [`Schema::columns`].
+/// see [`Schema0::iter`], [`Schema0::columns`].
 ///
 /// A few fields in this struct (`extension`, etc.)
 /// are used only for top-level resources.
@@ -1148,9 +1147,9 @@ impl<T: Display> Display for Columns<'_,T> {
 /// and (b) possibly inserting a few always-empty tables in the database
 /// (we try to avoid this however).
 #[derive(Debug)]
-pub struct Schema<'a> {
+pub struct Schema0<'a> {
 	/// Descriptions for all the fields of this struct.
-	pub fields: &'a[Field<'a>],
+	pub fields: &'a[Field],
 	/// The stem for the SQL table name associated with this structure.
 	pub name: &'a str,
 	/// The index of the field pointing to top-level resource resref.
@@ -1166,7 +1165,7 @@ pub struct Schema<'a> {
 	/// The restype identifier for this resource type (if top-level), or 0.
 	pub restype: crate::gamefiles::Restype,
 }
-impl<'schema> Schema<'schema> {
+impl<'schema> Schema0<'schema> {
 	// Step 0: a few useful functions
 	/// Is this a subresource?
 	pub fn is_subresource(&self)->bool {
@@ -1204,7 +1203,7 @@ impl<'schema> Schema<'schema> {
 	}
 	/// The primary key for this schema (as a string).
 	///
-	/// Note that the [`Schema`] structure imposes that this is always the
+	/// Note that the [`Schema0`] structure imposes that this is always the
 	/// last field.
 	pub fn primary(&'schema self)->&str {
 		self.fields[self.fields.len()-1].fname
@@ -1228,7 +1227,7 @@ impl<'schema> Schema<'schema> {
 	}
 	/// Returns the SQL statement creating the main view for this schema.
 	fn create_main_view(&self)->String {
-		let Schema { name, .. } = self;
+		let Schema0 { name, .. } = self;
 		let primary = self.primary();
 		let mut view = format!(r#"create view "{name}" as
 	with "u" as (select {f} from "load_{name}" union select {f} from "add_{name}") select "#, f = self.iter());
@@ -1277,7 +1276,7 @@ impl<'schema> Schema<'schema> {
 	/// - `save_{name}`: the view used to save new or modified values to
 	/// game files.
 	pub fn create_tables_and_views<T>(&self, f: impl Fn(String)->Result<T>)->Result<()> {
-		let Schema { name, parent_table, extension, .. } = self;
+		let Schema0 { name, parent_table, extension, .. } = self;
 		let parent_key = self.resref();
 		let primary = self.primary();
 
@@ -1405,9 +1404,9 @@ end"#))?;
 		trace!("collected parameters: {params:?}");
 		Ok(rusqlite::params_from_iter(params))
 	}
-} // impl Schema
+} // impl Schema0
 /// Convenience implem.: prints schema name.
-impl Display for Schema<'_> {
+impl Display for Schema0<'_> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { f.write_str(self.name) }
 }
 /// Builds the SQL statement creating the `new_strings` view.
@@ -1482,7 +1481,7 @@ use crate::progress::{Progress};
 use crate::database::{self,DbInterface};
 use crate::gamefiles::{GameIndex};
 use crate::struct_io::{Pack};
-use crate::resources::Resource;
+use crate::resources::Resource0;
 use macros::{Pack};
 
 #[derive(Debug,Pack)]
@@ -1493,7 +1492,7 @@ struct TlkHeader {
 	offset: u32,
 }
 /// A game string as present in a .tlk file.
-#[derive(Debug,Default,Clone,Pack,Resource)]
+#[derive(Debug,Default,Clone,Pack,Resource0)]
 pub struct GameString {
 #[column(strref, usize, "primary key")]
 	flags: u16,
@@ -1632,13 +1631,13 @@ pub(crate) mod database {
 //! Access to the SQL side of the database.
 //!
 //! Main exports are:
-//!  - [`Schema`] type: description of a particular SQL table;
-//!  - [`Resource`] trait: connect a Rust structure to a SQL row.
+//!  - [`Schema0`] type: description of a particular SQL table;
+//!  - [`Resource0`] trait: connect a Rust structure to a SQL row.
 use crate::prelude::*;
 use rusqlite::{Row};
 use crate::resources::*;
 use crate::gamefiles::GameIndex;
-use crate::schemas::Schema;
+use crate::schemas::Schema0;
 
 // I. Low-level stuff: basic types and extensions for `rusqlite` traits.
 pub trait RowExt {
@@ -1681,12 +1680,12 @@ impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
 // III. Structure accessing directly SQL data
 /// A statement aware of the associated table type.
 ///
-/// We need a few types parametrized by a Resource:
+/// We need a few types parametrized by a Resource0:
 ///  - `TypedStatement`: this gets saved as a (mut) local variable;
-///  - `TypedRows`: the iterator producing Resource objects from the query.
+///  - `TypedRows`: the iterator producing Resource0 objects from the query.
 #[derive(Debug)]
-pub struct TypedStatement<'stmt, T: Resource> (Statement<'stmt>, PhantomData<T>);
-impl<'stmt,T: Resource> TypedStatement<'stmt, T> {
+pub struct TypedStatement<'stmt, T: Resource0> (Statement<'stmt>, PhantomData<T>);
+impl<'stmt,T: Resource0> TypedStatement<'stmt, T> {
 	pub fn new(stmt: Statement<'stmt>)->Self { Self(stmt, PhantomData) }
 	/// Iterates over this statement, returning (possibly) Rust structs of
 	/// the type associated with this table.
@@ -1703,12 +1702,12 @@ impl<'stmt,T: Resource> TypedStatement<'stmt, T> {
 /// This also behaves as an `Iterator` (throwing when the underlying
 /// `Row` iterator fails).
 #[allow(missing_debug_implementations)]
-pub struct TypedRows<'stmt,T: Resource> {
+pub struct TypedRows<'stmt,T: Resource0> {
 	rows: rusqlite::Rows<'stmt>,
 	_marker: PhantomData<T>,
 	index: usize,
 }
-impl<T: Resource> Iterator for TypedRows<'_,T> {
+impl<T: Resource0> Iterator for TypedRows<'_,T> {
 	type Item = Result<(T, T::Context)>;
 	fn next(&mut self)->Option<Self::Item> {
 		loop {
@@ -1820,7 +1819,7 @@ update "new_strings" set "strref"=-1 where "strref" is null"#))
 	/// the database. This also clears the list of orphan resources.
 	fn clear_orphan_resources(&self)->Result<()> {
 		RESOURCES.map(|schema, _| {
-			let Schema { name, extension, .. } = schema;
+			let Schema0 { name, extension, .. } = schema;
 			if !extension.is_empty() {
 				let mut stmt = self.prepare(
 					format!(r#"select "name" from "orphan_{name}""#))?;
@@ -1909,7 +1908,7 @@ impl GameDB {
 	///
 	/// There are global tables, per-resource tables, and per-language tables.
 	/// The per-resource tables are described in the
-	/// [`Schema::create_tables_and_views`] function.
+	/// [`Schema0::create_tables_and_views`] function.
 	/// The per-language tables are described in [`Self::create_language_tables`].
 	/// The global tables are the following:
 	///
@@ -2011,9 +2010,9 @@ from "new_strings"
 pub struct DbInserter<'a> {
 // 	db: &'a Connection,
 	add_resref: Statement<'a>,
-	pub tables: AllResources<Statement<'a>>,
+	pub tables: AllResources0<Statement<'a>>,
 	add_override: Statement<'a>,
-	resource_count: AllResources<usize>,
+	resource_count: AllResources0<usize>,
 }
 impl<'a> DbInserter<'a> {
 	/// Creates a new `DbInserter` from a database and the list of all
@@ -2085,7 +2084,7 @@ use mlua::{Lua,ExternalResult};
 
 use crate::prelude::*;
 use crate::resources::RESOURCES;
-use crate::schemas::FieldType;
+use crate::struct_io::FieldType;
 /// Runtime errors during interface between SQL and Lua.
 /// A simple wrapper allowing `mlua::Value` to be converted to SQL.
 #[derive(Debug)]

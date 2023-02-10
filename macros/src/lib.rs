@@ -20,14 +20,20 @@ use syn::{Data::Struct, DataStruct};
 use syn::{Expr, ExprLit, ExprPath};
 use syn::{Field, Fields::Named, Fields::Unnamed};
 use syn::{punctuated::Punctuated, token::Comma};
+use extend::ext;
 
 #[derive(Debug)] struct ResourceDef(String, String);
 thread_local! {
 	static RESOURCES: std::cell::RefCell<Vec<ResourceDef>> =
 		std::cell::RefCell::new(Vec::<ResourceDef>::new());
+	static RESOURCES1: std::cell::RefCell<Vec<ResourceDef>> =
+		std::cell::RefCell::new(Vec::<ResourceDef>::new());
 }
 fn push_resource(rdef: ResourceDef) {
 	RESOURCES.with(|v| { v.borrow_mut().push(rdef); })
+}
+fn push_resource1(rdef: ResourceDef) {
+	RESOURCES1.with(|v| { v.borrow_mut().push(rdef); })
 }
 // use std::any::type_name;
 // fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
@@ -38,11 +44,11 @@ fn push_resource(rdef: ResourceDef) {
 // 	}
 // }
 
-fn toks_to_string(a: &impl quote::ToTokens) -> String {
-	let mut ts = TS::new();
-	a.to_tokens(&mut ts);
-	ts.to_string()
+#[ext]
+impl<T: quote::ToTokens> T {
+	fn toks_string(&self)->String { self.to_token_stream().to_string() }
 }
+
 #[derive(Debug)]
 enum FieldNameRef<'a> {
 	Named(&'a syn::Ident),
@@ -69,19 +75,19 @@ struct Fields {
 	attrs: Vec::<Vec<syn::Attribute>>,
 }
 impl Fields {
-	fn iter<'a>(&'a self)->FieldsIter<'_> { FieldsIter(&self, 0) }
+	fn iter(&self)->FieldsIter<'_> { FieldsIter(self, 0) }
 	fn build_from(&self, vals: &[TS])->TS {
 		let mut r = TS::new();
 		if let Some(v) = &self.names {
 			for (ident, val) in std::iter::zip(v.iter(), vals.iter()) {
 				quote!(#ident: #val,).to_tokens(&mut r);
 			}
-			quote!( Self { #r } ).into()
+			quote!( Self { #r } )
 		} else {
 			for val in vals.iter() {
 				quote!(#val,).to_tokens(&mut r);
 			}
-			quote!( Self( #r ) ).into()
+			quote!( Self( #r ) )
 		}
 	}
 }
@@ -157,7 +163,7 @@ impl From<Expr> for AttrArg {
 				.expect("not an integer")),
 			_ => AttrArg::Other()
 			},
-			Expr::Path(ExprPath{path, ..}) => AttrArg::Ident(toks_to_string(&path)),
+			Expr::Path(ExprPath{path, ..}) => AttrArg::Ident(path.toks_string()),
 			_ => AttrArg::Other()
 		}
 	}
@@ -165,18 +171,12 @@ impl From<Expr> for AttrArg {
 impl From<syn::Type> for AttrArg {
 	fn from(arg: syn::Type)->Self { Self::Type(arg) }
 }
+// not an impl because we want to map this.
 fn parse_attr(Attribute{path, tokens, ..}: &Attribute)->(String, AttrParser) {
 	(path.get_ident().unwrap().to_string(), (*tokens).clone().into())
 }
 
 struct AttrParser(std::vec::IntoIter<pm2::TokenStream>);
-
-/// Information attached to the `column` attribute.
-#[derive(Default,Debug)]
-struct ColumnInfo {
-	extra: String,
-	no_column: bool,
-}
 impl AttrParser {
 	fn split(stream: pm2::TokenStream)->Vec<pm2::TokenStream> {
 		let mut v = vec![pm2::TokenStream::new()];
@@ -198,36 +198,18 @@ impl AttrParser {
 // 	let b: T = syn::parse2(a).expect("cannot parse!");
 // 	Some(b.into())
 	}
-	// The following functions implement the parsing of individual
-	// attributes; the name of the function matches that of the attribute:
-	fn column(&mut self)->ColumnInfo {
-		let mut field_info = ColumnInfo::default();
+	fn get_ident(&mut self)->Option<String> {
 		match self.get::<syn::Expr>() {
-			None => (),
-			Some(AttrArg::Str(s)) => field_info.extra = s,
-// 			Some(AttrArg::Ident(i)) if i.as_str() == "false" =>
-// 				field_info.no_column = true,
-			Some(a) => panic!("unknown argument for 'column' attribute: {:?}", a),
+			Some(AttrArg::Ident(i)) => Some(i),
+			Some(AttrArg::Str(s)) => Some(s),
+			_ => None,
 		}
-		return field_info
 	}
-	/// Reads the `resource` attribute for a top-level resource.
-	fn top_resource(&mut self)->ResourceInfo {
-		let mut resource_info = ResourceInfo::default();
-		resource_info.name = match self.get::<syn::Expr>() {
-			Some(AttrArg::Ident(i)) => i,
-			Some(AttrArg::Str(s)) => s,
-			_ => return resource_info,
-		};
-		resource_info.extension = match self.get::<syn::Expr>() {
-			Some(AttrArg::Str(s)) => s,
-			_ => return resource_info,
-		};
-		resource_info.restype = match self.get::<syn::Expr>() {
-			Some(AttrArg::Int(n)) => n as u16,
-			x => { println!("got attribute: {x:?}"); return resource_info; }
-		};
-		return resource_info;
+	fn get_int(&mut self)->Option<isize> {
+		match self.get::<syn::Expr>() {
+			Some(AttrArg::Int(n)) => Some(n.into()),
+			_ => None
+		}
 	}
 }
 impl From<pm2::TokenStream> for AttrParser {
@@ -241,6 +223,7 @@ impl From<pm2::TokenStream> for AttrParser {
 	}
 }
 
+/// Derivation of `Pack`.
 #[proc_macro_derive(Pack, attributes(header))]
 pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 	let DeriveInput{ ident, generics, data, .. } = parse_macro_input!(tokens);
@@ -249,7 +232,7 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 	let mut buildv = Vec::<TS>::new();
 	let mut readf = TS::new();
 	let mut writef = TS::new();
-	let mut where_pack = TS::from(quote!{ where });
+	let mut where_pack = quote!{ where };
 	for gen in generics.params.iter() {
 		if let syn::GenericParam::Type(t) = gen {
 			quote!{ #t: Pack, }.to_tokens(&mut where_pack);
@@ -260,12 +243,17 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 		let tmp = syn::Ident::new(&format!("tmp{i}"), pm2::Span::call_site());
 		for (name, mut args) in attrs.iter().map(parse_attr) {
 			match name.as_str() {
-				"header" => pack_attr_header(&mut readf, &mut writef, &mut args),
+				"header" => {
+					if let Some(AttrArg::Str(s)) = args.get::<syn::Expr>() {
+						quote!{ Self::unpack_header(f, #s)?; }.to_tokens(&mut readf);
+						quote!{ f.write_all(#s.as_bytes())?; }.to_tokens(&mut writef);
+					}
+				},
 				&_ => () };
 		}
 		quote!{ let #tmp = #ty::unpack(f)?; }.to_tokens(&mut readf);
 		quote!{ self.#name.pack(f)?; }.to_tokens(&mut writef);
-		buildv.push(quote!{ #tmp }.into());
+		buildv.push(quote!{ #tmp });
 	}
 	let buildf = fields.build_from(&buildv);
 	let code = quote! {
@@ -284,13 +272,6 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 // 	}
 	code.into()
 } // Pack
-fn pack_attr_header(readf: &mut TS, writef: &mut TS, args: &mut AttrParser) {
-	if let Some(AttrArg::Str(s)) = args.get::<syn::Expr>() {
-		quote!{ Self::unpack_header(f, #s)?; }.to_tokens(readf);
-		quote!{ f.write_all(#s.as_bytes())?; }.to_tokens(writef);
-	}
-}
-
 /// This macro derives several traits for a newtype:
 ///  - `Debug` when all fields are `Debug`,
 ///  - `Display` when all fields are `Display`,
@@ -371,11 +352,22 @@ pub fn derive_newtype(tokens: TokenStream)->TokenStream {
 	code.into()
 }
 
+/// Information attached to the `column` attribute.
 #[derive(Default,Debug)]
-struct ResourceInfo {
-	name: String,
-	extension: String,
-	restype: u16,
+struct ColumnInfo {
+	extra: String,
+	no_column: bool,
+}
+impl ColumnInfo {
+	fn update(&mut self, parser: &mut AttrParser) {
+		match parser.get::<syn::Expr>() {
+			None => (),
+			Some(AttrArg::Str(s)) => self.extra = s,
+// 			Some(AttrArg::Ident(i)) if i.as_str() == "false" =>
+// 				field_info.no_column = true,
+			Some(a) => panic!("unknown argument for 'column' attribute: {a:?}"),
+		}
+	}
 }
 #[proc_macro_derive(SqlRow, attributes(column))]
 pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
@@ -384,8 +376,8 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	let mut fieldtype = TS::new();
 	let mut fieldname_ctx = TS::new();
 	let mut field_create_text = TS::new();
-	let mut primary_index = TS::from(quote!(None));
-	let mut offset = TS::from(quote!(0usize));
+	let mut primary_index = quote!(None);
+	let mut offset = quote!(0usize);
 	let DeriveInput{ ident, data, .. } = parse_macro_input!(tokens);
 	let fields = Fields::from(data);
 	for FieldRef { name, attrs, ty, .. } in fields.iter() {
@@ -393,7 +385,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 		let mut field_info = ColumnInfo::default();
 		for (name, mut args) in attrs.iter().map(parse_attr) {
 			match name.as_str() {
-				"column" => field_info = args.column(),
+				"column" => field_info.update(&mut args),
 				_ => ()
 			} // match
 		} // for
@@ -456,30 +448,100 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	});
 	code.into()
 }
+#[derive(Debug,PartialEq)]
+enum SchemaResource {
+	Top { extension: String, restype: u16, },
+	Sub { parent: String, link: String, },
+	Invalid,
+}
+impl Default for SchemaResource { fn default()->Self { Self::Invalid } }
+/// Information for a top-level resource.
+#[derive(Default,Debug)]
+struct ResourceInfo {
+	name: String,
+	resource: SchemaResource,
+}
+impl ResourceInfo {
+	/// Parses a `#[resource(...)]` attribute as:
+	/// `#[topresource(items, "itm", 0x03ed)]` => top resource,
+	fn update_top(&mut self, parser: &mut AttrParser)->Option<()> {
+		self.name = parser.get_ident()?;
+		self.resource = SchemaResource::Top {
+			extension: parser.get_ident()?,
+			restype: parser.get_int()? as u16,
+		};
+		Some(())
+	}
+	/// Parses a `#[subresource(item_abilities,itemref,items)]` attribute.
+	fn update_sub(&mut self, parser: &mut AttrParser)->Option<()> {
+		self.name = parser.get_ident()?;
+		self.resource = SchemaResource::Sub {
+			link: parser.get_ident()?,
+			parent: parser.get_ident()?,
+		};
+		Some(())
+	}
+}
 /// Top resource
-/// 
+///
 /// Attributes:
 /// resource(items, "itm", 0x03ed)
-#[proc_macro_derive(TopResource, attributes(resource))]
+#[proc_macro_derive(Resource, attributes(topresource,subresource))]
 pub fn derive_top_resource(tokens: TokenStream)->TokenStream {
 	let DeriveInput{ ident, attrs, .. } = parse_macro_input!(tokens);
 	let mut resource_info = ResourceInfo::default();
 	for (name, mut args) in attrs.iter().map(parse_attr) {
 		match name.as_str() {
-			"resource" => resource_info = args.top_resource(),
+			"topresource" => { resource_info.update_top(&mut args); },
+			"subresource" => { resource_info.update_sub(&mut args); },
 			_ => ()
 		} // match
 	}
-	if resource_info.name.is_empty() || resource_info.extension.is_empty() {
-		panic!("top-level resource must have a full `resource` attribute; we got {resource_info:?}")
+	if resource_info.name.is_empty()
+		|| resource_info.resource == SchemaResource::Invalid {
+		panic!("{}", "top-level resource must have a full `resource` attribute; we got {resource_info:?}")
 	}
-	let mut code = quote!{
+	let ResourceInfo { name: table_name, resource } = resource_info;
+	let res_code = match resource {
+		SchemaResource::Top { extension, restype } => quote!{
+			crate::schemas::SchemaResource::Top {
+				extension: #extension,
+				restype: crate::gamefiles::Restype{ value: #restype },
+			}
+		},
+		SchemaResource::Sub { parent, link } => quote! {
+			crate::schemas::SchemaResource::Sub {
+				parent: #parent,
+				link: #link,
+			}
+		},
+		_ => panic!("bad programming"),
 	};
+	let code = quote!{
+		impl crate::schemas::Resource for #ident {
+			fn schema()->crate::schemas::Schema {
+				crate::schemas::Schema {
+					table_name: #table_name,
+					resource: #res_code,
+					fields: Self::schema_itr().collect(),
+				}
+			}
+		}
+	};
+	// we need this after the code generation since this moves `table_name`:
+	push_resource1(ResourceDef(ident.toks_string(), table_name));
 	code.into()
 }
 
-#[proc_macro_derive(Resource, attributes(column,resource))]
-pub fn derive_resource(tokens: TokenStream) -> TokenStream {
+#[derive(Default,Debug)]
+struct ResourceInfo0 {
+	name: String,
+	extension: String,
+	restype: u16,
+}
+
+#[proc_macro_derive(Resource0, attributes(column,resource))]
+pub fn derive_resource0(tokens: TokenStream) -> TokenStream {
 	let mut context = Vec::<(String, syn::Type, String)>::new();
 	let mut schema = TS::new();
 	let mut params = TS::new();
@@ -491,7 +553,7 @@ pub fn derive_resource(tokens: TokenStream) -> TokenStream {
 		}; //.to_tokens(&mut schema);
 	let DeriveInput{ ident, data, attrs, generics, .. } = parse_macro_input!(tokens);
 	let payload = struct_fields(data);
-	let mut resource_info = ResourceInfo::default();
+	let mut resource_info = ResourceInfo0::default();
 // 	println!("parsing attributes: {:?}", attrs.iter().map(toks_to_string).collect::<Vec<_>>());
 	for (name, mut args) in attrs.iter().map(parse_attr) {
 		match &name[..] {
@@ -527,7 +589,7 @@ pub fn derive_resource(tokens: TokenStream) -> TokenStream {
 	for (keycol_in, (fieldname, ty, extra)) in context.iter().enumerate() {
 		add_schema(fieldname.as_str(), ty, extra.as_str()).to_tokens(&mut schema);
 		let kc = pm2::Literal::isize_unsuffixed(keycol_in as isize);
-		let sty = toks_to_string(ty);
+		let sty = ty.toks_string();
 		quote!{ #ty, }.to_tokens(&mut ctx);
 		quote!{ k.#kc, }.to_tokens(&mut params);
 		quote!{ row.get::<_,#ty>(#ncol)
@@ -553,11 +615,11 @@ pub fn derive_resource(tokens: TokenStream) -> TokenStream {
 		quote!{ crate::schemas::Field::new::<i64>("id", "primary key"),
 		} .to_tokens(&mut schema);
 	}
-	let ResourceInfo { name, extension, restype, .. } = resource_info;
+	let ResourceInfo0 { name, extension, restype, .. } = resource_info;
 	let mut code = quote! {
-		impl #generics crate::resources::Resource for #ident #generics {
+		impl #generics crate::resources::Resource0 for #ident #generics {
 			type Context = (#ctx);
-			const SCHEMA: crate::schemas::Schema<'static> = crate::schemas::Schema{
+			const SCHEMA: crate::schemas::Schema0<'static> = crate::schemas::Schema0{
 				name: #name,
 				extension: #extension,
 				restype: crate::gamefiles::Restype { value: #restype },
@@ -576,19 +638,19 @@ pub fn derive_resource(tokens: TokenStream) -> TokenStream {
 // 		println!("\x1b[36m{}\x1b[m", code);
 	if !name.is_empty() {
 		// The type name as a string:
-		let type_name = toks_to_string(&ident);
-		// which field of `AllResources` we are attached to:
+		let type_name = ident.toks_string();
+		// which field of `AllResources0` we are attached to:
 		let field = pm2::Ident::new(&name, pm2::Span::call_site());
 		push_resource(ResourceDef(type_name, name));
 		quote! {
 			impl #generics NamedTable for #ident #generics {
-	fn find_field<T: Debug>(all: &AllResources<T>)->&T { &all.#field }
-	fn find_field_mut<T: Debug>(all: &mut AllResources<T>)->&mut T { &mut all.#field }
+	fn find_field<T: Debug>(all: &AllResources0<T>)->&T { &all.#field }
+	fn find_field_mut<T: Debug>(all: &mut AllResources0<T>)->&mut T { &mut all.#field }
 			}
 		}.to_tokens(&mut code);
 	}
 	code.into()
-} // Resource
+} // Resource0
 /// `column` attribute:
 /// `[column(itemref, i32, "references items", etc.)]` pushes on table
 /// `[column(false)]` suppresses next column
@@ -617,7 +679,7 @@ fn table_attr_column(fields2: &mut Vec<(String,syn::Type,String)>, current: &mut
 ///   and creates an entry for this table in `RESOURCES`.
 /// - `[resource(items, "itm", 0x03ed)]` declares a file extension for this
 ///   resource and an associated magic number in key files.
-fn table_attr_resource(args: &mut AttrParser, resource_info: &mut ResourceInfo) {
+fn table_attr_resource(args: &mut AttrParser, resource_info: &mut ResourceInfo0) {
 	let i = match args.get::<syn::Expr>() { Some(AttrArg::Ident(i)) => i,
 		Some(AttrArg::Str(s)) => s, _ => return };
 	resource_info.name = i;
@@ -651,10 +713,10 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 		let field = Ident::new(name, Span::call_site());
 		let q = quote!{ #[allow(missing_docs)] pub #field: T, };
 		q.to_tokens(&mut fields);
-		quote!{ #field: f(&<#ty as crate::resources::Resource>::SCHEMA,&self.#field)?, }
+		quote!{ #field: f(&<#ty as crate::resources::Resource0>::SCHEMA,&self.#field)?, }
 			.to_tokens(&mut map);
 		quote!{ #field: (), }.to_tokens(&mut data);
-		quote!{ let sch = &<#ty as crate::resources::Resource>::SCHEMA;
+		quote!{ let sch = &<#ty as crate::resources::Resource0>::SCHEMA;
 			if s == sch.to_string() { return Ok(sch) } }
 			.to_tokens(&mut table_schema);
 	}
@@ -665,30 +727,119 @@ pub fn produce_resource_list(_: proc_macro::TokenStream)->proc_macro::TokenStrea
 ///
 /// This is used for iterating similar code for each resources.
 		#[derive(Debug)] #[allow(clippy::missing_docs)]
-		pub struct AllResources<T: Debug> {
+		pub struct AllResources0<T: Debug> {
 #[allow(clippy::missing_docs)]
 			_marker: std::marker::PhantomData<T>, #fields }
 /// An heterogeneous iterator over the constant list of all game resource types.
-		pub const RESOURCES: AllResources<()> = AllResources {
+		pub const RESOURCES: AllResources0<()> = AllResources0 {
 			_marker: std::marker::PhantomData, #data };
+		#[allow(clippy::len_without_is_empty)]
+		impl<T: Debug> AllResources0<T> {
+			/// Number of resources in this table.
+			pub fn len(&self)->usize { #n }
+			/// Calls a closure for each resource type in the game.
+			pub fn map<U: Debug,E,F:Fn(&'static crate::schemas::Schema0,&T)->Result<U,E>>(&self, f: F)->Result<AllResources0<U>,E> {
+				Ok(AllResources0 { _marker: std::marker::PhantomData, #map })
+			}
+			/// Calls a closure for each resource type in the game.
+			pub fn map_mut<U: Debug,E,F:FnMut(&crate::schemas::Schema0,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources0<U>,E> {
+				Ok(AllResources0 { _marker: std::marker::PhantomData, #map })
+			}
+			/// Given a SQL table name, returns the schema for this table,
+			/// or throws an appropriate error.
+			pub fn table_schema(&self, s: &str)->Result<&'static crate::schemas::Schema0> {
+				#table_schema;
+				Err(Error::UnknownTable(s.to_owned()).into())
+				}
+		}
+	};
+	code.into()
+}
+/// This expands to a definition for the `AllResources0` type
+/// as well as the associated base table.
+///
+/// This expands to:
+/// ```ignore
+/// struct AllResources<T> {
+///   items: T, // ...
+///   _marker: PhantomData::<T>,
+/// }
+/// const ALL_RESOURCES1: AllResources<()> {
+/// 	items: (), // ...
+/// 	_marker: PhantomData,
+/// }
+/// impl<T> AllResources<T> {
+///   pub fn by_name(&self, table:name: &str)->Option<T> {
+///   	match str {
+///  		"items" => Some(self.items),
+///  		_ => None
+///  		}
+///  	}
+///  	pub fn<R: Resource> by_resource(&self)->T { R::find(self) }
+/// }
+/// ```
+#[proc_macro]
+pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
+	let mut fields = TS::new();
+	let mut map = TS::new();
+	let mut schema = TS::new();
+	let mut by_name = TS::new();
+	let mut n = 0usize;
+	RESOURCES1.with(|v| {
+		n = v.borrow().len();
+		for ResourceDef (type_name, table_name) in v.borrow().iter() {
+			let ty = syn::Ident::new(type_name, pm2::Span::call_site());
+			let field = syn::Ident::new(table_name, pm2::Span::call_site());
+			quote!{ #[allow(missing_docs)] pub #field: T, }
+				.to_tokens(&mut fields);
+			quote!{ #field: f(&self.#field)?, }
+				.to_tokens(&mut map);
+			quote!{ #field: #ty::schema(), }
+				.to_tokens(&mut schema);
+			quote!{ #table_name => Ok(&self.#field), }
+				.to_tokens(&mut by_name);
+		}
+	}); // closure
+
+	let code = quote!{
+/// A struct holding one field for each game resource type.
+///
+/// This is used for iterating similar code for each resources.
+		#[derive(Debug)] #[allow(clippy::missing_docs)]
+		pub struct AllResources<T: Debug> {
+#[allow(clippy::missing_docs)]
+			_marker: std::marker::PhantomData::<T>, #fields }
+		pub fn all_schemas()->AllResources<Schema> {
+			AllResources { #schema _marker: std::marker::PhantomData }
+		}
+/// An heterogeneous iterator over the constant list of all game resource types.
+// 		pub const SCHEMAS: AllResources<> = AllResources0 {
+// 			_marker: std::marker::PhantomData, #data };
 		#[allow(clippy::len_without_is_empty)]
 		impl<T: Debug> AllResources<T> {
 			/// Number of resources in this table.
 			pub fn len(&self)->usize { #n }
 			/// Calls a closure for each resource type in the game.
-			pub fn map<U: Debug,E,F:Fn(&'static crate::schemas::Schema,&T)->Result<U,E>>(&self, f: F)->Result<AllResources<U>,E> {
+			pub fn map<U,E,F>(&self, f:F)->Result<AllResources<U>,E>
+			where U: Debug,
+				F: Fn(&T)->Result<U,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData, #map })
 			}
-			/// Calls a closure for each resource type in the game.
-			pub fn map_mut<U: Debug,E,F:FnMut(&crate::schemas::Schema,&T)->Result<U,E>>(&self, mut f: F)->Result<AllResources<U>,E> {
-				Ok(AllResources { _marker: std::marker::PhantomData, #map })
-			}
+// 			/// Calls a closure for each resource type in the game.
+// 			pub fn map_mut<U,E,F>(&self, f:F)->Result<AllResources0<U>,E>
+// 			where U: Debug,
+// 				F: FnMut(&T)->Result<U,E> {
+// 				Ok(AllResources { _marker: std::marker::PhantomData, #map })
+// 			}
 			/// Given a SQL table name, returns the schema for this table,
 			/// or throws an appropriate error.
-			pub fn table_schema(&self, s: &str)->Result<&'static crate::schemas::Schema> {
-				#table_schema;
-				Err(Error::UnknownTable(s.to_owned()).into())
+			pub fn by_name(&self, table_name: &str)->Result<&T> {
+				match table_name {
+					#by_name
+				_ => Err(Error::UnknownTable(table_name.to_owned()).into())
 				}
+			}
+// 			pub fn by_resource<R: Resource>(&self)->&T { R::find(self) }
 		}
 	};
 	code.into()

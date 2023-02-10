@@ -1,6 +1,6 @@
 //! Full definition of all structures representing game resources.
 //!
-//! This crate makes heavy use of the `Pack` and `Resource` derive macros to
+//! This crate makes heavy use of the `Pack` and `Resource0` derive macros to
 //! automatically interface with game files and the SQL database.
 //!
 //! **Most** of the Lua-side definition of resource schemas is also
@@ -25,9 +25,9 @@
 //! namely, we want these to have a persistent identifier
 //! for joins with the edit tables.
 use crate::prelude::*;
-use macros::{produce_resource_list};
+use macros::{produce_resource_list,all_resources,Resource};
 use crate::struct_io::{Pack,SqlRow,NotPacked,NoSql};
-use crate::schemas::{Schema};
+use crate::schemas::{Schema,Resource,Schema0};
 use crate::database::{DbTypeCheck,DbInterface,DbInserter,TypedStatement};
 use crate::gamefiles::{Restype};
 
@@ -40,8 +40,8 @@ struct Repack<T>(T);
 ///
 /// This is the main trait for game resources, containing the low-level
 /// interaction with the database (`ins`, `sel`). Concrete
-/// implementations are provided by the `Resource` derive macro.
-pub trait Resource: Sized {
+/// implementations are provided by the `Resource0` derive macro.
+pub trait Resource0: Sized {
 	/// Reads a whole [`rusqlite::Row`] into a struct,
 	/// or raises a conversion error.
 // 	fn from_row(r: &rusqlite::Row<'_>)->Result<Self>;
@@ -50,7 +50,7 @@ pub trait Resource: Sized {
 	type Context;
 	/// The internal description of the fields of this structure, as used
 	/// to produce SQL statements.
-	const SCHEMA: Schema<'static>;
+	const SCHEMA: Schema0<'static>;
 	/// The low-level insert function for an object to a database row.
 	fn ins(&self, s: &mut Statement<'_>, key: &Self::Context)->rusqlite::Result<()>;
 	/// The low-level select function from a database row to an object.
@@ -77,11 +77,11 @@ pub trait Resource: Sized {
 	}
 }
 /// Those resources which are associated to a global table.
-pub trait NamedTable: Resource {
-	/// Returns the associated field (e.g. `.item`) in an `AllResources` table.
-	fn find_field<T: Debug>(all: &AllResources<T>)->&T;
+pub trait NamedTable: Resource0 {
+	/// Returns the associated field (e.g. `.item`) in an `AllResources0` table.
+	fn find_field<T: Debug>(all: &AllResources0<T>)->&T;
 	/// Same as above; `mut` case.
-	fn find_field_mut<T: Debug>(all: &mut AllResources<T>)->&mut T;
+	fn find_field_mut<T: Debug>(all: &mut AllResources0<T>)->&mut T;
 }
 /// When provided with a file extension, return the corresponding Restype.
 pub fn restype_from_extension(ext: &str)->Restype {
@@ -97,7 +97,7 @@ pub fn restype_from_extension(ext: &str)->Restype {
 }
 
 /// An effect inside a .itm file (either global or in an ability).
-#[derive(Debug,Pack,Resource)]
+#[derive(Debug,Pack,Resource0)]
 #[allow(missing_copy_implementations)]
 #[resource(item_effects)] pub struct ItemEffect {
 #[column(itemref, Resref, r#"references "items"("itemref") on delete cascade"#)]
@@ -122,7 +122,7 @@ pub fn restype_from_extension(ext: &str)->Restype {
 	stacking_id: u32,
 }
 /// An ability inside a .itm file.
-#[derive(Debug,Pack,Resource)]
+#[derive(Debug,Pack,Resource0)]
 #[allow(missing_copy_implementations)]
 #[resource(item_abilities)] pub struct ItemAbility {
 #[column(itemref, Resref, r#"references "items"("itemref") on delete cascade"#)]
@@ -160,7 +160,7 @@ pub fn restype_from_extension(ext: &str)->Restype {
 	is_bullet: u16,
 }
 /// An item effect, corresponding to a .itm file.
-#[derive(Debug,Pack,Resource)]
+#[derive(Debug,Pack,Resource0)]
 #[allow(missing_copy_implementations)]
 #[resource(items,"itm",0x03ed)] pub struct Item {
 #[header("ITM V1  ")]
@@ -202,7 +202,8 @@ pub fn restype_from_extension(ext: &str)->Restype {
 #[column(false)] equip_effect_count: u16,
 }
 /// A game item, corresponding to a .itm file.
-#[derive(Pack,SqlRow)]
+#[derive(Pack,SqlRow,Resource)]
+#[topresource("items", "itm", 0x03ed)]
 pub struct Item1 {
 #[header("ITM V1  ")]
 	unidentified_name: Strref,
@@ -314,13 +315,6 @@ pub struct ItemEffect1 {
 	id: NotPacked::<Option<i64>>,
 }
 
-pub trait TopResourceData: SqlRow {
-	/// The name of the main SQL view associated with this resource.
-	const NAME: &'static str;
-	/// The associated restype (a wrapped u16).
-	const RESTYPE: Restype;
-}
-
 /// A top-level resource (i.e. saved to its own file in the override
 /// directory).
 pub trait ToplevelResource: NamedTable {
@@ -349,7 +343,7 @@ pub trait ToplevelResource: NamedTable {
 		(db: &impl DbInterface, condition: impl Display, f:F)->Result<i32>;
 	/// Saves all toplevel resources of this type.
 	fn save_all(db: &impl DbInterface)->Result<()> {
-		let Schema { name, extension, .. } = Self::SCHEMA;
+		let Schema0 { name, extension, .. } = Self::SCHEMA;
 		scope_trace!("saving resources from '{}'", name);
 		let condition = format!(r#"where "key" in "dirty_{name}""#);
 		let n = Self::for_each(db, condition,
@@ -521,3 +515,4 @@ Attack type: {atype}",
 //  - its implementation of `map()`,
 //  - and the constant `RESOURCES`, which holds the parent resources.
 produce_resource_list!();
+all_resources!();
