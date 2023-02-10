@@ -26,8 +26,6 @@
 //! for joins with the edit tables.
 use crate::prelude::*;
 use macros::{produce_resource_list};
-use rusqlite::ToSql;
-use rusqlite::types::{ToSqlOutput};
 use crate::struct_io::{Pack,SqlRow,NotPacked,NoSql};
 use crate::schemas::{Schema};
 use crate::database::{DbTypeCheck,DbInterface,DbInserter,TypedStatement};
@@ -44,15 +42,6 @@ struct Repack<T>(T);
 /// interaction with the database (`ins`, `sel`). Concrete
 /// implementations are provided by the `Resource` derive macro.
 pub trait Resource: Sized {
-	/// Returns the `i`-th field of the resource,
-	/// wrapped in a [`rusqlite::types::ToSlqOutput`]
-	/// for trivial insertion into a SQL statement.
-	/// **NOTE**: rusqlite does not allow pushing `Result<ToSqlOutput>`
-	/// values back into a [`rusqlite::ParamsFromIter`] iterator,
-	/// so we need to unwrap those values.
-	/// Since we do so from a controlled struct, this should not panic;
-	/// however, it would be better to be able to propagate errors.
-	fn get_field(&self, i: usize)->ToSqlOutput<'_>;
 	/// Reads a whole [`rusqlite::Row`] into a struct,
 	/// or raises a conversion error.
 // 	fn from_row(r: &rusqlite::Row<'_>)->Result<Self>;

@@ -30,33 +30,24 @@
 
 pub(crate) mod prelude {
 //! The set of symbols we want accessible from everywhere in the crate.
+#![allow(unused_imports)]
 pub(crate) use anyhow::{Result,Context};
-#[allow(unused_imports)]
 pub(crate) use log::{trace,debug,info,warn,error};
 pub(crate) use rusqlite::{self,Connection,Statement};
-#[allow(unused_imports)]
-pub(crate) use lazy_format::lazy_format;
-#[allow(unused_imports)]
-pub(crate) use joinery::JoinableIterator;
 
 pub(crate) use core::marker::PhantomData;
-#[allow(unused_imports)]
 pub(crate) use std::ops::{Deref};
 pub(crate) use std::fmt::{self,Display,Debug,Formatter,Write as FWrite};
 pub(crate) use std::fs::{self,File};
-#[allow(unused_imports)]
 pub(crate) use std::io::{self,Cursor,Read,Write,Seek,SeekFrom};
 pub(crate) use std::path::{Path, PathBuf};
 
 pub(crate) use macros::{Pack,Resource,SqlRow,Newtype};
 pub(crate) use crate::gamefiles::{Resref,Strref};
 pub(crate) use crate::database::{GameDB,DbInterface};
-#[allow(unused_imports)]
 pub(crate) use crate::progress::{Progress,scope_trace,NullDisplay,DisplayExt};
 
 pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
-#[derive(Newtype)]
-struct Foobar(i32);
 
 #[derive(Debug)]
 pub(crate) enum Error{
@@ -88,6 +79,7 @@ use indicatif::{ProgressBar,ProgressStyle,MultiProgress};
 impl Display for NullDisplay {
 	fn fmt(&self, _: &mut Formatter<'_>)->fmt::Result { Ok(()) }
 }
+/// Join together two [`Display`] implementations.
 pub struct DisplayTwo<X: Display, Y: Display>(X, Y);
 impl<X: Display, Y: Display> Display for DisplayTwo<X,Y> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
@@ -274,7 +266,7 @@ pub trait SqlRow: Sized {
 	/// The number of fields in the SQL row.
 	const WIDTH: usize;
 	/// Returns the `i`-th field of the resource,
-	/// wrapped in a [`rusqlite::types::ToSlqOutput`]
+	/// wrapped in a [`rusqlite::types::ToSqlOutput`]
 	/// for trivial insertion into a SQL statement.
 	/// **NOTE**: rusqlite does not allow pushing `Result<ToSqlOutput>`
 	/// values back into a [`rusqlite::ParamsFromIter`] iterator,
@@ -360,21 +352,16 @@ impl<T: SqlRow> ExactSizeIterator for SchemaIterator<T> {
 	fn len(&self)->usize { T::WIDTH }
 }
 
-use macros::Newtype;
 /// A trivial wrapper around a value.
 /// `S` is a flag which decides whether `SqlRow` is pass-through or
 /// ignored, and likewise for `P` and `Pack`.
 #[derive(Newtype)]
-pub struct Wrapper<T, const S: bool, const P: bool>(T);
-impl<T: Pack, const S: bool> Pack for Wrapper<T,S,true> {
-	fn unpack(r: &mut impl Read)->io::Result<Self> { T::unpack(r).map(Self) }
-	fn pack(&self, w: &mut impl Write)->io::Result<()> { self.0.pack(w) }
-}
-impl<T: Default, const S: bool> Pack for Wrapper<T,S,false> {
+pub struct NotPacked<T>(T);
+impl<T: Default> Pack for NotPacked<T> {
 	fn unpack(_r: &mut impl Read)->io::Result<Self> { Ok(Self(T::default())) }
 	fn pack(&self, _w: &mut impl Write)->io::Result<()> { Ok(()) }
 }
-impl<T: SqlRow, const P: bool> SqlRow for Wrapper<T,true,P> {
+impl<T: SqlRow> SqlRow for NotPacked<T> {
 	const WIDTH: usize = T::WIDTH;
 	fn from_row_at(row: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
 		T::from_row_at(row, offset).map(Self)
@@ -386,7 +373,10 @@ impl<T: SqlRow, const P: bool> SqlRow for Wrapper<T,true,P> {
 	fn fieldtype(i: usize)->FieldType { T::fieldtype(i) }
 	fn primary_index()->Option<usize> { T::primary_index() }
 }
-impl<T: Default, const P: bool> SqlRow for Wrapper<T,false,P> {
+
+#[derive(Newtype,Pack)]
+pub struct NoSql<T>(T);
+impl<T: Default> SqlRow for NoSql<T> {
 	const WIDTH: usize = 0;
 	fn from_row_at(_row: &rusqlite::Row<'_>, _offset: usize)->Result<Self> {
 		Ok(Self(T::default()))
@@ -404,8 +394,8 @@ impl<T: Default, const P: bool> SqlRow for Wrapper<T,false,P> {
 		panic!("attempted to compute primary index of a NoSql value")
 	}
 }
-pub type NoSql<T> = Wrapper<T,false,true>;
-pub type NotPacked<T> = Wrapper<T,true,false>;
+// pub type NoSql<T> = Wrapper<T,false,true>;
+// pub type NotPacked<T> = Wrapper<T,true,false>;
 
 } // mod sqltypes
 pub(crate) mod staticstrings {
@@ -479,7 +469,7 @@ impl<const N: usize> Display for StaticString<N> {
 	}
 }
 /// This Pack implementation is manual because (1) the derive macro has
-/// some difficulties with const parameters, and (2) [u8;N] is not `Pack`
+/// some difficulties with const parameters, and (2) \[u8;N\] is not `Pack`
 /// anyway.
 impl<const N: usize> Pack for StaticString<N> {
 	fn unpack(f: &mut impl Read)->io::Result<Self> {
@@ -804,6 +794,7 @@ impl GameIndex {
 			.with_context(|| format!("cannot open game index: {indexfile:?}"))?;
 		let hdr = KeyHdr::unpack(&mut f)
 			.with_context(|| format!("bad KEY header in file: {indexfile:?}"))?;
+		println!("{hdr:?}");
 		let bifentries = KeyBif::vecunpack(&mut f, hdr.nbif as usize)
 			.with_context(|| format!("cannot read {} BIF entries in file: {indexfile:?}", hdr.nbif))?;
 		let mut bifnames = Vec::<String>::new();
@@ -1493,7 +1484,6 @@ use crate::gamefiles::{GameIndex};
 use crate::struct_io::{Pack};
 use crate::resources::Resource;
 use macros::{Pack};
-use rusqlite::ToSql;
 
 #[derive(Debug,Pack)]
 struct TlkHeader {
