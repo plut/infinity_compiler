@@ -325,12 +325,27 @@ pub fn derive_newtype(tokens: TokenStream)->TokenStream {
 				std::fmt::LowerHex::fmt(&self.#name, f)
 			}
 	});
+	add_trait(quote!(rusqlite::ToSql), quote!{
+		fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+			self.#name.to_sql()
+		}
+	});
+	let f_default = fields.build_from(&[quote!{ #ty::default() }]);
+	add_trait(quote!(Default), quote!{
+		fn default()->Self { #f_default }
+	});
 	let f_clone = fields.build_from(&[quote!{ self.#name.clone() }]);
 	add_trait(quote!(Clone), quote!{
 		fn clone(&self)->Self { #f_clone }
 	});
 	let f_from = fields.build_from(&[quote!{ source }]);
 	add_trait(quote!(Copy), quote!{});
+	let f_from_sql = fields.build_from(&[quote! { x }]);
+	add_trait(quote!(rusqlite::types::FromSql), quote!{
+		fn column_result(v: rusqlite::types::ValueRef<'_>)->rusqlite::types::FromSqlResult<Self> {
+			T::column_result(v).map(|x| #f_from_sql)
+		}
+	});
 	quote! {
 		impl #generics From<#ty> for #ident<#gen_params> {
 			fn from(source: #ty)->Self { #f_from }
@@ -349,6 +364,7 @@ pub fn derive_newtype(tokens: TokenStream)->TokenStream {
 			pub fn unwrap(self)->#ty { self.#name }
 		}
 	}.to_tokens(&mut code);
+// 	println!("\x1b[35;1m{code}\x1b[m");
 	code.into()
 }
 
@@ -487,8 +503,8 @@ impl ResourceInfo {
 /// Attributes:
 /// resource(items, "itm", 0x03ed)
 #[proc_macro_derive(Resource, attributes(topresource,subresource))]
-pub fn derive_top_resource(tokens: TokenStream)->TokenStream {
-	let DeriveInput{ ident, attrs, .. } = parse_macro_input!(tokens);
+pub fn derive_resource(tokens: TokenStream)->TokenStream {
+	let DeriveInput{ ident, attrs, data, .. } = parse_macro_input!(tokens);
 	let mut resource_info = ResourceInfo::default();
 	for (name, mut args) in attrs.iter().map(parse_attr) {
 		match name.as_str() {
@@ -502,31 +518,52 @@ pub fn derive_top_resource(tokens: TokenStream)->TokenStream {
 		panic!("{}", "top-level resource must have a full `resource` attribute; we got {resource_info:?}")
 	}
 	let ResourceInfo { name: table_name, resource } = resource_info;
-	let res_code = match resource {
-		SchemaResource::Top { extension, restype } => quote!{
+	let res_code: TS;
+	let extra_code: TS;
+	let fields = Fields::from(data);
+	match resource {
+	SchemaResource::Top { extension, restype } => {
+		res_code = quote!{
 			crate::schemas::SchemaResource::Top {
 				extension: #extension,
 				restype: crate::gamefiles::Restype{ value: #restype },
 			}
-		},
-		SchemaResource::Sub { parent, link } => quote! {
+		};
+		extra_code = quote!{
+			impl ToplevelResourceData for #ident {
+				const EXTENSION: &'static str = #extension;
+				const RESTYPE: crate::gamefiles::Restype =
+					crate::gamefiles::Restype{ value: #restype };
+			}
+		};
+	},
+	SchemaResource::Sub { parent, link } => {
+		let resref = match fields.iter().position(|f|
+			matches!(f.name, FieldNameRef::Named(s) if s.to_string() == link)) {
+			Some(i) => i,
+			None => panic!("resref {link} not found in fields"),
+		};
+		res_code = quote! {
 			crate::schemas::SchemaResource::Sub {
 				parent: #parent,
-				link: #link,
+				resref_index: #resref,
 			}
-		},
-		_ => panic!("bad programming"),
-	};
+		};
+		extra_code = quote! { }
+	},
+	_ => panic!("bad programming"),
+	} // match
 	let code = quote!{
 		impl crate::schemas::Resource for #ident {
 			fn schema()->crate::schemas::Schema {
 				crate::schemas::Schema {
-					table_name: #table_name,
+					name: #table_name,
 					resource: #res_code,
 					fields: Self::schema_itr().collect(),
 				}
 			}
 		}
+		#extra_code
 	};
 	// we need this after the code generation since this moves `table_name`:
 	push_resource1(ResourceDef(ident.toks_string(), table_name));

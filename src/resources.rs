@@ -55,26 +55,26 @@ pub trait Resource0: Sized {
 	fn ins(&self, s: &mut Statement<'_>, key: &Self::Context)->rusqlite::Result<()>;
 	/// The low-level select function from a database row to an object.
 	fn sel(r: &rusqlite::Row<'_>)->Result<(Self, Self::Context)>;
-	/// The select Statement for an object.
-	///
-	/// The ID field (if present) is not selected. (This is used only for
-	/// building game files, where this field is not used anyway).
-	///
-	/// The name of the table is `{n1}{n2}`; since many tables are built in
-	/// two parts (e.g. `load_{name}`, `strings_{lang}`),
-	/// this avoids calling `format!` on the
-	/// caller side and slightly simplifies the API.
-	///
-	/// This returns a [`Result<TypedStatement>`]: it is possible to iterate
-	/// over the result and recover structures of the original type.
-	fn select_query_gen(db: &impl DbInterface, n1: impl Display, n2: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
-		let s = Self::SCHEMA.select_statement(n1, n2, cond);
-		Ok(TypedStatement::new(db.prepare(&s)?))
-	}
-	/// Particular case of SELECT statement used for saving to game files.
-	fn select_query(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
-		Self::select_query_gen(db, "save_", Self::SCHEMA, s)
-	}
+// 	/// The select Statement for an object.
+// 	///
+// 	/// The ID field (if present) is not selected. (This is used only for
+// 	/// building game files, where this field is not used anyway).
+// 	///
+// 	/// The name of the table is `{n1}{n2}`; since many tables are built in
+// 	/// two parts (e.g. `load_{name}`, `strings_{lang}`),
+// 	/// this avoids calling `format!` on the
+// 	/// caller side and slightly simplifies the API.
+// 	///
+// 	/// This returns a [`Result<TypedStatement>`]: it is possible to iterate
+// 	/// over the result and recover structures of the original type.
+// 	fn select_query_gen(db: &impl DbInterface, n1: impl Display, n2: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
+// 		let s = Self::SCHEMA.select_statement(n1, n2, cond);
+// 		Ok(TypedStatement::new(db.prepare(&s)?))
+// 	}
+// 	/// Particular case of SELECT statement used for saving to game files.
+// 	fn select_query(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
+// 		Self::select_query_gen(db, "save_", Self::SCHEMA, s)
+// 	}
 }
 /// Those resources which are associated to a global table.
 pub trait NamedTable: Resource0 {
@@ -99,7 +99,7 @@ pub fn restype_from_extension(ext: &str)->Restype {
 /// An effect inside a .itm file (either global or in an ability).
 #[derive(Debug,Pack,Resource0)]
 #[allow(missing_copy_implementations)]
-#[resource(item_effects)] pub struct ItemEffect {
+#[resource(item_effects)] pub struct ItemEffect0 {
 #[column(itemref, Resref, r#"references "items"("itemref") on delete cascade"#)]
 #[column(abref, usize, r#"references "item_abilities"("abref") on delete cascade"#)]
 // itemref is used only for sorting:
@@ -124,7 +124,7 @@ pub fn restype_from_extension(ext: &str)->Restype {
 /// An ability inside a .itm file.
 #[derive(Debug,Pack,Resource0)]
 #[allow(missing_copy_implementations)]
-#[resource(item_abilities)] pub struct ItemAbility {
+#[resource(item_abilities)] pub struct ItemAbility0 {
 #[column(itemref, Resref, r#"references "items"("itemref") on delete cascade"#)]
 #[column(abref, usize)]
 	attack_type: u8, // AttackType,
@@ -162,7 +162,7 @@ pub fn restype_from_extension(ext: &str)->Restype {
 /// An item effect, corresponding to a .itm file.
 #[derive(Debug,Pack,Resource0)]
 #[allow(missing_copy_implementations)]
-#[resource(items,"itm",0x03ed)] pub struct Item {
+#[resource(items,"itm",0x03ed)] pub struct Item0 {
 #[header("ITM V1  ")]
 #[column(itemref, Resref)]
 	unidentified_name: Strref,
@@ -202,9 +202,9 @@ pub fn restype_from_extension(ext: &str)->Restype {
 #[column(false)] equip_effect_count: u16,
 }
 /// A game item, corresponding to a .itm file.
-#[derive(Pack,SqlRow,Resource)]
+#[derive(Debug,Pack,SqlRow,Resource)]
 #[topresource("items", "itm", 0x03ed)]
-pub struct Item1 {
+pub struct Item {
 #[header("ITM V1  ")]
 	unidentified_name: Strref,
 	name: Strref,
@@ -245,10 +245,11 @@ pub struct Item1 {
 	itemref: NotPacked::<Resref>,
 }
 /// An ability inside a .itm file.
-#[derive(Debug,Pack,SqlRow)]
+#[derive(Debug,Pack,SqlRow,Resource)]
+#[subresource(item_abilities,itemref,items)]
 #[allow(missing_copy_implementations)]
 // #[resource(item_abilities)]
-pub struct ItemAbility1 {
+pub struct ItemAbility {
 	attack_type: u8, // AttackType,
 	must_identify: u8,
 	location: u8,
@@ -287,10 +288,11 @@ pub struct ItemAbility1 {
 	id: NotPacked::<Option<i64>>,
 }
 /// An effect inside a .itm file (either global or in an ability).
-#[derive(Debug,Pack,SqlRow)]
+#[derive(Debug,Pack,SqlRow,Resource)]
+#[subresource(item_effects,itemref,items)]
 #[allow(missing_copy_implementations)]
 // #[resource(item_effects)]
-pub struct ItemEffect1 {
+pub struct ItemEffect {
 	opcode: u16, //opcode,
 	target: u8, // EffectTarget,
 	power: u8,
@@ -315,9 +317,15 @@ pub struct ItemEffect1 {
 	id: NotPacked::<Option<i64>>,
 }
 
+pub trait ToplevelResourceData: Resource {
+	// TODO:
+	// fn resref(&self)->Resref;
+	const EXTENSION: &'static str;
+	const RESTYPE: Restype;
+}
 /// A top-level resource (i.e. saved to its own file in the override
 /// directory).
-pub trait ToplevelResource: NamedTable {
+pub trait ToplevelResource: ToplevelResourceData {
 	/// Subresources for this resource (together with linking info.).
 	///
 	/// This should be a tuple of all subresources, each of them stored in
@@ -326,6 +334,15 @@ pub trait ToplevelResource: NamedTable {
 	/// Inserts a single resource in the database.
 	fn load(db: &mut DbInserter<'_>, cursor: impl Read+Seek, resref: Resref)
 		->Result<()>;
+	fn load_from_handle(db: &mut DbInserter<'_>, resref: Resref,
+			mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
+		Self::load(db, handle.open()?, resref)?;
+		if handle.is_override() {
+			db.add_override.execute((resref, Self::EXTENSION))?;
+		}
+// 		*count+= 1;
+		Ok(())
+	}
 	/// Saves a single resource (with its subresources) to game files.
 	fn save(&mut self, file: impl Write+Seek+Debug, subresources: Self::Subresources<'_>)
 		->Result<()>;
@@ -339,11 +356,13 @@ pub trait ToplevelResource: NamedTable {
 	/// and calls the passed closure on the resulting structure.
 	///
 	/// It returns the number of rows matched.
-	fn for_each<F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>>
-		(db: &impl DbInterface, condition: impl Display, f:F)->Result<i32>;
+	fn for_each<F,C>(db: &impl DbInterface, condition: C, f: F)->Result<i32>
+		where F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>,
+		C: Display;
 	/// Saves all toplevel resources of this type.
 	fn save_all(db: &impl DbInterface)->Result<()> {
-		let Schema0 { name, extension, .. } = Self::SCHEMA;
+		let Schema { name, .. } = Self::schema();
+		let extension = Self::EXTENSION;
 		scope_trace!("saving resources from '{}'", name);
 		let condition = format!(r#"where "key" in "dirty_{name}""#);
 		let n = Self::for_each(db, condition,
@@ -374,8 +393,8 @@ impl ToplevelResource for Item {
 	type Subresources<'a> = (&'a mut [ItemAbility], &'a mut[(ItemEffect,usize)]);
 	/// load an item from cursor
 	fn load(db: &mut DbInserter<'_>, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
-		let mut item = Item1::unpack(&mut cursor)
-			.context("cannot unpack Item main struct")?;
+		let mut item = Item::unpack(&mut cursor)
+			.context("cannot unpack Item0 main struct")?;
 		item.itemref = resref.into();
 		db.tables.items.execute(item.as_params())
 			.context("inserting into 'items'")?;
@@ -384,7 +403,7 @@ impl ToplevelResource for Item {
 		let mut ab_n = Vec::<u16>::
 			with_capacity(item.abilities_count.unwrap() as usize);
 		for ab_index in 1..1+item.abilities_count.unwrap() {
-			let mut ab = ItemAbility1::unpack(&mut cursor)
+			let mut ab = ItemAbility::unpack(&mut cursor)
 				.with_context(|| format!("cannot unpack item ability {}/{}",
 					ab_index, item.abilities_count))?;
 			ab.itemref = resref.into();
@@ -396,7 +415,7 @@ impl ToplevelResource for Item {
 		trace!("inserting item {resref}; abilities have {ab_n:?} effects");
 		cursor.seek(SeekFrom::Start(item.effect_offset.unwrap() as u64))?;
 		for j in 1..1+item.equip_effect_count.unwrap() { // on-equip effects
-			let mut eff = ItemEffect1::unpack(&mut cursor)
+			let mut eff = ItemEffect::unpack(&mut cursor)
 				.with_context(|| format!("cannot unpack global item effect {}/{}",
 					j+1, item.equip_effect_count.unwrap()))?;
 			eff.itemref = resref.into();
@@ -407,7 +426,7 @@ impl ToplevelResource for Item {
 		}
 		for (i, n) in ab_n.iter().enumerate() {
 			for j in 1..(1+*n) {
-				let mut eff = ItemEffect1::unpack(&mut cursor)
+				let mut eff = ItemEffect::unpack(&mut cursor)
 					.with_context(|| format!("cannot unpack item effect {}/{} for ability {}", j+1, n, i+1))?;
 				eff.itemref = resref.into();
 				eff.ability = (1+i as i64).into();
@@ -422,13 +441,13 @@ impl ToplevelResource for Item {
 	fn save(&mut self, mut file: impl Write+Seek+Debug, (abilities, effects): Self::Subresources<'_>) ->Result<()> {
 		trace!("saving item with {} abilities and {} effects",
 			abilities.len(), effects.len());
-		let mut current_effect_idx = self.equip_effect_count;
+		let mut current_effect_idx = self.equip_effect_count.unwrap();
 		for a in abilities.iter_mut() {
-			a.effect_index = current_effect_idx;
-			current_effect_idx+= a.effect_count;
+			a.effect_index = current_effect_idx.into();
+			current_effect_idx+= a.effect_count.unwrap();
 		}
-		self.abilities_offset = 114;
-		self.effect_offset = 114 + 56*(self.abilities_count as u32);
+		self.abilities_offset = 114.into();
+		self.effect_offset = (114 + 56*(self.abilities_count.unwrap() as u32)).into();
 		println!("\x1b[34mitem is: {self:?}\x1b[m");
 
 		self.pack(&mut file)
@@ -444,7 +463,7 @@ impl ToplevelResource for Item {
 				e.pack(&mut file)?;
 			}
 		}
-		for i in 0..self.abilities_count {
+		for i in 0..self.abilities_count.unwrap() {
 			for (e, j) in effects.iter() {
 				if *j == (i+1).into() {
 					e.pack(&mut file)?;
@@ -453,8 +472,10 @@ impl ToplevelResource for Item {
 		}
 		Ok(())
 	}
-	fn for_each<F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>>
-		(db: &impl DbInterface, condition: impl Display, f:F)->Result<i32> {
+	/// Selects a number of items from the database.
+	fn for_each<F,C>(db: &impl DbInterface, condition: C, f:F)->Result<i32>
+		where F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>,
+			C: Display {
 		let mut sel_item = Item::select_query(db, &condition)?;
 		let mut sel_item_ab = ItemAbility::select_query(db, r#"where "key"=?"#)?;
 		let mut sel_item_eff = ItemEffect::select_query(db, r#"where "key"=?"#)?;
@@ -462,30 +483,30 @@ impl ToplevelResource for Item {
 		debug!("processing items under condition: {condition}");
 		for x in sel_item.iter(())? {
 			if x.is_db_malformed() { continue }
-			let (mut item, (itemref,)) = x?;
-			debug!("reading item: {itemref}");
+			let mut item = x?;
+			debug!("reading item: {}", item.itemref);
 			// we store item effects & abilities in two vectors:
 			//  - abilities = (ability, abref)
 			//  - effect = (effect, ability index)
 			let mut abilities = Vec::<ItemAbility>::new();
 			let mut effects = Vec::<(ItemEffect, usize)>::new();
-			for x in sel_item_ab.iter((&itemref,))? {
+			for x in sel_item_ab.iter((&item.itemref,))? {
 				if x.is_db_malformed() { continue }
-				let (ab, _) = x?;
-				abilities.push(ab);
+				abilities.push(x?);
 				item.abilities_count+= 1;
 			}
-			for x in sel_item_eff.iter((&itemref,))? {
+			for x in sel_item_eff.iter((&item.itemref,))? {
 				if x.is_db_malformed() { continue }
-				let (eff, (_parent, ab_id, _eff_id)) = x?;
-				if ab_id > 0 {
-					abilities[ab_id-1].effect_count+=1;
-				} else {
-					item.equip_effect_count+= 1;
-				}
+				let eff = x?;
+				let index = abilities.iter().position(|ab|
+					ab.id.unwrap().unwrap() == eff.ability.unwrap());
+				let ab_id = match index {
+					Some(i) => { abilities[i].effect_count+= 1; i+1 },
+					None => { item.equip_effect_count+= 1; 0 },
+				};
 				effects.push((eff, ab_id));
 			}
-			f(itemref, &mut item, (&mut abilities, &mut effects))?;
+			f(item.itemref.unwrap(), &mut item, (&mut abilities, &mut effects))?;
 			n_items+= 1;
 		}
 		debug!("processed {n_items} items");
