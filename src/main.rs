@@ -1007,7 +1007,7 @@ pub(crate) mod schemas {
 //! This mod groups everything which has access to the content of the
 //! [`Schema0`] struct.
 use crate::prelude::*;
-use crate::resources::{RESOURCES,AllResources};
+use crate::resources::{RESOURCES};
 use crate::gamefiles::Restype;
 use crate::struct_io::{SqlRow,FieldType};
 
@@ -1017,7 +1017,9 @@ pub trait Resource: SqlRow {
 }
 #[derive(Debug)]
 pub enum SchemaResource {
+#[allow(dead_code)]
 	Top { extension: &'static str, restype: Restype, },
+#[allow(dead_code)]
 	Sub { parent: &'static str, link: &'static str },
 }
 #[derive(Debug)]
@@ -2496,12 +2498,12 @@ fn main() -> Result<()> {
 			lua_api::command_add(GameDB::open(db_file)?, &target)?,
 		Command::Schema{ table, .. } => match table {
 			None => {
-				RESOURCES.map(|schema,_| { println!("{schema}"); any_ok(()) })?;
+				all_schemas().map(|schema| any_ok(println!("{}", schema.table_name)))?;
 			},
 			Some(s) => {
-				let schema = RESOURCES.table_schema(&s)?;
-				for crate::schemas::Field { fname, ftype, .. } in schema.iter() {
-					println!("{fname:30}{}", ftype.to_lua());
+				let schema = all_schemas().by_name(&s)?;
+				for crate::schemas::Field { fname, ftype, .. } in schema.fields.iter() {
+					println!("{fname:30?}{}", ftype.to_lua());
 				}
 			},
 			},

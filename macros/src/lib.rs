@@ -784,6 +784,7 @@ pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 	let mut map = TS::new();
 	let mut schema = TS::new();
 	let mut by_name = TS::new();
+	let mut by_name_ref = TS::new();
 	let mut n = 0usize;
 	RESOURCES1.with(|v| {
 		n = v.borrow().len();
@@ -796,8 +797,10 @@ pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 				.to_tokens(&mut map);
 			quote!{ #field: #ty::schema(), }
 				.to_tokens(&mut schema);
-			quote!{ #table_name => Ok(&self.#field), }
+			quote!{ #table_name => Ok(self.#field), }
 				.to_tokens(&mut by_name);
+			quote!{ #table_name => Ok(&self.#field), }
+				.to_tokens(&mut by_name_ref);
 		}
 	}); // closure
 
@@ -833,10 +836,16 @@ pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 // 			}
 			/// Given a SQL table name, returns the schema for this table,
 			/// or throws an appropriate error.
-			pub fn by_name(&self, table_name: &str)->Result<&T> {
+			pub fn by_name_ref(&self, table_name: &str)->Result<&T> {
+				match table_name {
+					#by_name_ref
+				_ => Err(Error::UnknownTable(table_name.to_owned()).into())
+				}
+			}
+			pub fn by_name(self, table_name: &str)->Result<T> {
 				match table_name {
 					#by_name
-				_ => Err(Error::UnknownTable(table_name.to_owned()).into())
+					_ => Err(Error::UnknownTable(table_name.to_owned()).into())
 				}
 			}
 // 			pub fn by_resource<R: Resource>(&self)->&T { R::find(self) }
