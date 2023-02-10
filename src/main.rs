@@ -34,6 +34,7 @@ pub(crate) mod prelude {
 pub(crate) use anyhow::{Result,Context};
 pub(crate) use log::{trace,debug,info,warn,error};
 pub(crate) use rusqlite::{self,Connection,Statement};
+pub(crate) use extend::ext;
 
 pub(crate) use core::marker::PhantomData;
 pub(crate) use std::ops::{Deref};
@@ -63,6 +64,10 @@ impl Display for Error {
 	}
 }
 impl std::error::Error for Error { }
+
+macro_rules! uwrite {
+	($($a:tt)*) => { write!($($a)*).unwrap() }
+}
 
 }
 pub(crate) mod progress {
@@ -157,6 +162,7 @@ use crate::prelude::*;
 use rusqlite::{ToSql};
 use rusqlite::types::{ToSqlOutput,FromSql};
 use crate::database::TypedStatement;
+use crate::schemas::{Field};
 
 /// A type which may be packed to binary.
 ///
@@ -291,8 +297,8 @@ pub trait SqlRow: Sized {
 	/// Converts this resource to a struct implementing
 	/// [`rusqlite::Params`], allowing it to be passed to a
 	/// [`rusqlite::Statement`].
-	fn as_params(&self)->rusqlite::ParamsFromIter<SqlRowIterator<'_,Self>> {
-		rusqlite::params_from_iter(SqlRowIterator(0, self))
+	fn as_params(&self)->rusqlite::ParamsFromIter<ContentIterator<'_,Self>> {
+		rusqlite::params_from_iter(ContentIterator(0, self))
 	}
 	/// Reads a whole [`rusqlite::Row`] into a struct.
 	fn from_row(row: &rusqlite::Row<'_>,)->Result<Self> {
@@ -301,16 +307,13 @@ pub trait SqlRow: Sized {
 	/// Returns the name of the `i`-th field, as a string.
 	fn fieldname(i: usize)->&'static str { Self::fieldname_ctx("", i) }
 	/// Return the `i`-th element of schema
-	fn field_info(i: usize)->crate::schemas::Field {
-		crate::schemas::Field { fname: Self::fieldname(i),
+	fn field(i: usize)->Field {
+		Field { fname: Self::fieldname(i),
 			ftype: Self::fieldtype(i), extra: Self::field_create_text(i) }
 	}
-	/// Returns the schema: an iterator returning (fieldname, fieldtype).
-	fn schema_itr()->SchemaIterator<Self> { SchemaIterator(0, PhantomData) }
-	fn select_sql(n1: impl Display, n2: impl Display, condition: impl Display)->String {
-		let v = Self::schema_itr().collect::<Vec<_>>();
-		format!(r#"select {cols} from "{n1}{n2}" {condition}"#,
-			cols = crate::schemas::Columns(&v, NullDisplay()))
+	/// Returns the set of fields, as a vector.
+	fn fields()->Vec<Field> {
+		(0..Self::WIDTH).map(Self::field).collect()
 	}
 	/// The select Statement for an object.
 	///
@@ -325,7 +328,9 @@ pub trait SqlRow: Sized {
 	/// This returns a [`Result<TypedStatement>`]: it is possible to iterate
 	/// over the result and recover structures of the original type.
 	fn select_query_gen(db: &impl DbInterface, n1: impl Display, n2: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
-		let s = Self::select_sql(n1, n2, cond);
+		let fields = Self::fields();
+		let s = crate::schemas::Columns::<NullDisplay>::from(&fields, NullDisplay())
+			.select_sql(n1, n2, cond);
 		Ok(TypedStatement::new(db.prepare(&s)?))
 	}
 }
@@ -345,9 +350,15 @@ impl<T: SqlLeaf> SqlRow for T {
 	fn fieldname_ctx(ctx: &'static str, _i: usize)->&'static str { ctx }
 	fn primary_index()->Option<usize> { None }
 }
-/// An iterator over all fields of a [`SqlRow`].
-pub struct SqlRowIterator<'a,T: SqlRow> (usize, &'a T);
-impl<'a,T: SqlRow> Iterator for SqlRowIterator<'a,T> {
+
+// Two iterators:
+// - `ContentIterator` iterates over the content of an actual struct,
+// - `FieldsIterator` iterates over the (static) schema.
+/// An iterator over all content fields of a [`SqlRow`].
+///
+/// This iterates over the content of a struct.
+pub struct ContentIterator<'a,T: SqlRow> (usize, &'a T);
+impl<'a,T: SqlRow> Iterator for ContentIterator<'a,T> {
 	type Item = ToSqlOutput<'a>;
 	fn next(&mut self)->Option<Self::Item> {
 		if self.0 >= T::WIDTH { return None }
@@ -356,29 +367,10 @@ impl<'a,T: SqlRow> Iterator for SqlRowIterator<'a,T> {
 		Some(f)
 	}
 }
-impl<T: SqlRow> ExactSizeIterator for SqlRowIterator<'_,T> {
+impl<T: SqlRow> ExactSizeIterator for ContentIterator<'_,T> {
 	fn len(&self)->usize { T::WIDTH }
 }
-
-// TODO: move everything about SchemaIterator to a new function.
-/// An iterator over the [`SqlRow`] schema.
-pub struct SchemaIterator<T: SqlRow>(usize, PhantomData<T>);
-impl<T: SqlRow> Iterator for SchemaIterator<T> {
-	type Item = crate::schemas::Field;
-	fn next(&mut self)->Option<Self::Item> {
-		if self.0 >= T::WIDTH { return None }
-		let f = T::field_info(self.0);
-		self.0+= 1;
-		Some(f)
-	}
-}
-impl<T: SqlRow> ExactSizeIterator for SchemaIterator<T> {
-	fn len(&self)->usize { T::WIDTH }
-}
-
-/// A trivial wrapper around a value.
-/// `S` is a flag which decides whether `SqlRow` is pass-through or
-/// ignored, and likewise for `P` and `Pack`.
+/// A newtype which is pass-through for SQL and blocking for [`Pack`].
 #[derive(Newtype)]
 pub struct NotPacked<T>(T);
 impl<T: Default> Pack for NotPacked<T> {
@@ -397,7 +389,7 @@ impl<T: SqlRow> SqlRow for NotPacked<T> {
 	fn fieldtype(i: usize)->FieldType { T::fieldtype(i) }
 	fn primary_index()->Option<usize> { T::primary_index() }
 }
-
+/// A wrapper which is pass-through for [`Pack`] and blocking for [`SqlRow`].
 #[derive(Newtype,Pack)]
 pub struct NoSql<T>(T);
 impl<T: Default> SqlRow for NoSql<T> {
@@ -422,10 +414,7 @@ impl<T,I> std::ops::AddAssign<I> for NoSql<T>
 	where T: std::ops::AddAssign<I> {
 	fn add_assign(&mut self, rhs: I) { self.0.add_assign(rhs) }
 }
-// pub type NoSql<T> = Wrapper<T,false,true>;
-// pub type NotPacked<T> = Wrapper<T,true,false>;
-
-} // mod sqltypes
+} // mod struct_io
 pub(crate) mod staticstrings {
 //! Fixed-length string used as resource identifier.
 //! 
@@ -1101,12 +1090,14 @@ impl Field {
 		Self { fname, ftype: T::SQL_TYPE, extra }
 	}
 }
+/// Displays the quoted field name.
 /// This is a useful help for writing SQL statements.
 impl Display for Field {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		write!(f, r#""{n}""#, n = self.fname)
 	}
 }
+
 /// Description of several fields.
 ///
 /// This convenience type does several things for us, all related to the
@@ -1125,15 +1116,6 @@ impl<'a,T> IntoIterator for Columns<'a,T> {
 	type IntoIter = std::slice::Iter<'a,Field>;
 	fn into_iter(self)->Self::IntoIter { self.0.iter() }
 }
-impl<'a,T> Columns<'a, T> {
-	/// The length of this particular column set.
-	/// We need this since it is in general different from schema length.
-	pub fn len(&self)->usize { self.0.len() }
-	/// Modifies a set of column headers by prepending a prefix, e.g. "new."
-	pub fn with_prefix<P: Display>(self, prefix: P)->Columns<'a, P> {
-		Columns(self.0, prefix)
-	}
-}
 impl<T: Display> Display for Columns<'_,T> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		let mut isfirst = true;
@@ -1144,159 +1126,23 @@ impl<T: Display> Display for Columns<'_,T> {
 		Ok(())
 	}
 }
-/// The full database description of a game resource.
-///
-/// This contains all relevant information to fully define a resource
-/// on the SQL side.
-///
-/// In practice there exists exactly one [`Schema0`] instance per
-/// resource, and it is compiled by the [`Resource0`] derive macro.
-///
-/// The structure of the schema is always as follows:
-/// 1. **Payload fields.** These are the fields present in game files.
-/// 2. **Context fields.** These fields identify the position of the
-///    resource in game fields.
-/// In turn, the context fields are always:
-///  - for top-level resources: only the associated resref.
-///  - for sub-resources: resref is the first field and the last field is
-///    `rowid` alias. (In particular there are always several context
-///    fields).
-/// In all cases, the primary key is guaranteed to be the last field,
-/// while context starts at the resref fields.
-/// This structure allows handling context as a (contiguous) slice of fields;
-/// see [`Schema0::iter`], [`Schema0::columns`].
-///
-/// A few fields in this struct (`extension`, etc.)
-/// are used only for top-level resources.
-/// Doing this saves us a bit of code (separating top-level resources as
-/// their own type + writing ad-hoc macros etc.). The most harm it does
-/// is (a) storing a few bytes of useless memory in the executable,
-/// and (b) possibly inserting a few always-empty tables in the database
-/// (we try to avoid this however).
-#[derive(Debug)]
-pub struct Schema0<'a> {
-	/// Descriptions for all the fields of this struct.
-	pub fields: &'a[Field],
-	/// The stem for the SQL table name associated with this structure.
-	pub name: &'a str,
-	/// The index of the field pointing to top-level resource resref.
-	///
-	/// This is also (always) the first context column.
-	/// Top-level resources have this field as their primary key;
-	/// subresources have a dedicated "id" column at the end.
-	pub resref_key: usize,
-	/// The name of the table holding the top-level resource.
-	pub parent_table: &'a str,
-	/// The extension for this file type (if top-level), or "".
-	pub extension: &'a str,
-	/// The restype identifier for this resource type (if top-level), or 0.
-	pub restype: Restype,
+impl<'a,T> Columns<'a, T> {
+	pub fn from(slice: &'a[Field], prefix: T)->Self { Self(slice, prefix) }
+	/// The length of this particular column set.
+	/// We need this since it is in general different from schema length.
+	pub fn len(&self)->usize { self.0.len() }
+	/// Modifies a set of column headers by prepending a prefix, e.g. "new."
+	pub fn with_prefix<P: Display>(self, prefix: P)->Columns<'a, P> {
+		Columns(self.0, prefix)
+	}
 }
-impl<'schema> Schema0<'schema> {
-	// Step 0: a few useful functions
-	/// Is this a subresource?
-	pub fn is_subresource(&self)->bool {
-		self.resref_key < self.fields.len() - 1
+impl<T: Display> Columns<'_,T> {
+	/// Returns the SQL select statement for this schema, as a String.
+	pub fn select_sql(self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
+		format!(r#"select {self} from "{n1}{n2}" {condition}"#)
 	}
-	/// Returns the index before the id column (if present).
-	fn before_id(&self)->usize {
-		self.fields.len() - (self.is_subresource() as usize)
-	}
-	/// Columns of payload + context; no id.
-	///
-	/// In other words: these are the columns which can be inserted (id is
-	/// automatically computed by sqlite).
-	///
-	/// Returns an object implementing [`std::fmt::Display`] to write the
-	/// column headers for this schema in a SQL query.
-	pub fn columns(&'schema self)->Columns<'schema, NullDisplay> {
-		Columns(&self.fields[..self.before_id()], NullDisplay())
-	}
-	/// Complete columns.
-	pub fn iter(&'schema self)->Columns<'schema, NullDisplay> {
-		Columns(self.fields, NullDisplay())
-	}
-	/// Context columns only.
-	pub fn context(&'schema self)->Columns<'schema, NullDisplay> {
-		Columns(&self.fields[self.resref_key..self.before_id()], NullDisplay())
-	}
-	/// All the columns except the primary key.
-	pub fn except_primary(&'schema self)->Columns<'schema, NullDisplay> {
-		Columns(&self.fields[..self.fields.len()-1], NullDisplay())
-	}
-	/// The resref for this schema (as a string).
-	pub fn resref(&'schema self)->&str {
-		self.fields[self.resref_key].fname
-	}
-	/// The primary key for this schema (as a string).
-	///
-	/// Note that the [`Schema0`] structure imposes that this is always the
-	/// last field.
-	pub fn primary(&'schema self)->&str {
-		self.fields[self.fields.len()-1].fname
-	}
-	// Step 1: creating tables
-	pub fn select_statement(&self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
-		format!(r#"select {cols} from "{n1}{n2}" {condition} order by {sort}"#,
-			cols = self.columns(), sort = self.context())
-	}
-	/// The SQL code for inserting into a table.
-	///
-	/// This is used for both initial populating of the database from game
-	/// files and for `simod.insert`.
-	///
-	/// The `or` parameter allows calling SQL `INSERT OR IGNORE`;
-	/// this is used when initializing the database to ignore resources
-	/// which are superseded by override files.
-	pub fn insert_statement(&self, or: impl Display, prefix: impl Display)->String {
-		let name = &self.name;
-		let cols = self.columns();
-		let mut s = format!("insert {or} into \"{prefix}{name}\" ({cols}) values (");
-		for c in 0..cols.len()  {
-			if c > 0 { s.push(','); }
-			s.push('?');
-		}
-		s.push(')');
-		s
-	}
-	fn all_keys_gen<T>(&self, db: &impl DbInterface, condition: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
-		let s = format!(r#"select "{primary}" from "{table}" {condition} order by {sort}"#,
-			table = self.name, primary = self.primary(), sort = self.context());
-		let mut stmt = db.prepare(&s)?;
-		let mut rows = stmt.query(())?;
-		let mut v = Vec::<T>::new();
-		while let Some(row) = rows.next()? {
-			v.push(f(row.get_ref(0)?)?);
-		}
-		Ok(v)
-	}
-	pub fn all_keys<T>(&self, db: &impl DbInterface, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
-		self.all_keys_gen::<T>(db, "", f)
-	}
-	pub fn all_keys_with_parent<T>(&self, db: &impl DbInterface, value: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
-		self.all_keys_gen(db, format!(r#"where "{parent_key}"='{value}'"#,
-			parent_key = self.resref()), f)
-	}
-	/// Collects parameters for a SQL statement from the fields of the
-	/// schema.
-	///
-	/// Utility wrapper for [`rusqlite::params_from_iter`].
-	/// Usage: `schema.params_from(|fname, ftype| { Ok(parameter...) })?`
-	pub fn params_from<T,F>(&self, f: F)->Result<rusqlite::ParamsFromIter<Vec<T>>>
-	where T: rusqlite::ToSql + Debug,
-		F: Fn(&str, FieldType)->Result<T>
-	{
-		let params = self.columns().into_iter()
-			.map(|Field{fname, ftype, ..}| f(fname, *ftype))
-			.collect::<Result<Vec<T>>>()?;
-		trace!("collected parameters: {params:?}");
-		Ok(rusqlite::params_from_iter(params))
-	}
-} // impl Schema0
-/// Convenience implem.: prints schema name.
-impl Display for Schema0<'_> {
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { f.write_str(self.name) }
 }
+
 /// The full database description of a game resource.
 ///
 /// This contains all relevant information to fully define a resource
@@ -1518,14 +1364,6 @@ begin
 end"#))?;
 		Ok (())
 	}
-	pub fn select_statement(&self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
-		let mut s = format!(r#"select {cols} from "{n1}{n2}" {condition}"#,
-			cols = self.iter());
-		if let SchemaResource::Sub { .. } = self.resource {
-			write!(&mut s, r#" order by index"#).unwrap();
-		}
-		s
-	}
 	/// The SQL code for inserting into a table.
 	///
 	/// This is used for both initial populating of the database from game
@@ -1607,6 +1445,160 @@ begin
 			(select "strref_count" from "global")));
 end"#))?;
 	Ok(())
+}
+
+/// The full database description of a game resource.
+///
+/// This contains all relevant information to fully define a resource
+/// on the SQL side.
+///
+/// In practice there exists exactly one [`Schema0`] instance per
+/// resource, and it is compiled by the [`Resource0`] derive macro.
+///
+/// The structure of the schema is always as follows:
+/// 1. **Payload fields.** These are the fields present in game files.
+/// 2. **Context fields.** These fields identify the position of the
+///    resource in game fields.
+/// In turn, the context fields are always:
+///  - for top-level resources: only the associated resref.
+///  - for sub-resources: resref is the first field and the last field is
+///    `rowid` alias. (In particular there are always several context
+///    fields).
+/// In all cases, the primary key is guaranteed to be the last field,
+/// while context starts at the resref fields.
+/// This structure allows handling context as a (contiguous) slice of fields;
+/// see [`Schema0::iter`], [`Schema0::columns`].
+///
+/// A few fields in this struct (`extension`, etc.)
+/// are used only for top-level resources.
+/// Doing this saves us a bit of code (separating top-level resources as
+/// their own type + writing ad-hoc macros etc.). The most harm it does
+/// is (a) storing a few bytes of useless memory in the executable,
+/// and (b) possibly inserting a few always-empty tables in the database
+/// (we try to avoid this however).
+#[derive(Debug)]
+pub struct Schema0<'a> {
+	/// Descriptions for all the fields of this struct.
+	pub fields: &'a[Field],
+	/// The stem for the SQL table name associated with this structure.
+	pub name: &'a str,
+	/// The index of the field pointing to top-level resource resref.
+	///
+	/// This is also (always) the first context column.
+	/// Top-level resources have this field as their primary key;
+	/// subresources have a dedicated "id" column at the end.
+	pub resref_key: usize,
+	/// The name of the table holding the top-level resource.
+	pub parent_table: &'a str,
+	/// The extension for this file type (if top-level), or "".
+	pub extension: &'a str,
+	/// The restype identifier for this resource type (if top-level), or 0.
+	pub restype: Restype,
+}
+impl<'schema> Schema0<'schema> {
+	// Step 0: a few useful functions
+	/// Is this a subresource?
+	pub fn is_subresource(&self)->bool {
+		self.resref_key < self.fields.len() - 1
+	}
+	/// Returns the index before the id column (if present).
+	fn before_id(&self)->usize {
+		self.fields.len() - (self.is_subresource() as usize)
+	}
+	/// Columns of payload + context; no id.
+	///
+	/// In other words: these are the columns which can be inserted (id is
+	/// automatically computed by sqlite).
+	///
+	/// Returns an object implementing [`std::fmt::Display`] to write the
+	/// column headers for this schema in a SQL query.
+	pub fn columns(&'schema self)->Columns<'schema, NullDisplay> {
+		Columns(&self.fields[..self.before_id()], NullDisplay())
+	}
+	/// Complete columns.
+	pub fn iter(&'schema self)->Columns<'schema, NullDisplay> {
+		Columns(self.fields, NullDisplay())
+	}
+	/// Context columns only.
+	pub fn context(&'schema self)->Columns<'schema, NullDisplay> {
+		Columns(&self.fields[self.resref_key..self.before_id()], NullDisplay())
+	}
+	/// All the columns except the primary key.
+	pub fn except_primary(&'schema self)->Columns<'schema, NullDisplay> {
+		Columns(&self.fields[..self.fields.len()-1], NullDisplay())
+	}
+	/// The resref for this schema (as a string).
+	pub fn resref(&'schema self)->&str {
+		self.fields[self.resref_key].fname
+	}
+	/// The primary key for this schema (as a string).
+	///
+	/// Note that the [`Schema0`] structure imposes that this is always the
+	/// last field.
+	pub fn primary(&'schema self)->&str {
+		self.fields[self.fields.len()-1].fname
+	}
+	// Step 1: creating tables
+	pub fn select_statement(&self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
+		format!(r#"select {cols} from "{n1}{n2}" {condition} order by {sort}"#,
+			cols = self.columns(), sort = self.context())
+	}
+	/// The SQL code for inserting into a table.
+	///
+	/// This is used for both initial populating of the database from game
+	/// files and for `simod.insert`.
+	///
+	/// The `or` parameter allows calling SQL `INSERT OR IGNORE`;
+	/// this is used when initializing the database to ignore resources
+	/// which are superseded by override files.
+	pub fn insert_statement(&self, or: impl Display, prefix: impl Display)->String {
+		let name = &self.name;
+		let cols = self.columns();
+		let mut s = format!("insert {or} into \"{prefix}{name}\" ({cols}) values (");
+		for c in 0..cols.len()  {
+			if c > 0 { s.push(','); }
+			s.push('?');
+		}
+		s.push(')');
+		s
+	}
+	fn all_keys_gen<T>(&self, db: &impl DbInterface, condition: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
+		let s = format!(r#"select "{primary}" from "{table}" {condition} order by {sort}"#,
+			table = self.name, primary = self.primary(), sort = self.context());
+		let mut stmt = db.prepare(&s)?;
+		let mut rows = stmt.query(())?;
+		let mut v = Vec::<T>::new();
+		while let Some(row) = rows.next()? {
+			v.push(f(row.get_ref(0)?)?);
+		}
+		Ok(v)
+	}
+	pub fn all_keys<T>(&self, db: &impl DbInterface, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
+		self.all_keys_gen::<T>(db, "", f)
+	}
+	pub fn all_keys_with_parent<T>(&self, db: &impl DbInterface, value: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
+		self.all_keys_gen(db, format!(r#"where "{parent_key}"='{value}'"#,
+			parent_key = self.resref()), f)
+	}
+	/// Collects parameters for a SQL statement from the fields of the
+	/// schema.
+	///
+	/// Utility wrapper for [`rusqlite::params_from_iter`].
+	/// Usage: `schema.params_from(|fname, ftype| { Ok(parameter...) })?`
+	pub fn params_from<T,F>(&self, f: F)->Result<rusqlite::ParamsFromIter<Vec<T>>>
+	where T: rusqlite::ToSql + Debug,
+		F: Fn(&str, FieldType)->Result<T>
+	{
+		let params = self.columns().into_iter()
+			.map(|Field{fname, ftype, ..}| f(fname, *ftype))
+			.collect::<Result<Vec<T>>>()?;
+		trace!("collected parameters: {params:?}");
+		Ok(rusqlite::params_from_iter(params))
+	}
+} // impl Schema0
+/// Convenience implem.: prints schema name.
+impl Display for Schema0<'_> {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { f.write_str(self.name) }
 }
 } // mod schemas
 pub(crate) mod gamestrings {
@@ -1777,7 +1769,6 @@ use crate::resources::*;
 use crate::gamefiles::GameIndex;
 use crate::struct_io::SqlRow;
 use crate::schemas::{Schema0};
-use crate::schemas::Resource;
 
 // I. Low-level stuff: basic types and extensions for `rusqlite` traits.
 pub trait RowExt {

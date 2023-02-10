@@ -559,7 +559,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				crate::schemas::Schema {
 					name: #table_name,
 					resource: #res_code,
-					fields: Self::schema_itr().collect(),
+					fields: Self::fields(),
 				}
 			}
 		}
