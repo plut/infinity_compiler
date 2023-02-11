@@ -2594,8 +2594,6 @@
 <a href="#2594" id="2594">2594</a>
 <a href="#2595" id="2595">2595</a>
 <a href="#2596" id="2596">2596</a>
-<a href="#2597" id="2597">2597</a>
-<a href="#2598" id="2598">2598</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Compiler between IE game files and a SQLite database.
 </span><span class="attr">#![allow(
 	unused_attributes,
@@ -2684,21 +2682,23 @@
 	<span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw">_</span>: <span class="kw-2">&amp;mut </span>Formatter&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;fmt::Result { <span class="prelude-val">Ok</span>(()) }
 }
 <span class="doccomment">/// Join together two [`Display`] implementations.
-</span><span class="kw">pub struct </span>DisplayTwo&lt;X: Display, Y: Display&gt;(X, Y);
-<span class="kw">impl</span>&lt;X: Display, Y: Display&gt; Display <span class="kw">for </span>DisplayTwo&lt;X,Y&gt; {
+///
+/// Invoked by e.g. &quot;string&quot;.cat(string). This creates a (very simple,
+/// but sufficient for our purposes) lazy formatter.
+</span><span class="kw">pub struct </span>DisplayCat&lt;X: Display, Y: Display&gt;(X, Y);
+<span class="kw">impl</span>&lt;X: Display, Y: Display&gt; Display <span class="kw">for </span>DisplayCat&lt;X,Y&gt; {
 	<span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>Formatter&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;fmt::Result {
 		<span class="self">self</span>.<span class="number">0</span>.fmt(f)<span class="question-mark">?</span>; <span class="self">self</span>.<span class="number">1</span>.fmt(f)
 	}
 }
 <span class="kw">pub trait </span>DisplayExt: Display+Sized {
-	<span class="kw">fn </span>prepend&lt;X: Display&gt;(<span class="self">self</span>, x:X)-&gt;DisplayTwo&lt;X, <span class="self">Self</span>&gt; { DisplayTwo(x, <span class="self">self</span>) }
+	<span class="kw">fn </span>cat&lt;Y: Display&gt;(<span class="self">self</span>, y:Y)-&gt;DisplayCat&lt;<span class="self">Self</span>, Y&gt; { DisplayCat(<span class="self">self</span>, y) }
 }
 <span class="kw">impl</span>&lt;T: Display+Sized&gt; DisplayExt <span class="kw">for </span>T { }
 
 <span class="macro">thread_local! </span>{
 	<span class="kw">static </span>COUNT: RefCell&lt;usize&gt; = RefCell::new(<span class="number">0</span>);
-	<span class="kw">static </span>MULTI: RefCell&lt;MultiProgress&gt; =
-		RefCell::new(MultiProgress::new());
+	<span class="kw">static </span>MULTI: RefCell&lt;MultiProgress&gt; = RefCell::new(MultiProgress::new());
 }
 <span class="doccomment">/// A stacked progress bar.
 ///
@@ -2753,16 +2753,8 @@
 }
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>scope_trace;
 } <span class="comment">// mod progress
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>struct_io {
-<span class="doccomment">//! Basic types for interaction with SQL and binary files.
-//! The main entry points for this module are the traits [`Pack`]
-//! and [`SqlRow`].
-</span><span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
-<span class="kw">use </span>rusqlite::{ToSql};
-<span class="kw">use </span>rusqlite::types::{ToSqlOutput,FromSql};
-<span class="kw">use </span><span class="kw">crate</span>::database::TypedStatement;
-<span class="kw">use </span><span class="kw">crate</span>::schemas::{Field,ColumnWriter};
-
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>pack {
+<span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
 <span class="doccomment">/// A type which may be packed to binary.
 ///
 /// This trait is implemented by the derive macro.
@@ -2831,7 +2823,43 @@
 	</span><span class="kw">fn </span>unpack(_f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt; { <span class="prelude-val">Ok</span>(<span class="self">Self</span>::new()) }
 	<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, _f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; { <span class="prelude-val">Ok</span>(()) }
 }
+<span class="doccomment">/// A newtype which is pass-through for SQL and blocking for [`Pack`].
+</span><span class="attr">#[derive(Newtype)]
+</span><span class="kw">pub struct </span>NotPacked&lt;T&gt;(T);
+<span class="kw">impl</span>&lt;T: Default&gt; Pack <span class="kw">for </span>NotPacked&lt;T&gt; {
+	<span class="kw">fn </span>unpack(_r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt; { <span class="prelude-val">Ok</span>(<span class="self">Self</span>(T::default())) }
+	<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, _w: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; { <span class="prelude-val">Ok</span>(()) }
+}
 
+}
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>struct_io {
+<span class="doccomment">//! Basic types for interaction with SQL and binary files.
+//! The main entry points for this module are the traits [`Pack`]
+//! and [`SqlRow`].
+</span><span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
+<span class="kw">use </span>rusqlite::{ToSql};
+<span class="kw">use </span>rusqlite::types::{ToSqlOutput,FromSql};
+<span class="kw">use </span><span class="kw">crate</span>::schemas::{Field,ColumnWriter};
+<span class="kw">use </span><span class="kw">crate</span>::pack::{Pack,NotPacked};
+
+<span class="kw">pub trait </span>RowExt {
+	<span class="kw">fn </span>dump(<span class="kw-2">&amp;</span><span class="self">self</span>);
+}
+<span class="kw">impl </span>RowExt <span class="kw">for </span>rusqlite::Row&lt;<span class="lifetime">&#39;_</span>&gt; {
+	<span class="doccomment">/// Dumps all values found in a single row to stdout.
+	</span><span class="kw">fn </span>dump(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+		<span class="kw">for </span>(i, c) <span class="kw">in </span><span class="self">self</span>.as_ref().column_names().iter().enumerate() {
+			<span class="kw">use </span>rusqlite::types::ValueRef::<span class="kw-2">*</span>;
+			<span class="kw">match </span><span class="self">self</span>.get_ref(i) {
+				<span class="prelude-val">Ok</span>(Null) =&gt; <span class="macro">println!</span>(<span class="string">&quot;  [{i:3}] {c} = \x1b[31mNull\x1b[m&quot;</span>),
+				<span class="prelude-val">Ok</span>(Text(s)) =&gt; <span class="macro">println!</span>(<span class="string">&quot;  [{i:3}] {c} = Text(\&quot;{}\&quot;)&quot;</span>,
+					std::str::from_utf8(s).unwrap()),
+				<span class="prelude-val">Ok</span>(x) =&gt; <span class="macro">println!</span>(<span class="string">&quot;  [{i:3}] {c} = {x:?}&quot;</span>),
+				<span class="kw">_ </span>=&gt; <span class="kw">break
+			</span>}
+		}
+	}
+}
 <span class="doccomment">/// An utility enum defining SQL behaviour for a given resource field type.
 ///
 /// This is somewhat different from [`rusqlite::types::Type`]:
@@ -2944,8 +2972,8 @@
 	///
 	/// This returns a [`Result&lt;TypedStatement&gt;`]: it is possible to iterate
 	/// over the result and recover structures of the original type.
-	</span><span class="kw">fn </span>select_query_gen(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, n1: <span class="kw">impl </span>Display, n2: <span class="kw">impl </span>Display, cond: <span class="kw">impl </span>Display)-&gt;<span class="prelude-ty">Result</span>&lt;TypedStatement&lt;<span class="lifetime">&#39;_</span>,<span class="self">Self</span>&gt;&gt; {
-		<span class="kw">let </span>t = <span class="self">Self</span>::fields().cols().select_sql(n1, n2, cond);
+	</span><span class="kw">fn </span>select_query_gen(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, n: <span class="kw">impl </span>Display, cond: <span class="kw">impl </span>Display)-&gt;<span class="prelude-ty">Result</span>&lt;TypedStatement&lt;<span class="lifetime">&#39;_</span>,<span class="self">Self</span>&gt;&gt; {
+		<span class="kw">let </span>t = <span class="self">Self</span>::fields().cols().select_sql(n, cond);
 		<span class="prelude-val">Ok</span>(TypedStatement::new(db.prepare(<span class="kw-2">&amp;</span>t)<span class="question-mark">?</span>))
 	}
 }
@@ -2982,19 +3010,13 @@
 <span class="kw">impl</span>&lt;T: SqlRow&gt; ExactSizeIterator <span class="kw">for </span>ContentIterator&lt;<span class="lifetime">&#39;_</span>,T&gt; {
 	<span class="kw">fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;usize { T::WIDTH }
 }
-<span class="doccomment">/// A newtype which is pass-through for SQL and blocking for [`Pack`].
-</span><span class="attr">#[derive(Newtype)]
-</span><span class="kw">pub struct </span>NotPacked&lt;T&gt;(T);
-<span class="kw">impl</span>&lt;T: Default&gt; Pack <span class="kw">for </span>NotPacked&lt;T&gt; {
-	<span class="kw">fn </span>unpack(_r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Read)-&gt;io::Result&lt;<span class="self">Self</span>&gt; { <span class="prelude-val">Ok</span>(<span class="self">Self</span>(T::default())) }
-	<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, _w: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; { <span class="prelude-val">Ok</span>(()) }
-}
+
 <span class="kw">impl</span>&lt;T: SqlRow&gt; SqlRow <span class="kw">for </span>NotPacked&lt;T&gt; {
 	<span class="kw">const </span>WIDTH: usize = T::WIDTH;
 	<span class="kw">fn </span>from_row_at(row: <span class="kw-2">&amp;</span>rusqlite::Row&lt;<span class="lifetime">&#39;_</span>&gt;, offset: usize)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-		T::from_row_at(row, offset).map(<span class="self">Self</span>)
+		T::from_row_at(row, offset).map(<span class="self">Self</span>::from)
 	}
-	<span class="kw">fn </span>get_field(<span class="kw-2">&amp;</span><span class="self">self</span>, i: usize)-&gt;ToSqlOutput&lt;<span class="lifetime">&#39;_</span>&gt; { <span class="self">self</span>.<span class="number">0</span>.get_field(i) }
+	<span class="kw">fn </span>get_field(<span class="kw-2">&amp;</span><span class="self">self</span>, i: usize)-&gt;ToSqlOutput&lt;<span class="lifetime">&#39;_</span>&gt; { <span class="self">self</span>.as_ref().get_field(i) }
 	<span class="kw">fn </span>fieldname_ctx(ctx: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str, i: usize)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str {
 		T::fieldname_ctx(ctx, i)
 	}
@@ -3026,6 +3048,59 @@
 	<span class="kw">where </span>T: std::ops::AddAssign&lt;I&gt; {
 	<span class="kw">fn </span>add_assign(<span class="kw-2">&amp;mut </span><span class="self">self</span>, rhs: I) { <span class="self">self</span>.<span class="number">0</span>.add_assign(rhs) }
 }
+
+<span class="doccomment">/// A statement aware of the associated table type.
+///
+/// We need a few types parametrized by a Resource0:
+///  - `TypedStatement`: this gets saved as a (mut) local variable;
+///  - `TypedRows`: the iterator producing Resource0 objects from the query.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>TypedStatement&lt;<span class="lifetime">&#39;s</span>, T: SqlRow&gt; (Statement&lt;<span class="lifetime">&#39;s</span>&gt;, PhantomData&lt;T&gt;);
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;stmt</span>,T: SqlRow&gt; TypedStatement&lt;<span class="lifetime">&#39;stmt</span>, T&gt; {
+	<span class="kw">pub fn </span>new(stmt: Statement&lt;<span class="lifetime">&#39;stmt</span>&gt;)-&gt;<span class="self">Self </span>{ <span class="self">Self</span>(stmt, PhantomData) }
+	<span class="doccomment">/// Iterates over this statement, returning (possibly) Rust structs of
+	/// the type associated with this table.
+	</span><span class="kw">pub fn </span>iter&lt;P: rusqlite::Params&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, params: P) -&gt;rusqlite::Result&lt;TypedRows&lt;<span class="lifetime">&#39;_</span>,T&gt;&gt; {
+		<span class="kw">let </span>rows = <span class="self">self</span>.<span class="number">0</span>.query(params)<span class="question-mark">?</span>;
+		<span class="prelude-val">Ok</span>(TypedRows { rows, _marker: PhantomData, index: <span class="number">0 </span>})
+	}
+}
+<span class="doccomment">/// An enriched version of `rusqlite::Rows`.
+///
+/// This struct retains information about the output type,
+/// as well as the current row index.
+///
+/// This also behaves as an `Iterator` (throwing when the underlying
+/// `Row` iterator fails).
+</span><span class="attr">#[allow(missing_debug_implementations)]
+</span><span class="kw">pub struct </span>TypedRows&lt;<span class="lifetime">&#39;stmt</span>,T: SqlRow&gt; {
+	rows: rusqlite::Rows&lt;<span class="lifetime">&#39;stmt</span>&gt;,
+	_marker: PhantomData&lt;T&gt;,
+	index: usize,
+}
+<span class="kw">impl</span>&lt;T: SqlRow&gt; Iterator <span class="kw">for </span>TypedRows&lt;<span class="lifetime">&#39;_</span>,T&gt; {
+	<span class="kw">type </span>Item = <span class="prelude-ty">Result</span>&lt;T&gt;;
+	<span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
+		<span class="kw">loop </span>{
+			<span class="kw">let </span>row = <span class="kw">match </span><span class="self">self</span>.rows.next() {
+				<span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(row)) =&gt; row,
+				<span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="kw">break</span>,
+				<span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(e.into()))
+			};
+			<span class="self">self</span>.index+= <span class="number">1</span>;
+			<span class="kw">let </span>t = T::from_row(row);
+			<span class="kw">match </span>t {
+			<span class="prelude-val">Err</span>(e) =&gt; {
+				<span class="macro">println!</span>(<span class="string">&quot;cannot read a {} from row {}: {e:?}&quot;</span>,
+				std::any::type_name::&lt;T&gt;(), <span class="self">self</span>.index);
+				row.dump();
+				<span class="kw">continue </span>},
+			<span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">Some</span>(t)
+			}
+		}
+		<span class="prelude-val">None
+	</span>}
+}
 } <span class="comment">// mod struct_io
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>staticstrings {
 <span class="doccomment">//! Fixed-length string used as resource identifier.
@@ -3039,7 +3114,7 @@
 </span><span class="kw">use </span>std::fmt::{<span class="self">self</span>,Debug,Display,Formatter};
 <span class="kw">use </span>std::io::{<span class="self">self</span>,Read,Write};
 <span class="kw">use </span>std::cmp::min;
-<span class="kw">use </span><span class="kw">crate</span>::struct_io::Pack;
+<span class="kw">use </span><span class="kw">crate</span>::pack::Pack;
 
 <span class="doccomment">/// A fixed-length string.
 </span><span class="attr">#[derive(Clone,Copy)]
@@ -3192,7 +3267,7 @@
 //! Visibility barrier: this mod is the only place using the internals of
 //! key/bif game files.
 </span><span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
-<span class="kw">use </span><span class="kw">crate</span>::struct_io::{Pack};
+<span class="kw">use </span><span class="kw">crate</span>::pack::{Pack};
 <span class="kw">use </span>rusqlite::types::{FromSql,ToSql, ValueRef};
 
 <span class="kw">use </span>io::BufReader;
@@ -3681,8 +3756,8 @@
 <span class="kw">impl</span>&lt;W: ColumnWriter, T: Display&gt; ColumnPrefixed&lt;W,T&gt; {
 	<span class="kw">pub fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;usize { <span class="self">self</span>.<span class="number">0</span>.len() }
 	<span class="doccomment">/// Returns the SQL select statement for these columns, as a String.
-	</span><span class="kw">pub fn </span>select_sql(<span class="self">self</span>, n1: <span class="kw">impl </span>Display, n2: <span class="kw">impl </span>Display, condition: <span class="kw">impl </span>Display)-&gt;String {
-		<span class="macro">format!</span>(<span class="string">r#&quot;select {self} from &quot;{n1}{n2}&quot; {condition}&quot;#</span>)
+	</span><span class="kw">pub fn </span>select_sql(<span class="self">self</span>, n: <span class="kw">impl </span>Display, condition: <span class="kw">impl </span>Display)-&gt;String {
+		<span class="macro">format!</span>(<span class="string">r#&quot;select {self} from &quot;{n}&quot; {condition}&quot;#</span>)
 	}
 	<span class="doccomment">/// Returns the SQL insert statement for these columns, as a String.
 	</span><span class="kw">pub fn </span>insert_sql(<span class="self">self</span>, or: <span class="kw">impl </span>Display, n1: <span class="kw">impl </span>Display, n2: <span class="kw">impl </span>Display)-&gt;String {
@@ -4162,7 +4237,8 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 <span class="kw">use </span><span class="kw">crate</span>::progress::{Progress};
 <span class="kw">use </span><span class="kw">crate</span>::database::{<span class="self">self</span>,DbInterface};
 <span class="kw">use </span><span class="kw">crate</span>::gamefiles::{GameIndex};
-<span class="kw">use </span><span class="kw">crate</span>::struct_io::{Pack,NotPacked,NoSql,SqlRow};
+<span class="kw">use </span><span class="kw">crate</span>::pack::{Pack,NotPacked};
+<span class="kw">use </span><span class="kw">crate</span>::struct_io::{NoSql,SqlRow};
 <span class="kw">use </span>macros::{Pack,SqlRow};
 
 <span class="attr">#[derive(Debug,Pack)]
@@ -4295,7 +4371,7 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 		<span class="kw">let </span>count = <span class="number">1</span>+db.query_row(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">r#&quot;select max(&quot;strref&quot;) from &quot;strings_{lang}&quot;&quot;#</span>),
 			(), |row| row.get::&lt;<span class="kw">_</span>,usize&gt;(<span class="number">0</span>))<span class="question-mark">?</span>;
 		<span class="kw">let </span><span class="kw-2">mut </span>vec = <span class="macro">vec!</span>[GameString::default(); count];
-		<span class="kw">let </span><span class="kw-2">mut </span>sel_str = GameString::select_query_gen(db, <span class="string">&quot;strings_&quot;</span>, lang, <span class="string">&quot;&quot;</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span><span class="kw-2">mut </span>sel_str = GameString::select_query_gen(db, <span class="string">&quot;strings_&quot;</span>.cat(lang),  <span class="string">&quot;&quot;</span>)<span class="question-mark">?</span>;
 		<span class="kw">for </span>row <span class="kw">in </span>sel_str.iter(())<span class="question-mark">? </span>{
 			<span class="kw">if </span>row.is_db_malformed() { <span class="kw">continue </span>}
 			<span class="kw">let </span>gamestring = row<span class="question-mark">?</span>;
@@ -4320,29 +4396,10 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 <span class="kw">use </span>rusqlite::{Row};
 <span class="kw">use </span><span class="kw">crate</span>::resources::<span class="kw-2">*</span>;
 <span class="kw">use </span><span class="kw">crate</span>::gamefiles::GameIndex;
-<span class="kw">use </span><span class="kw">crate</span>::struct_io::SqlRow;
 <span class="kw">use </span><span class="kw">crate</span>::schemas::{Schema0};
 
 <span class="comment">// I. Low-level stuff: basic types and extensions for `rusqlite` traits.
-</span><span class="kw">pub trait </span>RowExt {
-	<span class="kw">fn </span>dump(<span class="kw-2">&amp;</span><span class="self">self</span>);
-}
-<span class="kw">impl </span>RowExt <span class="kw">for </span>Row&lt;<span class="lifetime">&#39;_</span>&gt; {
-	<span class="doccomment">/// Dumps all values found in a single row to stdout.
-	</span><span class="kw">fn </span>dump(<span class="kw-2">&amp;</span><span class="self">self</span>) {
-		<span class="kw">for </span>(i, c) <span class="kw">in </span><span class="self">self</span>.as_ref().column_names().iter().enumerate() {
-			<span class="kw">use </span>rusqlite::types::ValueRef::<span class="kw-2">*</span>;
-			<span class="kw">match </span><span class="self">self</span>.get_ref(i) {
-				<span class="prelude-val">Ok</span>(Null) =&gt; <span class="macro">println!</span>(<span class="string">&quot;  [{i:3}] {c} = \x1b[31mNull\x1b[m&quot;</span>),
-				<span class="prelude-val">Ok</span>(Text(s)) =&gt; <span class="macro">println!</span>(<span class="string">&quot;  [{i:3}] {c} = Text(\&quot;{}\&quot;)&quot;</span>,
-					std::str::from_utf8(s).unwrap()),
-				<span class="prelude-val">Ok</span>(x) =&gt; <span class="macro">println!</span>(<span class="string">&quot;  [{i:3}] {c} = {x:?}&quot;</span>),
-				<span class="kw">_ </span>=&gt; <span class="kw">break
-			</span>}
-		}
-	}
-}
-<span class="doccomment">/// Detecting recoverable errors due to incorrect SQL typing.
+</span><span class="doccomment">/// Detecting recoverable errors due to incorrect SQL typing.
 </span><span class="kw">pub trait </span>DbTypeCheck {
 	<span class="doccomment">/// Returns `true` when a `Result` is an `Err` variant corresponding to
 	/// a recoverable error due to a wrong SQL type.
@@ -4362,59 +4419,7 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 }
 
 <span class="comment">// III. Structure accessing directly SQL data
-</span><span class="doccomment">/// A statement aware of the associated table type.
-///
-/// We need a few types parametrized by a Resource0:
-///  - `TypedStatement`: this gets saved as a (mut) local variable;
-///  - `TypedRows`: the iterator producing Resource0 objects from the query.
-</span><span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>TypedStatement&lt;<span class="lifetime">&#39;s</span>, T: SqlRow&gt; (Statement&lt;<span class="lifetime">&#39;s</span>&gt;, PhantomData&lt;T&gt;);
-<span class="kw">impl</span>&lt;<span class="lifetime">&#39;stmt</span>,T: SqlRow&gt; TypedStatement&lt;<span class="lifetime">&#39;stmt</span>, T&gt; {
-	<span class="kw">pub fn </span>new(stmt: Statement&lt;<span class="lifetime">&#39;stmt</span>&gt;)-&gt;<span class="self">Self </span>{ <span class="self">Self</span>(stmt, PhantomData) }
-	<span class="doccomment">/// Iterates over this statement, returning (possibly) Rust structs of
-	/// the type associated with this table.
-	</span><span class="kw">pub fn </span>iter&lt;P: rusqlite::Params&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, params: P) -&gt;rusqlite::Result&lt;TypedRows&lt;<span class="lifetime">&#39;_</span>,T&gt;&gt; {
-		<span class="kw">let </span>rows = <span class="self">self</span>.<span class="number">0</span>.query(params)<span class="question-mark">?</span>;
-		<span class="prelude-val">Ok</span>(TypedRows { rows, _marker: PhantomData, index: <span class="number">0 </span>})
-	}
-}
-<span class="doccomment">/// An enriched version of `rusqlite::Rows`.
-///
-/// This struct retains information about the output type,
-/// as well as the current row index.
-///
-/// This also behaves as an `Iterator` (throwing when the underlying
-/// `Row` iterator fails).
-</span><span class="attr">#[allow(missing_debug_implementations)]
-</span><span class="kw">pub struct </span>TypedRows&lt;<span class="lifetime">&#39;stmt</span>,T: SqlRow&gt; {
-	rows: rusqlite::Rows&lt;<span class="lifetime">&#39;stmt</span>&gt;,
-	_marker: PhantomData&lt;T&gt;,
-	index: usize,
-}
-<span class="kw">impl</span>&lt;T: SqlRow&gt; Iterator <span class="kw">for </span>TypedRows&lt;<span class="lifetime">&#39;_</span>,T&gt; {
-	<span class="kw">type </span>Item = <span class="prelude-ty">Result</span>&lt;T&gt;;
-	<span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
-		<span class="kw">loop </span>{
-			<span class="kw">let </span>row = <span class="kw">match </span><span class="self">self</span>.rows.next() {
-				<span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(row)) =&gt; row,
-				<span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="kw">break</span>,
-				<span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(e.into()))
-			};
-			<span class="self">self</span>.index+= <span class="number">1</span>;
-			<span class="kw">let </span>t = T::from_row(row);
-			<span class="kw">match </span>t {
-			<span class="prelude-val">Err</span>(e) =&gt; {
-				<span class="macro">println!</span>(<span class="string">&quot;cannot read a {} from row {}: {e:?}&quot;</span>,
-				std::any::type_name::&lt;T&gt;(), <span class="self">self</span>.index);
-				row.dump();
-				<span class="kw">continue </span>},
-			<span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">Some</span>(t)
-			}
-		}
-		<span class="prelude-val">None
-	</span>}
-}
-<span class="doccomment">/// A trivial wrapper on [`rusqlite::Connection`];
+</span><span class="doccomment">/// A trivial wrapper on [`rusqlite::Connection`];
 /// mainly used for standardizing log messages.
 </span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>GameDB(Connection);
@@ -4721,16 +4726,7 @@ from &quot;new_strings&quot;
 	</span><span class="kw">pub fn </span>register(<span class="kw-2">&amp;mut </span><span class="self">self</span>, resref: <span class="kw-2">&amp;</span>Resref)-&gt;rusqlite::Result&lt;usize&gt; {
 		<span class="self">self</span>.add_resref.execute((resref,))
 	}
-<span class="comment">// 	/// Loads a new top-level resource
-// 	pub fn load&lt;T: ToplevelResource&gt;(&amp;mut self, resref: Resref, mut handle: crate::gamefiles::ResHandle&lt;&#39;_&gt;)-&gt;Result&lt;()&gt; {
-// 		T::load(self, handle.open()?, resref)?;
-// 		if handle.is_override() {
-// 			self.add_override.execute((resref, T::SCHEMA.extension))?;
-// 		}
-// // 		*(&lt;T as NamedTable&gt;::find_field_mut(&amp;mut self.resource_count))+=1;
-// 		Ok(())
-// 	}
-</span>}
+}
 <span class="kw">impl </span>Drop <span class="kw">for </span>DbInserter&lt;<span class="lifetime">&#39;_</span>&gt; {
 	<span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
 		<span class="self">self</span>.resource_count.map(|(name, n)|
@@ -4950,7 +4946,7 @@ from &quot;new_strings&quot;
 /// All code with a higher level is written in lua and loaded from the
 /// &quot;init.lua&quot; file.
 </span><span class="kw">pub fn </span>command_add(db: <span class="kw">impl </span>DbInterface, _target: <span class="kw-2">&amp;</span>str)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-	<span class="kw">use </span><span class="kw">crate</span>::database::RowExt;
+	<span class="kw">use </span><span class="kw">crate</span>::struct_io::RowExt;
 	<span class="kw">let </span>lua = Lua::new();
 	<span class="kw">let </span>lua_file = Path::new(<span class="string">&quot;/home/jerome/src/infinity_compiler/init.lua&quot;</span>);
 

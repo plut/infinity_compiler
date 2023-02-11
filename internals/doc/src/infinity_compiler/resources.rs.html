@@ -440,6 +440,8 @@
 <a href="#440" id="440">440</a>
 <a href="#441" id="441">441</a>
 <a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Full definition of all structures representing game resources.
 //!
 //! This crate makes heavy use of the `Pack` and `Resource0` derive macros to
@@ -468,9 +470,10 @@
 //! for joins with the edit tables.
 </span><span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
 <span class="kw">use </span>macros::{produce_resource_list,all_resources,Resource};
-<span class="kw">use </span><span class="kw">crate</span>::struct_io::{Pack,SqlRow,NotPacked,NoSql};
+<span class="kw">use </span><span class="kw">crate</span>::pack::{Pack,NotPacked};
+<span class="kw">use </span><span class="kw">crate</span>::struct_io::{SqlRow,NoSql,TypedStatement};
 <span class="kw">use </span><span class="kw">crate</span>::schemas::{Schema};
-<span class="kw">use </span><span class="kw">crate</span>::database::{DbTypeCheck,DbInterface,DbInserter,TypedStatement};
+<span class="kw">use </span><span class="kw">crate</span>::database::{DbTypeCheck,DbInterface,DbInserter};
 <span class="kw">use </span><span class="kw">crate</span>::gamefiles::{Restype};
 
 <span class="doccomment">/// One of the resource tables stored in the database.
@@ -488,7 +491,7 @@
 	<span class="kw">fn </span>schema()-&gt;Schema;
 	<span class="doccomment">/// Particular case of SELECT statement used for saving to game files.
 	</span><span class="kw">fn </span>select_query(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, s: <span class="kw">impl </span>Display)-&gt;<span class="prelude-ty">Result</span>&lt;TypedStatement&lt;<span class="lifetime">&#39;_</span>, <span class="self">Self</span>&gt;&gt; {
-		<span class="self">Self</span>::select_query_gen(db, <span class="string">&quot;save_&quot;</span>, <span class="self">Self</span>::schema().name, s)
+		<span class="self">Self</span>::select_query_gen(db, <span class="string">&quot;save_&quot;</span>.cat(<span class="self">Self</span>::schema().name), s)
 	}
 }
 
@@ -636,15 +639,16 @@
 	/// some `Vec` with elements (subresource, linking-info).
 	</span><span class="kw">type </span>Subresources&lt;<span class="lifetime">&#39;a</span>&gt;;
 	<span class="doccomment">/// Inserts a single resource in the database.
-	</span><span class="kw">fn </span>load(db: <span class="kw-2">&amp;mut </span>DbInserter&lt;<span class="lifetime">&#39;_</span>&gt;, cursor: <span class="kw">impl </span>Read+Seek, resref: Resref)
+	</span><span class="kw">fn </span>load(tables: <span class="kw-2">&amp;mut </span>AllResources&lt;Statement&lt;<span class="lifetime">&#39;_</span>&gt;&gt;, cursor: <span class="kw">impl </span>Read+Seek, resref: Resref)
 		-&gt;<span class="prelude-ty">Result</span>&lt;()&gt;;
 	<span class="kw">fn </span>load_from_handle(db: <span class="kw-2">&amp;mut </span>DbInserter&lt;<span class="lifetime">&#39;_</span>&gt;, resref: Resref,
 			<span class="kw-2">mut </span>handle: <span class="kw">crate</span>::gamefiles::ResHandle&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-		<span class="self">Self</span>::load(db, handle.open()<span class="question-mark">?</span>, resref)<span class="question-mark">?</span>;
+		<span class="self">Self</span>::load(<span class="kw-2">&amp;mut </span>db.tables, handle.open()<span class="question-mark">?</span>, resref)<span class="question-mark">?</span>;
 		<span class="kw">if </span>handle.is_override() {
 			db.add_override.execute((resref, <span class="self">Self</span>::EXTENSION))<span class="question-mark">?</span>;
 		}
-<span class="comment">// 		*count+= 1;
+<span class="comment">// // 		*(&lt;T as NamedTable&gt;::find_field_mut(&amp;mut self.resource_count))+=1;
+// 		*count+= 1;
 		</span><span class="prelude-val">Ok</span>(())
 	}
 	<span class="doccomment">/// Saves a single resource (with its subresources) to game files.
@@ -696,11 +700,11 @@
 </span><span class="kw">impl </span>ToplevelResource <span class="kw">for </span>Item {
 	<span class="kw">type </span>Subresources&lt;<span class="lifetime">&#39;a</span>&gt; = (<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw-2">mut </span>[ItemAbility], <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw-2">mut</span>[(ItemEffect,usize)]);
 	<span class="doccomment">/// load an item from cursor
-	</span><span class="kw">fn </span>load(db: <span class="kw-2">&amp;mut </span>DbInserter&lt;<span class="lifetime">&#39;_</span>&gt;, <span class="kw-2">mut </span>cursor: <span class="kw">impl </span>Read+Seek, resref: Resref) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+	</span><span class="kw">fn </span>load(tables: <span class="kw-2">&amp;mut </span>AllResources&lt;Statement&lt;<span class="lifetime">&#39;_</span>&gt;&gt;, <span class="kw-2">mut </span>cursor: <span class="kw">impl </span>Read+Seek, resref: Resref) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 		<span class="kw">let </span><span class="kw-2">mut </span>item = Item::unpack(<span class="kw-2">&amp;mut </span>cursor)
 			.context(<span class="string">&quot;cannot unpack Item0 main struct&quot;</span>)<span class="question-mark">?</span>;
 		item.itemref = resref.into();
-		db.tables.items.execute(item.as_params())
+		tables.items.execute(item.as_params())
 			.context(<span class="string">&quot;inserting into &#39;items&#39;&quot;</span>)<span class="question-mark">?</span>;
 		cursor.seek(SeekFrom::Start(item.abilities_offset.unwrap() <span class="kw">as </span>u64))<span class="question-mark">?</span>;
 
@@ -712,7 +716,7 @@
 					ab_index, item.abilities_count))<span class="question-mark">?</span>;
 			ab.itemref = resref.into();
 			ab.index = ab_index.into();
-			db.tables.item_abilities.execute(ab.as_params())
+			tables.item_abilities.execute(ab.as_params())
 				.context(<span class="string">&quot;inserting into &#39;item_abilities&#39;&quot;</span>)<span class="question-mark">?</span>;
 			ab_n.push(ab.effect_count.unwrap());
 		}
@@ -725,7 +729,7 @@
 			eff.itemref = resref.into();
 			eff.ability = <span class="number">0</span>.into();
 			eff.index = j.into();
-			db.tables.item_effects.execute(eff.as_params())
+			tables.item_effects.execute(eff.as_params())
 				.context(<span class="string">&quot;inserting into &#39;item_effects&#39;&quot;</span>)<span class="question-mark">?</span>;
 		}
 		<span class="kw">for </span>(i, n) <span class="kw">in </span>ab_n.iter().enumerate() {
@@ -735,7 +739,7 @@
 				eff.itemref = resref.into();
 				eff.ability = (<span class="number">1</span>+i <span class="kw">as </span>i64).into();
 				eff.index = j.into();
-				db.tables.item_effects.execute(eff.as_params())
+				tables.item_effects.execute(eff.as_params())
 					.context(<span class="string">&quot;inserting into &#39;item_effects&#39;&quot;</span>)<span class="question-mark">?</span>;
 			}
 		}

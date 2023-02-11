@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"macro":[["pack_tuple",""],["unpack_int",""]],"struct":[["NotPacked","A newtype which is pass-through for SQL and blocking for [`Pack`]."]],"trait":[["Pack","A type which may be packed to binary."]]};
