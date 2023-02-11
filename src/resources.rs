@@ -413,7 +413,7 @@ select "a"."native", "strref", "flags" from ("#);
 		let mut trigger = String::from(r#"create trigger "update_strrefs"
 after insert on "strref_dict"
 begin"#);
-		all_schemas().map_mut(|schema| {
+		self.map_mut(|schema| {
 			schema.append_new_strings_schema(&mut create, &mut is_first);
 			schema.append_new_strings_trigger(&mut trigger);
 			any_ok(())
