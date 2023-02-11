@@ -46,8 +46,8 @@ use crate::gamefiles::{Restype};
 pub trait Resource: SqlRow {
 	fn schema()->Schema;
 	/// Particular case of SELECT statement used for saving to game files.
-	fn select_query(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
-		Self::select_query_gen(db, "save_".cat(Self::schema().name), s)
+	fn select_typed(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
+		Self::select_from_typed(db, "save_".cat(Self::schema().name), s)
 	}
 }
 
@@ -340,9 +340,9 @@ impl ToplevelResource for Item {
 	fn for_each<F,C>(db: &impl DbInterface, condition: C, f:F)->Result<i32>
 		where F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>,
 			C: Display {
-		let mut sel_item = Item::select_query(db, &condition)?;
-		let mut sel_item_ab = ItemAbility::select_query(db, r#"where "key"=?"#)?;
-		let mut sel_item_eff = ItemEffect::select_query(db, r#"where "key"=?"#)?;
+		let mut sel_item = Item::select_typed(db, &condition)?;
+		let mut sel_item_ab = ItemAbility::select_typed(db, r#"where "key"=?"#)?;
+		let mut sel_item_eff = ItemEffect::select_typed(db, r#"where "key"=?"#)?;
 		let mut n_items = 0;
 		debug!("processing items under condition: {condition}");
 		for x in sel_item.iter(())? {

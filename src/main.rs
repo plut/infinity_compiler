@@ -35,6 +35,7 @@ pub(crate) use anyhow::{Result,Context};
 pub(crate) use log::{trace,debug,info,warn,error};
 pub(crate) use rusqlite::{self,Connection,Statement};
 pub(crate) use extend::ext;
+pub(crate) use lazy_format::prelude::*;
 
 pub(crate) use core::marker::PhantomData;
 pub(crate) use std::ops::{Deref};
@@ -386,7 +387,7 @@ pub trait SqlRow: Sized {
 	///
 	/// This returns a [`Result<TypedStatement>`]: it is possible to iterate
 	/// over the result and recover structures of the original type.
-	fn select_query_gen(db: &impl DbInterface, n: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
+	fn select_from_typed(db: &impl DbInterface, n: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
 		let t = Self::fields().cols().select_sql(n, cond);
 		Ok(TypedStatement::new(db.prepare(&t)?))
 	}
@@ -1487,6 +1488,10 @@ end"#))?;
 		}
 		s
 	}
+	pub fn select_row_sql(&self)->String {
+		self.fields.cols().select_sql(self,
+			lazy_format!(r#"where "{primary}"=?"#, primary=self.primary()))
+	}
 }
 
 /// The full database description of a game resource.
@@ -1557,10 +1562,6 @@ impl<'schema> Schema0<'schema> {
 	pub fn columns(&'schema self)->Columns<'schema, NullDisplay> {
 		Columns(&self.fields[..self.before_id()], NullDisplay())
 	}
-	/// Complete columns.
-	pub fn iter(&'schema self)->Columns<'schema, NullDisplay> {
-		Columns(self.fields, NullDisplay())
-	}
 	/// Context columns only.
 	pub fn context(&'schema self)->Columns<'schema, NullDisplay> {
 		Columns(&self.fields[self.resref_key..self.before_id()], NullDisplay())
@@ -1573,10 +1574,6 @@ impl<'schema> Schema0<'schema> {
 		self.fields[self.fields.len()-1].fname
 	}
 	// Step 1: creating tables
-	pub fn select_statement(&self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
-		format!(r#"select {cols} from "{n1}{n2}" {condition} order by {sort}"#,
-			cols = self.columns(), sort = self.context())
-	}
 	/// The SQL code for inserting into a table.
 	///
 	/// This is used for both initial populating of the database from game
@@ -1759,7 +1756,8 @@ pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 		let count = 1+db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
 			(), |row| row.get::<_,usize>(0))?;
 		let mut vec = vec![GameString::default(); count];
-		let mut sel_str = GameString::select_query_gen(db, "strings_".cat(lang),  "")?;
+		let mut sel_str = GameString::select_from_typed(db, "strings_".cat(lang),
+			NullDisplay())?;
 		for row in sel_str.iter(())? {
 			if row.is_db_malformed() { continue }
 			let gamestring = row?;
@@ -2208,18 +2206,6 @@ fn sql_to_lua<'lua>(v: rusqlite::types::ValueRef<'_>, lua: &'lua Lua)->Result<ml
 		_ => Err(rusqlite::types::FromSqlError::InvalidType.into()),
 	}
 }
-fn lua_to_sql<'lua>(v: &'lua mlua::Value<'lua>)->rusqlite::Result<rusqlite::types::Value> {
-	use rusqlite::types::{Value as SqlValue};
-	match v {
-	mlua::Value::Nil => Ok(SqlValue::Null),
-	mlua::Value::Boolean(b) => Ok(SqlValue::Integer(*b as i64)),
-	mlua::Value::Integer(n) => Ok(SqlValue::Integer(*n)),
-	mlua::Value::Number(x) => Ok(SqlValue::Real(*x)),
-	mlua::Value::String(ref s) =>
-		Ok(SqlValue::from(s.to_str().unwrap().to_owned())),
-	e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
-	}
-}
 
 /// A trivial wrapper giving a slightly better [`Debug`] implementation
 /// for Lua values (displaying the actual contents of strings).
@@ -2265,26 +2251,50 @@ impl AsParams for mlua::MultiValue<'_> {
 
 /// A collection of all the prepared SQL statements used for implementing
 /// the Lua API.
+///
+/// Since we need to split this struct when passing `&mut Statement` values
+/// to various `FnMut` closures, the fields are not typed as
+/// `AllResources<Statement<'a>>` but as newtype wrappers;
+/// each newtype runs only the appropriate conversion between the
+/// prepared SQL statement and Lua values.
 #[derive(Debug)]
 struct LuaStatements<'a> {
 // 	/// We keep an owned copy of the original table schemas.
 // 	schemas: AllResources<Schema>,
-	/// Used for `simod.list_keys`.
-	list_keys: AllResources<Statement<'a>>,
+	/// Prepared statements for `simod.list`.
+	list_keys: ListKeys<'a>,
+	select_row: SelectRow<'a>,
+	// Prepared statements for `simod.select`.
 }
 impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface, schemas: AllResources<Schema>)->Result<Self> {
 		Ok(Self {
-			list_keys: schemas.map(|schema| db.prepare(schema.list_keys_sql()))?,
+			list_keys: ListKeys(schemas.map(|schema| db.prepare(schema.list_keys_sql()))?),
+			select_row: SelectRow(schemas.map(|schema| db.prepare(schema.select_row_sql()))?),
 // 			schemas,
 		})
 	}
-	pub fn list<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Table<'lua>> {
+}
+/// A newtype around `AllResources<Statement>`,
+/// implementing the `simod.list` callback.
+#[derive(Debug)]
+struct ListKeys<'a>(AllResources<Statement<'a>>);
+impl ListKeys<'_> {
+	/// Implementation of `simod.list`.
+	///
+	/// This takes as parameters either
+	/// 1. the name of a top-level resource table, or
+	/// 2. the name of a sub-resource + a resref for the corresponding
+	///    top-level resource,
+	/// and returns in a Lua table the list of all primary keys matching
+	/// this condition.
+	pub fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Table<'lua>> {
 		let found = args.len();
 		let name = pop_arg_as::<String>(&mut args, lua)
 			.context("first argument should be a string")?;
-		let stmt = self.list_keys.by_name_mut(&name)?;
-		let expected = stmt.parameter_count();
+		let stmt = self.0.by_name_mut(&name)?;
+		// increase by 1 because we just popped the table name
+		let expected = stmt.parameter_count() + 1;
 		if found != expected {
 			return Err(Error::BadArgumentNumber { function: "simod.list",
 				expected, found }.into())
@@ -2299,40 +2309,43 @@ impl<'a> LuaStatements<'a> {
 		Ok(ret)
 	}
 }
-
-/// Implementation of `simod.select`.
-///
-/// Reads a full row from one of the resource tables and returns it as a
-/// Lua table.
-fn select<'lua>(db: &impl DbInterface, lua: &'lua Lua, (table, rowid): (String, mlua::Value<'_>))->Result<mlua::Table<'lua>> {
-	scope_trace!("callback 'simod.select' invoked with: '{}' '{:?}'", table,
-		LuaInspect(&rowid));
-	let schema = RESOURCES.table_schema(&table)?;
-	let tbl = lua.create_table_with_capacity(0,
-		schema.iter().len() as std::ffi::c_int)?;
-	let query = schema.select_statement("", &table,
-		format!(r#"where "{primary}"=?"#, primary = schema.primary()));
-	let sqlrowid = lua_to_sql(&rowid)?;
-	let srowid = match rowid {
-		mlua::Value::String(ref s) => s.to_str()?.to_owned(),
-		ref x => format!("{x:?}"),
-	};
-	trace!("query: {query}; {srowid:?}");
-	tbl.set(schema.primary(), rowid)?;
-	db.query_row_and_then(&query, (&sqlrowid,), |row| {
-		for (i, col) in schema.columns().into_iter().enumerate() {
-			let fname = col.fname;
-			let val = row.get_ref(i)
-				.with_context(|| format!("cannot read field {i} in row"))?;
-			trace!("field {i}/{n}, got value {val:?}, expected {ft:?}",
-				ft = col.ftype, n = schema.iter().len());
-			tbl.set(fname, sql_to_lua(val, lua)
-				.with_context(|| format!("cannot convert value {val:?} to Lua"))?)
-				.with_context(|| format!("cannot set entry for {fname:?} to {val:?}"))?;
+#[derive(Debug)]
+struct SelectRow<'a>(AllResources<Statement<'a>>);
+impl SelectRow<'_> {
+	/// Implementation of `simod.select`.
+	///
+	/// Given the name of one of the resource tables
+	/// and a value for the primary key,
+	/// this reads the corresponding row and returns it as a Lua table.
+	///
+	/// If the row is not found then this returns `nil` instead.
+	pub fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
+		let found = args.len();
+		let name = pop_arg_as::<String>(&mut args, lua)
+			.context("first argument should be a string")?;
+		let stmt = self.0.by_name_mut(&name)?;
+		// increase by 1 because we just popped the table name
+		let expected = stmt.parameter_count() + 1;
+		if found != expected {
+			return Err(Error::BadArgumentNumber { function: "simod.list",
+				expected, found }.into())
 		}
-		Ok(tbl)
-	}).with_context(|| format!(r#"failed to query row '{srowid}' in "{table}""#))
+		let mut rows = stmt.query(args.as_params())?;
+		match rows.next()? {
+			Some(row) => {
+				let ret = lua.create_table()?;
+				for i in 0..row.as_ref().column_count() {
+					let val = row.get_ref(i)
+						.with_context(|| format!("cannot read field {i} in row"))?;
+					ret.set(row.as_ref().column_name(i)?, sql_to_lua(val, lua)?)?;
+				}
+				Ok(mlua::Value::Table(ret))
+			},
+			None => Ok(mlua::Value::Nil),
+		}
+	}
 }
+
 /// Implementation of `simod.update`.
 ///
 /// Updates a single field in one of the resource tables.
@@ -2428,9 +2441,13 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 			Ok::<_,mlua::Error>(())
 		})?)?;
 		simod.set("list", scope.create_function_mut(
-			|_lua, args| statements.list(&lua, args).to_lua_err())?)?;
-		simod.set("select", scope.create_function(
-			|_lua, args| select(&db, &lua, args).to_lua_err())?)?;
+			|_lua, args| statements.list_keys.execute(&lua, args)
+			.context("'simod.list' callback").to_lua_err())?)?;
+		simod.set("select", scope.create_function_mut(
+			|_lua, args| statements.select_row.execute(&lua, args)
+			.context("'simod.select' callback").to_lua_err())?)?;
+// 		simod.set("select", scope.create_function(
+// 			|_lua, args| select(&db, &lua, args).to_lua_err())?)?;
 		simod.set("update", scope.create_function(
 			|_lua, args| update(&db, args).to_lua_err())?)?;
 		simod.set("insert", scope.create_function(
