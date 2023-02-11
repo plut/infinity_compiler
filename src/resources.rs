@@ -27,7 +27,7 @@
 use crate::prelude::*;
 use macros::{produce_resource_list,all_resources,Resource};
 use crate::pack::{Pack,NotPacked};
-use crate::struct_io::{SqlRow,NoSql,TypedStatement};
+use crate::struct_io::{SqlRow,NoSql,TypedStatement,ToParams};
 use crate::schemas::{Schema};
 use crate::database::{DbTypeCheck,DbInterface,DbInserter};
 use crate::gamefiles::{Restype};
@@ -260,7 +260,7 @@ impl ToplevelResource for Item {
 		let mut item = Item::unpack(&mut cursor)
 			.context("cannot unpack Item0 main struct")?;
 		item.itemref = resref.into();
-		tables.items.execute(item.as_params())
+		tables.items.execute(item.params())
 			.context("inserting into 'items'")?;
 		cursor.seek(SeekFrom::Start(item.abilities_offset.unwrap() as u64))?;
 

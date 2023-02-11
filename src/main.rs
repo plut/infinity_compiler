@@ -53,6 +53,7 @@ pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
 #[derive(Debug)]
 pub(crate) enum Error{
 	UnknownTable(String),
+	BadArgumentNumber { function: &'static str, expected: usize, found: usize },
 // 	BadType(String),
 // 	BadArgumentNumber(usize, &'static str),
 	CallbackMissingArgument,
@@ -318,6 +319,17 @@ sqlleaf_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
 impl<T> SqlLeaf for Option<T> where T: SqlLeaf {
 	const FIELD_TYPE: FieldType = T::FIELD_TYPE;
 }
+/// Converting an object to something implementing [`rusqlite::Params`].
+///
+/// Since we cannot implement the [`rusqlite::Params`] trait ourselves,
+/// this is the closest we can do.
+pub trait ToParams<T: ToSql>: Sized {
+	type Iter: Iterator<Item=T>;
+	fn params_iter(self)->Self::Iter;
+	fn params(self)->rusqlite::ParamsFromIter<Self::Iter> {
+		rusqlite::params_from_iter(self.params_iter())
+	}
+}
 /// A struct mapped to a SQL row.
 pub trait SqlRow: Sized {
 	/// The number of fields in the SQL row.
@@ -396,6 +408,12 @@ impl<T: SqlLeaf> SqlRow for T {
 	fn fieldtype(_i: usize)->FieldType { Self::FIELD_TYPE }
 	fn fieldname_ctx(ctx: &'static str, _i: usize)->&'static str { ctx }
 	fn primary_index()->Option<usize> { None }
+}
+impl<'a, T: SqlRow> ToParams<ToSqlOutput<'a>> for &'a T {
+	type Iter = ContentIterator<'a,T>;
+	fn params_iter(self)->Self::Iter {
+		ContentIterator(0, self)
+	}
 }
 
 /// An iterator over all content fields of a [`SqlRow`].
@@ -1477,6 +1495,19 @@ end"#))?;
 			uwriteln!(w, ";");
 		}
 	}
+	/// Prepares the statement listing all the keys for Lua interface.
+	///
+	/// For top-level resources, this lists all keys.
+	/// For sub-resources, this lists all keys linked to a given parent key.
+	pub fn list_keys_sql(&self)->String {
+		let mut s = format!(r#"select "{primary}" from "{self}""#,
+			primary = self.primary());
+		if matches!(self.resource, SchemaResource::Sub { .. }) {
+			uwrite!(&mut s, r#" where "{resref}"=? order by "index""#,
+				resref = self.resref());
+		}
+		s
+	}
 }
 
 /// The full database description of a game resource.
@@ -2165,8 +2196,9 @@ pub(crate) mod lua_api {
 use mlua::{Lua,ExternalResult};
 
 use crate::prelude::*;
-use crate::resources::RESOURCES;
-use crate::struct_io::FieldType;
+use crate::resources::{AllResources,RESOURCES};
+use crate::schemas::Schema;
+use crate::struct_io::{FieldType,ToParams};
 /// Runtime errors during interface between SQL and Lua.
 /// A simple wrapper allowing `mlua::Value` to be converted to SQL.
 #[derive(Debug)]
@@ -2189,6 +2221,24 @@ impl rusqlite::ToSql for LuaToSql<'_> {
 impl<'lua> mlua::FromLua<'lua> for LuaToSql<'lua> {
 	fn from_lua(v: mlua::Value<'lua>, _lua: &'lua Lua)->mlua::Result<Self> {
 		Ok(Self(v))
+	}
+}
+struct LuaToSqlRef<'a>(&'a mlua::Value<'a>);
+impl<'a> From<&'a mlua::Value<'a>> for LuaToSqlRef<'a> {
+	fn from(source: &'a mlua::Value<'a>)->Self { Self(source) }
+}
+impl rusqlite::ToSql for LuaToSqlRef<'_> {
+	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+		use rusqlite::types::{ToSqlOutput::Owned,Value as SqlValue};
+		match self.0 {
+		mlua::Value::Nil => Ok(Owned(SqlValue::Null)),
+		mlua::Value::Boolean(b) => Ok(Owned(SqlValue::Integer(*b as i64))),
+		mlua::Value::Integer(n) => Ok(Owned(SqlValue::Integer(*n))),
+		mlua::Value::Number(x) => Ok(Owned(SqlValue::Real(*x))),
+		mlua::Value::String(ref s) =>
+			Ok(Owned(SqlValue::from(s.to_str().unwrap().to_owned()))),
+		e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
+		}
 	}
 }
 /// Value conversion in the Sql->Lua direction.
@@ -2217,6 +2267,7 @@ fn lua_to_sql<'lua>(v: &'lua mlua::Value<'lua>)->rusqlite::Result<rusqlite::type
 	e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
 	}
 }
+
 /// A trivial wrapper giving a slightly better [`Debug`] implementation
 /// for Lua values (displaying the actual contents of strings).
 struct LuaInspect<'lua>(&'lua mlua::Value<'lua>);
@@ -2238,6 +2289,63 @@ fn pop_arg_as<'lua, T: mlua::FromLua<'lua>>(args: &mut mlua::MultiValue<'lua>, l
 		format!("cannot convert argument to type {}", std::any::type_name::<T>()))?;
 	Ok(r)
 }
+/// A structure interfacing between [`mlua::Multivalue`] and
+/// [`rusqlite::Params`].
+struct LuaParamsIterator<'lua> {
+	values: &'lua mlua::MultiValue<'lua>,
+	index: usize,
+}
+impl<'lua> Iterator for LuaParamsIterator<'lua> {
+	type Item = LuaToSqlRef<'lua>;
+	fn next(&mut self)->Option<Self::Item> {
+		self.values.get(self.index).map(LuaToSqlRef::from)
+	}
+}
+impl<'a> ToParams<LuaToSqlRef<'a>> for &'a mlua::MultiValue<'a> {
+	type Iter = LuaParamsIterator<'a>;
+	fn params_iter(self)->Self::Iter {
+		LuaParamsIterator{ values: self, index: 0 }
+	}
+}
+
+
+/// A collection of all the prepared SQL statements used for implementing
+/// the Lua API.
+#[derive(Debug)]
+struct LuaStatements<'a> {
+	/// We keep an owned copy of the original table schemas.
+	schemas: AllResources<Schema>,
+	/// Used for `simod.list_keys`.
+	list_keys: AllResources<Statement<'a>>,
+}
+impl<'a> LuaStatements<'a> {
+	pub fn new(db: &'a impl DbInterface, schemas: AllResources<Schema>)->Result<Self> {
+		Ok(Self {
+			list_keys: schemas.map(|schema| db.prepare(schema.list_keys_sql()))?,
+			schemas,
+		})
+	}
+	pub fn list<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Table<'lua>> {
+		let found = args.len();
+		let name = pop_arg_as::<String>(&mut args, lua)
+			.context("first argument should be a string")?;
+		let stmt = self.list_keys.by_name_mut(&name)?;
+		let expected = stmt.parameter_count();
+		if found != expected {
+			return Err(Error::BadArgumentNumber { function: "simod.list",
+				expected, found }.into())
+		}
+		let mut rows = stmt.query(args.params())?;
+		let ret = lua.create_table()?;
+		while let Some(row) = rows.next()? {
+			let v_sql = row.get_ref(0)?;
+			let v_lua = sql_to_lua(v_sql, lua)?;
+			ret.push(v_lua)?;
+		}
+		Ok(ret)
+	}
+}
+
 /// Implementation of `simod.list`.
 // fn list_keys(db: &Connection, (table,): (String,))->Result<Vec<String>> {
 // 	Ok(table_schema(&table)?.all_keys(db)?)
@@ -2245,7 +2353,7 @@ fn pop_arg_as<'lua, T: mlua::FromLua<'lua>>(args: &mut mlua::MultiValue<'lua>, l
 fn list_keys<'lua>(db: &impl DbInterface, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Vec<mlua::Value<'lua>>> {
 	scope_trace!("callback 'simod.list' invoked with: {:?}", args);
 	let name = pop_arg_as::<String>(&mut args, lua)
-		.context("'simod.list' callback")?;
+		.context("first argument should be a string")?;
 	trace!(r#"  first argument is "{name}""#);
 	let schema = RESOURCES.table_schema(&name)?;
 	match args.len() {

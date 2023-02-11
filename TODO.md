@@ -12,8 +12,7 @@ main resources have: resource type, extension
 subresources have: sorting, parent key, parent resource
 
 
-+ keep resources organized by table name only (
-
+ - remove resref_orig (not needed with the "/name" convention)
 
 struct_io: SqlRow (fields only)
 schemas: Schema (no payload), Columns (fields, no payload)
@@ -26,6 +25,7 @@ resources: Resource (full schema + payload)
   - kill Schema0
   - then Columns
   - move all_resources() to a field of GameDB (etc.)
+  - list_keys should return a Lua table, not a Vec
 
 # Override
  - [x] improve backup procedure: a full backup as part of init
