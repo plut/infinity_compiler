@@ -2594,12 +2594,53 @@
 <a href="#2594" id="2594">2594</a>
 <a href="#2595" id="2595">2595</a>
 <a href="#2596" id="2596">2596</a>
+<a href="#2597" id="2597">2597</a>
+<a href="#2598" id="2598">2598</a>
+<a href="#2599" id="2599">2599</a>
+<a href="#2600" id="2600">2600</a>
+<a href="#2601" id="2601">2601</a>
+<a href="#2602" id="2602">2602</a>
+<a href="#2603" id="2603">2603</a>
+<a href="#2604" id="2604">2604</a>
+<a href="#2605" id="2605">2605</a>
+<a href="#2606" id="2606">2606</a>
+<a href="#2607" id="2607">2607</a>
+<a href="#2608" id="2608">2608</a>
+<a href="#2609" id="2609">2609</a>
+<a href="#2610" id="2610">2610</a>
+<a href="#2611" id="2611">2611</a>
+<a href="#2612" id="2612">2612</a>
+<a href="#2613" id="2613">2613</a>
+<a href="#2614" id="2614">2614</a>
+<a href="#2615" id="2615">2615</a>
+<a href="#2616" id="2616">2616</a>
+<a href="#2617" id="2617">2617</a>
+<a href="#2618" id="2618">2618</a>
+<a href="#2619" id="2619">2619</a>
+<a href="#2620" id="2620">2620</a>
+<a href="#2621" id="2621">2621</a>
+<a href="#2622" id="2622">2622</a>
+<a href="#2623" id="2623">2623</a>
+<a href="#2624" id="2624">2624</a>
+<a href="#2625" id="2625">2625</a>
+<a href="#2626" id="2626">2626</a>
+<a href="#2627" id="2627">2627</a>
+<a href="#2628" id="2628">2628</a>
+<a href="#2629" id="2629">2629</a>
+<a href="#2630" id="2630">2630</a>
+<a href="#2631" id="2631">2631</a>
+<a href="#2632" id="2632">2632</a>
+<a href="#2633" id="2633">2633</a>
+<a href="#2634" id="2634">2634</a>
+<a href="#2635" id="2635">2635</a>
+<a href="#2636" id="2636">2636</a>
+<a href="#2637" id="2637">2637</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Compiler between IE game files and a SQLite database.
 </span><span class="attr">#![allow(
 	unused_attributes,
 <span class="comment">// 	unused_imports,
-	</span>dead_code,
-<span class="comment">// 	unreachable_code,
+// 	dead_code,
+// 	unreachable_code,
 // 	unused_macros,
 // 	unused_variables,
 // 	unused_must_use,
@@ -2649,14 +2690,19 @@
 <span class="attr">#[derive(Debug)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">enum </span>Error{
 	UnknownTable(String),
+	BadArgumentNumber { function: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str, expected: usize, found: usize },
 <span class="comment">// 	BadType(String),
 // 	BadArgumentNumber(usize, &amp;&#39;static str),
 	</span>CallbackMissingArgument,
-	CallbackExtraArgument,
 }
 <span class="kw">impl </span>Display <span class="kw">for </span>Error {
 	<span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>Formatter&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;fmt::Result {
-		fmt::Debug::fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f)
+		<span class="kw">match </span><span class="self">self </span>{
+			<span class="self">Self</span>::UnknownTable(s) =&gt; <span class="macro">write!</span>(f, <span class="string">&quot;Unknown table: &#39;{s}&#39;&quot;</span>),
+			<span class="self">Self</span>::BadArgumentNumber { function, expected, found } =&gt;
+				<span class="macro">write!</span>(f, <span class="string">&quot;Bad number of arguments for function &#39;{function}&#39;: found {found}, expected {expected}&quot;</span>),
+			<span class="kw">_ </span>=&gt; <span class="macro">write!</span>(f, <span class="string">&quot;Error: &amp;{self:?}&quot;</span>),
+		}
 	}
 }
 <span class="kw">impl </span>std::error::Error <span class="kw">for </span>Error { }
@@ -2914,6 +2960,18 @@
 <span class="kw">impl</span>&lt;T&gt; SqlLeaf <span class="kw">for </span><span class="prelude-ty">Option</span>&lt;T&gt; <span class="kw">where </span>T: SqlLeaf {
 	<span class="kw">const </span>FIELD_TYPE: FieldType = T::FIELD_TYPE;
 }
+<span class="doccomment">/// Converting an object to something implementing [`rusqlite::Params`].
+///
+/// Since we cannot implement the [`rusqlite::Params`] trait ourselves,
+/// this is the closest we can do.
+</span><span class="kw">pub trait </span>AsParams {
+	<span class="kw">type </span>Elt&lt;<span class="lifetime">&#39;a</span>&gt;: ToSql <span class="kw">where </span><span class="self">Self</span>: <span class="lifetime">&#39;a</span>;
+	<span class="kw">type </span>Iter&lt;<span class="lifetime">&#39;a</span>&gt;: Iterator&lt;Item=<span class="self">Self</span>::Elt&lt;<span class="lifetime">&#39;a</span>&gt;&gt; <span class="kw">where </span><span class="self">Self</span>: <span class="lifetime">&#39;a</span>;
+	<span class="kw">fn </span>params_iter(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="self">Self</span>::Iter&lt;<span class="lifetime">&#39;_</span>&gt;;
+	<span class="kw">fn </span>as_params(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;rusqlite::ParamsFromIter&lt;<span class="self">Self</span>::Iter&lt;<span class="lifetime">&#39;_</span>&gt;&gt; {
+		rusqlite::params_from_iter(<span class="self">self</span>.params_iter())
+	}
+}
 <span class="doccomment">/// A struct mapped to a SQL row.
 </span><span class="kw">pub trait </span>SqlRow: Sized {
 	<span class="doccomment">/// The number of fields in the SQL row.
@@ -2938,13 +2996,6 @@
 	/// (constraints, etc.)
 	</span><span class="kw">fn </span>field_create_text(_i: usize)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str { <span class="string">&quot;&quot; </span>}
 	<span class="kw">fn </span>primary_index()-&gt;<span class="prelude-ty">Option</span>&lt;usize&gt;;
-	<span class="comment">// Provided functions:
-	</span><span class="doccomment">/// Converts this resource to a struct implementing
-	/// [`rusqlite::Params`], allowing it to be passed to a
-	/// [`rusqlite::Statement`].
-	</span><span class="kw">fn </span>as_params(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;rusqlite::ParamsFromIter&lt;ContentIterator&lt;<span class="lifetime">&#39;_</span>,<span class="self">Self</span>&gt;&gt; {
-		rusqlite::params_from_iter(ContentIterator(<span class="number">0</span>, <span class="self">self</span>))
-	}
 	<span class="doccomment">/// Reads a whole [`rusqlite::Row`] into a struct.
 	</span><span class="kw">fn </span>from_row(row: <span class="kw-2">&amp;</span>rusqlite::Row&lt;<span class="lifetime">&#39;_</span>&gt;,)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
 		<span class="self">Self</span>::from_row_at(row, <span class="number">0</span>)
@@ -2992,6 +3043,11 @@
 	<span class="kw">fn </span>fieldtype(_i: usize)-&gt;FieldType { <span class="self">Self</span>::FIELD_TYPE }
 	<span class="kw">fn </span>fieldname_ctx(ctx: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str, _i: usize)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str { ctx }
 	<span class="kw">fn </span>primary_index()-&gt;<span class="prelude-ty">Option</span>&lt;usize&gt; { <span class="prelude-val">None </span>}
+}
+<span class="kw">impl</span>&lt;T: SqlRow&gt; AsParams <span class="kw">for </span>T {
+	<span class="kw">type </span>Elt&lt;<span class="lifetime">&#39;a</span>&gt; = ToSqlOutput&lt;<span class="lifetime">&#39;a</span>&gt; <span class="kw">where </span><span class="self">Self</span>: <span class="lifetime">&#39;a</span>;
+	<span class="kw">type </span>Iter&lt;<span class="lifetime">&#39;a</span>&gt; = ContentIterator&lt;<span class="lifetime">&#39;a</span>,T&gt; <span class="kw">where </span><span class="self">Self</span>: <span class="lifetime">&#39;a</span>;
+	<span class="kw">fn </span>params_iter(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="self">Self</span>::Iter&lt;<span class="lifetime">&#39;_</span>&gt; { ContentIterator(<span class="number">0</span>, <span class="self">self</span>) }
 }
 
 <span class="doccomment">/// An iterator over all content fields of a [`SqlRow`].
@@ -3799,21 +3855,10 @@
 		<span class="prelude-val">Ok</span>(())
 	}
 }
-<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>,T&gt; Columns&lt;<span class="lifetime">&#39;a</span>, T&gt; {
-	<span class="kw">pub fn </span>from(slice: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a</span>[Field], prefix: T)-&gt;<span class="self">Self </span>{ <span class="self">Self</span>(slice, prefix) }
+<span class="kw">impl</span>&lt;T&gt; Columns&lt;<span class="lifetime">&#39;_</span>, T&gt; {
 	<span class="doccomment">/// The length of this particular column set.
 	/// We need this since it is in general different from schema length.
 	</span><span class="kw">pub fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;usize { <span class="self">self</span>.<span class="number">0</span>.len() }
-	<span class="doccomment">/// Modifies a set of column headers by prepending a prefix, e.g. &quot;new.&quot;
-	</span><span class="kw">pub fn </span>with_prefix&lt;P: Display&gt;(<span class="self">self</span>, prefix: P)-&gt;Columns&lt;<span class="lifetime">&#39;a</span>, P&gt; {
-		Columns(<span class="self">self</span>.<span class="number">0</span>, prefix)
-	}
-}
-<span class="kw">impl</span>&lt;T: Display&gt; Columns&lt;<span class="lifetime">&#39;_</span>,T&gt; {
-	<span class="doccomment">/// Returns the SQL select statement for these columns, as a String.
-	</span><span class="kw">pub fn </span>select_sql(<span class="self">self</span>, n1: <span class="kw">impl </span>Display, n2: <span class="kw">impl </span>Display, condition: <span class="kw">impl </span>Display)-&gt;String {
-		<span class="macro">format!</span>(<span class="string">r#&quot;select {self} from &quot;{n1}{n2}&quot; {condition}&quot;#</span>)
-	}
 }
 
 <span class="doccomment">/// The identifier of the table for a schema.
@@ -3876,13 +3921,6 @@
 		<span class="kw">match </span><span class="self">self</span>.resource {
 			SchemaResource::Top { .. } =&gt; <span class="self">self</span>.name,
 			SchemaResource::Sub { parent, .. } =&gt; parent,
-		}
-	}
-	<span class="doccomment">/// Returns the Restype, or panics if this is not a top-level resource.
-	</span><span class="kw">pub fn </span>restype(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;Restype {
-		<span class="kw">match </span><span class="self">self</span>.resource {
-			SchemaResource::Top { restype, .. } =&gt; restype,
-			<span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">&quot;called restype on a resource which is not toplevel&quot;</span>),
 		}
 	}
 	<span class="doccomment">/// Returns the name of the field containing the resref for this
@@ -4073,6 +4111,19 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 			<span class="macro">uwriteln!</span>(w, <span class="string">&quot;;&quot;</span>);
 		}
 	}
+	<span class="doccomment">/// Prepares the statement listing all the keys for Lua interface.
+	///
+	/// For top-level resources, this lists all keys.
+	/// For sub-resources, this lists all keys linked to a given parent key.
+	</span><span class="kw">pub fn </span>list_keys_sql(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;String {
+		<span class="kw">let </span><span class="kw-2">mut </span>s = <span class="macro">format!</span>(<span class="string">r#&quot;select &quot;{primary}&quot; from &quot;{self}&quot;&quot;#</span>,
+			primary = <span class="self">self</span>.primary());
+		<span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.resource, SchemaResource::Sub { .. }) {
+			<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>s, <span class="string">r#&quot; where &quot;{resref}&quot;=? order by &quot;index&quot;&quot;#</span>,
+				resref = <span class="self">self</span>.resref());
+		}
+		s
+	}
 }
 
 <span class="doccomment">/// The full database description of a game resource.
@@ -4151,14 +4202,6 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 	</span><span class="kw">pub fn </span>context(<span class="kw-2">&amp;</span><span class="lifetime">&#39;schema </span><span class="self">self</span>)-&gt;Columns&lt;<span class="lifetime">&#39;schema</span>, NullDisplay&gt; {
 		Columns(<span class="kw-2">&amp;</span><span class="self">self</span>.fields[<span class="self">self</span>.resref_key..<span class="self">self</span>.before_id()], NullDisplay())
 	}
-	<span class="doccomment">/// All the columns except the primary key.
-	</span><span class="kw">pub fn </span>except_primary(<span class="kw-2">&amp;</span><span class="lifetime">&#39;schema </span><span class="self">self</span>)-&gt;Columns&lt;<span class="lifetime">&#39;schema</span>, NullDisplay&gt; {
-		Columns(<span class="kw-2">&amp;</span><span class="self">self</span>.fields[..<span class="self">self</span>.fields.len()-<span class="number">1</span>], NullDisplay())
-	}
-	<span class="doccomment">/// The resref for this schema (as a string).
-	</span><span class="kw">pub fn </span>resref(<span class="kw-2">&amp;</span><span class="lifetime">&#39;schema </span><span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span>str {
-		<span class="self">self</span>.fields[<span class="self">self</span>.resref_key].fname
-	}
 	<span class="doccomment">/// The primary key for this schema (as a string).
 	///
 	/// Note that the [`Schema0`] structure imposes that this is always the
@@ -4189,24 +4232,6 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 		}
 		s.push(<span class="string">&#39;)&#39;</span>);
 		s
-	}
-	<span class="kw">fn </span>all_keys_gen&lt;T&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, condition: <span class="kw">impl </span>Display, f: <span class="kw">impl </span>Fn(rusqlite::types::ValueRef&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;T&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;Vec&lt;T&gt;&gt; {
-		<span class="kw">let </span>s = <span class="macro">format!</span>(<span class="string">r#&quot;select &quot;{primary}&quot; from &quot;{table}&quot; {condition} order by {sort}&quot;#</span>,
-			table = <span class="self">self</span>.name, primary = <span class="self">self</span>.primary(), sort = <span class="self">self</span>.context());
-		<span class="kw">let </span><span class="kw-2">mut </span>stmt = db.prepare(<span class="kw-2">&amp;</span>s)<span class="question-mark">?</span>;
-		<span class="kw">let </span><span class="kw-2">mut </span>rows = stmt.query(())<span class="question-mark">?</span>;
-		<span class="kw">let </span><span class="kw-2">mut </span>v = Vec::&lt;T&gt;::new();
-		<span class="kw">while let </span><span class="prelude-val">Some</span>(row) = rows.next()<span class="question-mark">? </span>{
-			v.push(f(row.get_ref(<span class="number">0</span>)<span class="question-mark">?</span>)<span class="question-mark">?</span>);
-		}
-		<span class="prelude-val">Ok</span>(v)
-	}
-	<span class="kw">pub fn </span>all_keys&lt;T&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, f: <span class="kw">impl </span>Fn(rusqlite::types::ValueRef&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;T&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;Vec&lt;T&gt;&gt; {
-		<span class="self">self</span>.all_keys_gen::&lt;T&gt;(db, <span class="string">&quot;&quot;</span>, f)
-	}
-	<span class="kw">pub fn </span>all_keys_with_parent&lt;T&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, value: <span class="kw">impl </span>Display, f: <span class="kw">impl </span>Fn(rusqlite::types::ValueRef&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;T&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;Vec&lt;T&gt;&gt; {
-		<span class="self">self</span>.all_keys_gen(db, <span class="macro">format!</span>(<span class="string">r#&quot;where &quot;{parent_key}&quot;=&#39;{value}&#39;&quot;#</span>,
-			parent_key = <span class="self">self</span>.resref()), f)
 	}
 	<span class="doccomment">/// Collects parameters for a SQL statement from the fields of the
 	/// schema.
@@ -4396,7 +4421,6 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 <span class="kw">use </span>rusqlite::{Row};
 <span class="kw">use </span><span class="kw">crate</span>::resources::<span class="kw-2">*</span>;
 <span class="kw">use </span><span class="kw">crate</span>::gamefiles::GameIndex;
-<span class="kw">use </span><span class="kw">crate</span>::schemas::{Schema0};
 
 <span class="comment">// I. Low-level stuff: basic types and extensions for `rusqlite` traits.
 </span><span class="doccomment">/// Detecting recoverable errors due to incorrect SQL typing.
@@ -4507,42 +4531,41 @@ update &quot;new_strings&quot; set &quot;strref&quot;=-1 where &quot;strref&quot
 	<span class="doccomment">/// Deletes from current directory all resources marked as &#39;orphan&#39; in
 	/// the database. This also clears the list of orphan resources.
 	</span><span class="kw">fn </span>clear_orphan_resources(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-		RESOURCES.map(|schema, <span class="kw">_</span>| {
-			<span class="kw">let </span>Schema0 { name, extension, .. } = schema;
-			<span class="kw">if </span>!extension.is_empty() {
-				<span class="kw">let </span><span class="kw-2">mut </span>stmt = <span class="self">self</span>.prepare(
-					<span class="macro">format!</span>(<span class="string">r#&quot;select &quot;name&quot; from &quot;orphan_{name}&quot;&quot;#</span>))<span class="question-mark">?</span>;
-				<span class="kw">let </span><span class="kw-2">mut </span>rows = stmt.query(())<span class="question-mark">?</span>;
-				<span class="kw">while let </span><span class="prelude-val">Some</span>(row) = rows.next()<span class="question-mark">? </span>{
-					<span class="kw">let </span><span class="kw-2">mut </span>file = row.get::&lt;<span class="kw">_</span>,String&gt;(<span class="number">0</span>)
-						.with_context(|| <span class="macro">format!</span>(<span class="string">r#&quot;bad entry in &quot;orphan_{name}&quot;&quot;#</span>))<span class="question-mark">?</span>;
-					file.push(<span class="string">&#39;.&#39;</span>);
-					file.push_str(extension);
-					fs::remove_file(<span class="kw-2">&amp;</span>file)
-					.or_else(|e| <span class="kw">match </span>e.kind() {
-						io::ErrorKind::NotFound =&gt; {
+		all_schemas().map(|schema| {
+			<span class="kw">let </span>extension = <span class="kw">match </span>schema.resource {
+				<span class="kw">crate</span>::schemas::SchemaResource::Top { extension, .. } =&gt; extension,
+				<span class="kw">_ </span>=&gt; <span class="kw">return </span>any_ok(())
+			};
+			<span class="kw">let </span><span class="kw-2">mut </span>stmt = <span class="self">self</span>.prepare(
+				<span class="macro">format!</span>(<span class="string">r#&quot;select &quot;name&quot; from &quot;orphan_{schema}&quot;&quot;#</span>))<span class="question-mark">?</span>;
+			<span class="kw">let </span><span class="kw-2">mut </span>rows = stmt.query(())<span class="question-mark">?</span>;
+			<span class="kw">while let </span><span class="prelude-val">Some</span>(row) = rows.next() <span class="question-mark">? </span>{
+				<span class="kw">let </span><span class="kw-2">mut </span>file = row.get::&lt;<span class="kw">_</span>,String&gt;(<span class="number">0</span>)
+					.with_context(|| <span class="macro">format!</span>(<span class="string">r#&quot;bad entry in &quot;orphan_{schema}&quot;&quot;#</span>))<span class="question-mark">?</span>;
+				file.push(<span class="string">&#39;.&#39;</span>);
+				file.push_str(extension);
+				fs::remove_file(<span class="kw-2">&amp;</span>file).or_else(|e| <span class="kw">match </span>e.kind() {
+					io::ErrorKind::NotFound =&gt; {
 						<span class="macro">warn!</span>(<span class="string">r#&quot;should have removed orphan file &quot;{file}&quot;&quot;#</span>);
 						<span class="prelude-val">Ok</span>(())
 					},
-						<span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(e) })
-					.with_context(|| <span class="macro">format!</span>(<span class="string">r#&quot;cannot remove file &quot;{file}&quot;&quot;#</span>))<span class="question-mark">?</span>;
-				}
+					<span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(e)
+				}).with_context(|| <span class="macro">format!</span>(<span class="string">r#&quot;cannot remove file &quot;{file}&quot;&quot;#</span>))<span class="question-mark">?</span>;
 			}
 			any_ok(())
-		})
-			.context(<span class="string">&quot;cannot clear orphan resources&quot;</span>)<span class="question-mark">?</span>;
+		}).context(<span class="string">&quot;cannot clear orphan resources&quot;</span>)<span class="question-mark">?</span>;
 		<span class="prelude-val">Ok</span>(())
 	}
 	<span class="doccomment">/// Cleans the dirty bit from all resources after saving.
 	</span><span class="kw">fn </span>unmark_dirty_resources(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-		RESOURCES.map(|schema, <span class="kw">_</span>| {
-			<span class="kw">if </span>!schema.extension.is_empty() {
+		all_schemas().map(|schema| {
+			<span class="kw">if </span><span class="macro">matches!</span>(schema.resource, <span class="kw">crate</span>::schemas::SchemaResource::Top { .. }) {
 				<span class="self">self</span>.exec(<span class="macro">format!</span>(<span class="string">r#&quot;delete from &quot;dirty_{schema}&quot;&quot;#</span>))<span class="question-mark">?</span>;
 				<span class="self">self</span>.exec(<span class="macro">format!</span>(<span class="string">r#&quot;delete from &quot;orphan_{schema}&quot;&quot;#</span>))<span class="question-mark">?</span>;
-			}
+			};
 			any_ok(())
 		})<span class="question-mark">?</span>;
-		<span class="prelude-val">Ok</span>(())
+		any_ok(())
 	}
 }
 <span class="kw">impl</span>&lt;T: Deref&lt;Target=Connection&gt;&gt;  DbInterface <span class="kw">for </span>T {
@@ -4763,8 +4786,9 @@ from &quot;new_strings&quot;
 </span><span class="kw">use </span>mlua::{Lua,ExternalResult};
 
 <span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
-<span class="kw">use </span><span class="kw">crate</span>::resources::RESOURCES;
-<span class="kw">use </span><span class="kw">crate</span>::struct_io::FieldType;
+<span class="kw">use </span><span class="kw">crate</span>::resources::{AllResources,all_schemas,RESOURCES};
+<span class="kw">use </span><span class="kw">crate</span>::schemas::Schema;
+<span class="kw">use </span><span class="kw">crate</span>::struct_io::{FieldType,AsParams};
 <span class="doccomment">/// Runtime errors during interface between SQL and Lua.
 /// A simple wrapper allowing `mlua::Value` to be converted to SQL.
 </span><span class="attr">#[derive(Debug)]
@@ -4787,6 +4811,24 @@ from &quot;new_strings&quot;
 <span class="kw">impl</span>&lt;<span class="lifetime">&#39;lua</span>&gt; mlua::FromLua&lt;<span class="lifetime">&#39;lua</span>&gt; <span class="kw">for </span>LuaToSql&lt;<span class="lifetime">&#39;lua</span>&gt; {
 	<span class="kw">fn </span>from_lua(v: mlua::Value&lt;<span class="lifetime">&#39;lua</span>&gt;, _lua: <span class="kw-2">&amp;</span><span class="lifetime">&#39;lua </span>Lua)-&gt;mlua::Result&lt;<span class="self">Self</span>&gt; {
 		<span class="prelude-val">Ok</span>(<span class="self">Self</span>(v))
+	}
+}
+<span class="kw">pub struct </span>LuaToSqlRef&lt;<span class="lifetime">&#39;a</span>&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>mlua::Value&lt;<span class="lifetime">&#39;a</span>&gt;);
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>&gt; From&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>mlua::Value&lt;<span class="lifetime">&#39;a</span>&gt;&gt; <span class="kw">for </span>LuaToSqlRef&lt;<span class="lifetime">&#39;a</span>&gt; {
+	<span class="kw">fn </span>from(source: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>mlua::Value&lt;<span class="lifetime">&#39;a</span>&gt;)-&gt;<span class="self">Self </span>{ <span class="self">Self</span>(source) }
+}
+<span class="kw">impl </span>rusqlite::ToSql <span class="kw">for </span>LuaToSqlRef&lt;<span class="lifetime">&#39;_</span>&gt; {
+	<span class="kw">fn </span>to_sql(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;rusqlite::Result&lt;rusqlite::types::ToSqlOutput&lt;<span class="lifetime">&#39;_</span>&gt;&gt; {
+		<span class="kw">use </span>rusqlite::types::{ToSqlOutput::Owned,Value <span class="kw">as </span>SqlValue};
+		<span class="kw">match </span><span class="self">self</span>.<span class="number">0 </span>{
+		mlua::Value::Nil =&gt; <span class="prelude-val">Ok</span>(Owned(SqlValue::Null)),
+		mlua::Value::Boolean(b) =&gt; <span class="prelude-val">Ok</span>(Owned(SqlValue::Integer(<span class="kw-2">*</span>b <span class="kw">as </span>i64))),
+		mlua::Value::Integer(n) =&gt; <span class="prelude-val">Ok</span>(Owned(SqlValue::Integer(<span class="kw-2">*</span>n))),
+		mlua::Value::Number(x) =&gt; <span class="prelude-val">Ok</span>(Owned(SqlValue::Real(<span class="kw-2">*</span>x))),
+		mlua::Value::String(<span class="kw-2">ref </span>s) =&gt;
+			<span class="prelude-val">Ok</span>(Owned(SqlValue::from(s.to_str().unwrap().to_owned()))),
+		e =&gt; <span class="prelude-val">Err</span>(rusqlite::Error::InvalidParameterName(<span class="macro">format!</span>(<span class="string">&quot;cannot convert {e:?} to a SQL type&quot;</span>)))
+		}
 	}
 }
 <span class="doccomment">/// Value conversion in the Sql-&gt;Lua direction.
@@ -4815,6 +4857,7 @@ from &quot;new_strings&quot;
 	e =&gt; <span class="prelude-val">Err</span>(rusqlite::Error::InvalidParameterName(<span class="macro">format!</span>(<span class="string">&quot;cannot convert {e:?} to a SQL type&quot;</span>)))
 	}
 }
+
 <span class="doccomment">/// A trivial wrapper giving a slightly better [`Debug`] implementation
 /// for Lua values (displaying the actual contents of strings).
 </span><span class="kw">struct </span>LuaInspect&lt;<span class="lifetime">&#39;lua</span>&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;lua </span>mlua::Value&lt;<span class="lifetime">&#39;lua</span>&gt;);
@@ -4836,27 +4879,64 @@ from &quot;new_strings&quot;
 		<span class="macro">format!</span>(<span class="string">&quot;cannot convert argument to type {}&quot;</span>, std::any::type_name::&lt;T&gt;()))<span class="question-mark">?</span>;
 	<span class="prelude-val">Ok</span>(r)
 }
-<span class="doccomment">/// Implementation of `simod.list`.
-</span><span class="comment">// fn list_keys(db: &amp;Connection, (table,): (String,))-&gt;Result&lt;Vec&lt;String&gt;&gt; {
-// 	Ok(table_schema(&amp;table)?.all_keys(db)?)
-// }
-</span><span class="kw">fn </span>list_keys&lt;<span class="lifetime">&#39;lua</span>&gt;(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, lua: <span class="kw-2">&amp;</span><span class="lifetime">&#39;lua </span>Lua, <span class="kw-2">mut </span>args: mlua::MultiValue&lt;<span class="lifetime">&#39;lua</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;Vec&lt;mlua::Value&lt;<span class="lifetime">&#39;lua</span>&gt;&gt;&gt; {
-	<span class="macro">scope_trace!</span>(<span class="string">&quot;callback &#39;simod.list&#39; invoked with: {:?}&quot;</span>, args);
-	<span class="kw">let </span>name = pop_arg_as::&lt;String&gt;(<span class="kw-2">&amp;mut </span>args, lua)
-		.context(<span class="string">&quot;&#39;simod.list&#39; callback&quot;</span>)<span class="question-mark">?</span>;
-	<span class="macro">trace!</span>(<span class="string">r#&quot;  first argument is &quot;{name}&quot;&quot;#</span>);
-	<span class="kw">let </span>schema = RESOURCES.table_schema(<span class="kw-2">&amp;</span>name)<span class="question-mark">?</span>;
-	<span class="kw">match </span>args.len() {
-		<span class="number">0 </span>=&gt; <span class="prelude-val">Ok</span>(schema.all_keys(db, |v| sql_to_lua(v, lua))<span class="question-mark">?</span>),
-		<span class="number">1 </span>=&gt; {
-			<span class="kw">let </span>key = pop_arg_as::&lt;String&gt;(<span class="kw-2">&amp;mut </span>args, lua)
-				.context(<span class="string">&quot;&#39;simod.list&#39; callback&quot;</span>)<span class="question-mark">?</span>;
-			<span class="macro">trace!</span>(<span class="string">r#&quot;  second argument is &quot;{key}&quot;&quot;#</span>);
-			<span class="prelude-val">Ok</span>(schema.all_keys_with_parent(db, key, |v| sql_to_lua(v,lua))<span class="question-mark">?</span>)
-		},
-		<span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(Error::CallbackExtraArgument.into()),
+<span class="doccomment">/// A structure interfacing between [`mlua::Multivalue`] and
+/// [`rusqlite::Params`].
+</span><span class="kw">pub struct </span>LuaParamsIterator&lt;<span class="lifetime">&#39;lua</span>&gt; {
+	values: <span class="kw-2">&amp;</span><span class="lifetime">&#39;lua </span>mlua::MultiValue&lt;<span class="lifetime">&#39;lua</span>&gt;,
+	index: usize,
+}
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;lua</span>&gt; Iterator <span class="kw">for </span>LuaParamsIterator&lt;<span class="lifetime">&#39;lua</span>&gt; {
+	<span class="kw">type </span>Item = LuaToSqlRef&lt;<span class="lifetime">&#39;lua</span>&gt;;
+	<span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
+		<span class="self">self</span>.values.get(<span class="self">self</span>.index).map(LuaToSqlRef::from)
 	}
 }
+<span class="kw">impl </span>AsParams <span class="kw">for </span>mlua::MultiValue&lt;<span class="lifetime">&#39;_</span>&gt; {
+	<span class="kw">type </span>Elt&lt;<span class="lifetime">&#39;a</span>&gt; = LuaToSqlRef&lt;<span class="lifetime">&#39;a</span>&gt; <span class="kw">where </span><span class="self">Self</span>: <span class="lifetime">&#39;a</span>;
+	<span class="kw">type </span>Iter&lt;<span class="lifetime">&#39;a</span>&gt; = LuaParamsIterator&lt;<span class="lifetime">&#39;a</span>&gt; <span class="kw">where </span><span class="self">Self</span>: <span class="lifetime">&#39;a</span>;
+	<span class="kw">fn </span>params_iter(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="self">Self</span>::Iter&lt;<span class="lifetime">&#39;_</span>&gt; {
+		LuaParamsIterator{ values: <span class="self">self</span>, index: <span class="number">0 </span>}
+	}
+}
+
+
+<span class="doccomment">/// A collection of all the prepared SQL statements used for implementing
+/// the Lua API.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">struct </span>LuaStatements&lt;<span class="lifetime">&#39;a</span>&gt; {
+<span class="comment">// 	/// We keep an owned copy of the original table schemas.
+// 	schemas: AllResources&lt;Schema&gt;,
+	</span><span class="doccomment">/// Used for `simod.list_keys`.
+	</span>list_keys: AllResources&lt;Statement&lt;<span class="lifetime">&#39;a</span>&gt;&gt;,
+}
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>&gt; LuaStatements&lt;<span class="lifetime">&#39;a</span>&gt; {
+	<span class="kw">pub fn </span>new(db: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw">impl </span>DbInterface, schemas: AllResources&lt;Schema&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+		<span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+			list_keys: schemas.map(|schema| db.prepare(schema.list_keys_sql()))<span class="question-mark">?</span>,
+<span class="comment">// 			schemas,
+		</span>})
+	}
+	<span class="kw">pub fn </span>list&lt;<span class="lifetime">&#39;lua</span>&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, lua: <span class="kw-2">&amp;</span><span class="lifetime">&#39;lua </span>Lua, <span class="kw-2">mut </span>args: mlua::MultiValue&lt;<span class="lifetime">&#39;lua</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;mlua::Table&lt;<span class="lifetime">&#39;lua</span>&gt;&gt; {
+		<span class="kw">let </span>found = args.len();
+		<span class="kw">let </span>name = pop_arg_as::&lt;String&gt;(<span class="kw-2">&amp;mut </span>args, lua)
+			.context(<span class="string">&quot;first argument should be a string&quot;</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span>stmt = <span class="self">self</span>.list_keys.by_name_mut(<span class="kw-2">&amp;</span>name)<span class="question-mark">?</span>;
+		<span class="kw">let </span>expected = stmt.parameter_count();
+		<span class="kw">if </span>found != expected {
+			<span class="kw">return </span><span class="prelude-val">Err</span>(Error::BadArgumentNumber { function: <span class="string">&quot;simod.list&quot;</span>,
+				expected, found }.into())
+		}
+		<span class="kw">let </span><span class="kw-2">mut </span>rows = stmt.query(args.as_params())<span class="question-mark">?</span>;
+		<span class="kw">let </span>ret = lua.create_table()<span class="question-mark">?</span>;
+		<span class="kw">while let </span><span class="prelude-val">Some</span>(row) = rows.next()<span class="question-mark">? </span>{
+			<span class="kw">let </span>v_sql = row.get_ref(<span class="number">0</span>)<span class="question-mark">?</span>;
+			<span class="kw">let </span>v_lua = sql_to_lua(v_sql, lua)<span class="question-mark">?</span>;
+			ret.push(v_lua)<span class="question-mark">?</span>;
+		}
+		<span class="prelude-val">Ok</span>(ret)
+	}
+}
+
 <span class="doccomment">/// Implementation of `simod.select`.
 ///
 /// Reads a full row from one of the resource tables and returns it as a
@@ -4949,13 +5029,15 @@ from &quot;new_strings&quot;
 	<span class="kw">use </span><span class="kw">crate</span>::struct_io::RowExt;
 	<span class="kw">let </span>lua = Lua::new();
 	<span class="kw">let </span>lua_file = Path::new(<span class="string">&quot;/home/jerome/src/infinity_compiler/init.lua&quot;</span>);
+	<span class="kw">let </span><span class="kw-2">mut </span>statements = LuaStatements::new(<span class="kw-2">&amp;</span>db, all_schemas())<span class="question-mark">?</span>;
+
 
 	<span class="comment">// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
 	</span>lua.scope(|scope| {
 		<span class="kw">let </span>simod = lua.create_table()<span class="question-mark">?</span>;
 		<span class="kw">let </span>lua_schema = lua.create_table()<span class="question-mark">?</span>;
-		RESOURCES.map(|schema, <span class="kw">_</span>| {
+		RESOURCES.map_mut(|schema, <span class="kw">_</span>| {
 			<span class="kw">let </span>fields = lua.create_table()<span class="question-mark">?</span>;
 			<span class="kw">let </span>context = lua.create_table()<span class="question-mark">?</span>;
 			<span class="kw">for </span>col <span class="kw">in </span>schema.columns() {
@@ -4982,8 +5064,8 @@ from &quot;new_strings&quot;
 			}
 			<span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>,mlua::Error&gt;(())
 		})<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-		simod.set(<span class="string">&quot;list&quot;</span>, scope.create_function(
-			|_lua, args| list_keys(<span class="kw-2">&amp;</span>db, <span class="kw-2">&amp;</span>lua, args).to_lua_err())<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+		simod.set(<span class="string">&quot;list&quot;</span>, scope.create_function_mut(
+			|_lua, args| statements.list(<span class="kw-2">&amp;</span>lua, args).to_lua_err())<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 		simod.set(<span class="string">&quot;select&quot;</span>, scope.create_function(
 			|_lua, args| select(<span class="kw-2">&amp;</span>db, <span class="kw-2">&amp;</span>lua, args).to_lua_err())<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 		simod.set(<span class="string">&quot;update&quot;</span>, scope.create_function(
