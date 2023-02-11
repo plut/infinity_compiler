@@ -855,7 +855,7 @@ select &quot;a&quot;.&quot;native&quot;, &quot;strref&quot;, &quot;flags&quot; f
 		<span class="kw">let </span><span class="kw-2">mut </span>trigger = String::from(<span class="string">r#&quot;create trigger &quot;update_strrefs&quot;
 after insert on &quot;strref_dict&quot;
 begin&quot;#</span>);
-		all_schemas().map_mut(|schema| {
+		<span class="self">self</span>.map_mut(|schema| {
 			schema.append_new_strings_schema(<span class="kw-2">&amp;mut </span>create, <span class="kw-2">&amp;mut </span>is_first);
 			schema.append_new_strings_trigger(<span class="kw-2">&amp;mut </span>trigger);
 			any_ok(())
