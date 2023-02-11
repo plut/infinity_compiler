@@ -2596,60 +2596,6 @@
 <a href="#2596" id="2596">2596</a>
 <a href="#2597" id="2597">2597</a>
 <a href="#2598" id="2598">2598</a>
-<a href="#2599" id="2599">2599</a>
-<a href="#2600" id="2600">2600</a>
-<a href="#2601" id="2601">2601</a>
-<a href="#2602" id="2602">2602</a>
-<a href="#2603" id="2603">2603</a>
-<a href="#2604" id="2604">2604</a>
-<a href="#2605" id="2605">2605</a>
-<a href="#2606" id="2606">2606</a>
-<a href="#2607" id="2607">2607</a>
-<a href="#2608" id="2608">2608</a>
-<a href="#2609" id="2609">2609</a>
-<a href="#2610" id="2610">2610</a>
-<a href="#2611" id="2611">2611</a>
-<a href="#2612" id="2612">2612</a>
-<a href="#2613" id="2613">2613</a>
-<a href="#2614" id="2614">2614</a>
-<a href="#2615" id="2615">2615</a>
-<a href="#2616" id="2616">2616</a>
-<a href="#2617" id="2617">2617</a>
-<a href="#2618" id="2618">2618</a>
-<a href="#2619" id="2619">2619</a>
-<a href="#2620" id="2620">2620</a>
-<a href="#2621" id="2621">2621</a>
-<a href="#2622" id="2622">2622</a>
-<a href="#2623" id="2623">2623</a>
-<a href="#2624" id="2624">2624</a>
-<a href="#2625" id="2625">2625</a>
-<a href="#2626" id="2626">2626</a>
-<a href="#2627" id="2627">2627</a>
-<a href="#2628" id="2628">2628</a>
-<a href="#2629" id="2629">2629</a>
-<a href="#2630" id="2630">2630</a>
-<a href="#2631" id="2631">2631</a>
-<a href="#2632" id="2632">2632</a>
-<a href="#2633" id="2633">2633</a>
-<a href="#2634" id="2634">2634</a>
-<a href="#2635" id="2635">2635</a>
-<a href="#2636" id="2636">2636</a>
-<a href="#2637" id="2637">2637</a>
-<a href="#2638" id="2638">2638</a>
-<a href="#2639" id="2639">2639</a>
-<a href="#2640" id="2640">2640</a>
-<a href="#2641" id="2641">2641</a>
-<a href="#2642" id="2642">2642</a>
-<a href="#2643" id="2643">2643</a>
-<a href="#2644" id="2644">2644</a>
-<a href="#2645" id="2645">2645</a>
-<a href="#2646" id="2646">2646</a>
-<a href="#2647" id="2647">2647</a>
-<a href="#2648" id="2648">2648</a>
-<a href="#2649" id="2649">2649</a>
-<a href="#2650" id="2650">2650</a>
-<a href="#2651" id="2651">2651</a>
-<a href="#2652" id="2652">2652</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Compiler between IE game files and a SQLite database.
 </span><span class="attr">#![allow(
 	unused_attributes,
@@ -2686,6 +2632,7 @@
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>anyhow::{<span class="prelude-ty">Result</span>,Context};
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>log::{trace,debug,info,warn,error};
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>rusqlite::{<span class="self">self</span>,Connection,Statement};
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>extend::ext;
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>core::marker::PhantomData;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>std::ops::{Deref};
@@ -2715,6 +2662,11 @@
 	}
 }
 <span class="kw">impl </span>std::error::Error <span class="kw">for </span>Error { }
+
+<span class="doccomment">/// Just like `write!` except that it is unwrapped.
+</span><span class="macro">macro_rules! </span>uwrite { ($(<span class="macro-nonterminal">$a</span>:tt)<span class="kw-2">*</span>) =&gt; { <span class="macro">write!</span>($(<span class="macro-nonterminal">$a</span>)<span class="kw-2">*</span>).unwrap() } }
+<span class="macro">macro_rules! </span>uwriteln { ($(<span class="macro-nonterminal">$a</span>:tt)<span class="kw-2">*</span>) =&gt; { <span class="macro">writeln!</span>($(<span class="macro-nonterminal">$a</span>)<span class="kw-2">*</span>).unwrap() } }
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>{uwrite,uwriteln};
 
 }
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>progress {
@@ -2809,6 +2761,7 @@
 <span class="kw">use </span>rusqlite::{ToSql};
 <span class="kw">use </span>rusqlite::types::{ToSqlOutput,FromSql};
 <span class="kw">use </span><span class="kw">crate</span>::database::TypedStatement;
+<span class="kw">use </span><span class="kw">crate</span>::schemas::{Field,ColumnWriter};
 
 <span class="doccomment">/// A type which may be packed to binary.
 ///
@@ -2899,6 +2852,24 @@
 	</span>Strref,
 	Rowid,
 }
+<span class="kw">impl </span>FieldType {
+	<span class="kw">pub const fn </span>affinity(<span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str {
+		<span class="kw">match </span><span class="self">self </span>{
+			<span class="self">Self</span>::Rowid |
+			<span class="self">Self</span>::Integer | <span class="self">Self</span>::Strref =&gt; <span class="string">r#&quot;integer default 0&quot;#</span>,
+			<span class="self">Self</span>::Text | <span class="self">Self</span>::Resref =&gt; <span class="string">r#&quot;text default &quot;&quot;&quot;#</span>,
+		}
+	}
+	<span class="kw">pub const fn </span>to_lua(<span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str {
+		<span class="kw">match </span><span class="self">self </span>{
+			FieldType::Integer =&gt; <span class="string">&quot;integer&quot;</span>,
+			FieldType::Text =&gt; <span class="string">&quot;text&quot;</span>,
+			FieldType::Resref =&gt; <span class="string">&quot;resref&quot;</span>,
+			FieldType::Strref =&gt; <span class="string">&quot;strref&quot;</span>,
+			FieldType::Rowid =&gt; <span class="string">&quot;auto&quot;</span>,
+		}
+	}
+}
 <span class="doccomment">/// A leaf SQL type: this can be converted from, to SQL and knows its own
 /// affinity.
 </span><span class="kw">pub trait </span>SqlLeaf: FromSql + ToSql {
@@ -2943,8 +2914,8 @@
 	</span><span class="doccomment">/// Converts this resource to a struct implementing
 	/// [`rusqlite::Params`], allowing it to be passed to a
 	/// [`rusqlite::Statement`].
-	</span><span class="kw">fn </span>as_params(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;rusqlite::ParamsFromIter&lt;SqlRowIterator&lt;<span class="lifetime">&#39;_</span>,<span class="self">Self</span>&gt;&gt; {
-		rusqlite::params_from_iter(SqlRowIterator(<span class="number">0</span>, <span class="self">self</span>))
+	</span><span class="kw">fn </span>as_params(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;rusqlite::ParamsFromIter&lt;ContentIterator&lt;<span class="lifetime">&#39;_</span>,<span class="self">Self</span>&gt;&gt; {
+		rusqlite::params_from_iter(ContentIterator(<span class="number">0</span>, <span class="self">self</span>))
 	}
 	<span class="doccomment">/// Reads a whole [`rusqlite::Row`] into a struct.
 	</span><span class="kw">fn </span>from_row(row: <span class="kw-2">&amp;</span>rusqlite::Row&lt;<span class="lifetime">&#39;_</span>&gt;,)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
@@ -2953,16 +2924,13 @@
 	<span class="doccomment">/// Returns the name of the `i`-th field, as a string.
 	</span><span class="kw">fn </span>fieldname(i: usize)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str { <span class="self">Self</span>::fieldname_ctx(<span class="string">&quot;&quot;</span>, i) }
 	<span class="doccomment">/// Return the `i`-th element of schema
-	</span><span class="kw">fn </span>field_info(i: usize)-&gt;<span class="kw">crate</span>::schemas::Field {
-		<span class="kw">crate</span>::schemas::Field { fname: <span class="self">Self</span>::fieldname(i),
+	</span><span class="kw">fn </span>field(i: usize)-&gt;Field {
+		Field { fname: <span class="self">Self</span>::fieldname(i),
 			ftype: <span class="self">Self</span>::fieldtype(i), extra: <span class="self">Self</span>::field_create_text(i) }
 	}
-	<span class="doccomment">/// Returns the schema: an iterator returning (fieldname, fieldtype).
-	</span><span class="kw">fn </span>schema_itr()-&gt;SchemaIterator&lt;<span class="self">Self</span>&gt; { SchemaIterator(<span class="number">0</span>, PhantomData) }
-	<span class="kw">fn </span>select_sql(n1: <span class="kw">impl </span>Display, n2: <span class="kw">impl </span>Display, condition: <span class="kw">impl </span>Display)-&gt;String {
-		<span class="kw">let </span>v = <span class="self">Self</span>::schema_itr().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-		<span class="macro">format!</span>(<span class="string">r#&quot;select {cols} from &quot;{n1}{n2}&quot; {condition}&quot;#</span>,
-			cols = <span class="kw">crate</span>::schemas::Columns(<span class="kw-2">&amp;</span>v, NullDisplay()))
+	<span class="doccomment">/// Returns the set of fields, as a vector.
+	</span><span class="kw">fn </span>fields()-&gt;Vec&lt;Field&gt; {
+		(<span class="number">0</span>..<span class="self">Self</span>::WIDTH).map(<span class="self">Self</span>::field).collect()
 	}
 	<span class="doccomment">/// The select Statement for an object.
 	///
@@ -2977,8 +2945,8 @@
 	/// This returns a [`Result&lt;TypedStatement&gt;`]: it is possible to iterate
 	/// over the result and recover structures of the original type.
 	</span><span class="kw">fn </span>select_query_gen(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, n1: <span class="kw">impl </span>Display, n2: <span class="kw">impl </span>Display, cond: <span class="kw">impl </span>Display)-&gt;<span class="prelude-ty">Result</span>&lt;TypedStatement&lt;<span class="lifetime">&#39;_</span>,<span class="self">Self</span>&gt;&gt; {
-		<span class="kw">let </span>s = <span class="self">Self</span>::select_sql(n1, n2, cond);
-		<span class="prelude-val">Ok</span>(TypedStatement::new(db.prepare(<span class="kw-2">&amp;</span>s)<span class="question-mark">?</span>))
+		<span class="kw">let </span>t = <span class="self">Self</span>::fields().cols().select_sql(n1, n2, cond);
+		<span class="prelude-val">Ok</span>(TypedStatement::new(db.prepare(<span class="kw-2">&amp;</span>t)<span class="question-mark">?</span>))
 	}
 }
 <span class="kw">impl</span>&lt;T: SqlLeaf&gt; SqlRow <span class="kw">for </span>T {
@@ -2997,9 +2965,12 @@
 	<span class="kw">fn </span>fieldname_ctx(ctx: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str, _i: usize)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str { ctx }
 	<span class="kw">fn </span>primary_index()-&gt;<span class="prelude-ty">Option</span>&lt;usize&gt; { <span class="prelude-val">None </span>}
 }
-<span class="doccomment">/// An iterator over all fields of a [`SqlRow`].
-</span><span class="kw">pub struct </span>SqlRowIterator&lt;<span class="lifetime">&#39;a</span>,T: SqlRow&gt; (usize, <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>T);
-<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>,T: SqlRow&gt; Iterator <span class="kw">for </span>SqlRowIterator&lt;<span class="lifetime">&#39;a</span>,T&gt; {
+
+<span class="doccomment">/// An iterator over all content fields of a [`SqlRow`].
+///
+/// This iterates over the content of a struct.
+</span><span class="kw">pub struct </span>ContentIterator&lt;<span class="lifetime">&#39;a</span>,T: SqlRow&gt; (usize, <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>T);
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>,T: SqlRow&gt; Iterator <span class="kw">for </span>ContentIterator&lt;<span class="lifetime">&#39;a</span>,T&gt; {
 	<span class="kw">type </span>Item = ToSqlOutput&lt;<span class="lifetime">&#39;a</span>&gt;;
 	<span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
 		<span class="kw">if </span><span class="self">self</span>.<span class="number">0 </span>&gt;= T::WIDTH { <span class="kw">return </span><span class="prelude-val">None </span>}
@@ -3008,29 +2979,10 @@
 		<span class="prelude-val">Some</span>(f)
 	}
 }
-<span class="kw">impl</span>&lt;T: SqlRow&gt; ExactSizeIterator <span class="kw">for </span>SqlRowIterator&lt;<span class="lifetime">&#39;_</span>,T&gt; {
+<span class="kw">impl</span>&lt;T: SqlRow&gt; ExactSizeIterator <span class="kw">for </span>ContentIterator&lt;<span class="lifetime">&#39;_</span>,T&gt; {
 	<span class="kw">fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;usize { T::WIDTH }
 }
-
-<span class="comment">// TODO: move everything about SchemaIterator to a new function.
-</span><span class="doccomment">/// An iterator over the [`SqlRow`] schema.
-</span><span class="kw">pub struct </span>SchemaIterator&lt;T: SqlRow&gt;(usize, PhantomData&lt;T&gt;);
-<span class="kw">impl</span>&lt;T: SqlRow&gt; Iterator <span class="kw">for </span>SchemaIterator&lt;T&gt; {
-	<span class="kw">type </span>Item = <span class="kw">crate</span>::schemas::Field;
-	<span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
-		<span class="kw">if </span><span class="self">self</span>.<span class="number">0 </span>&gt;= T::WIDTH { <span class="kw">return </span><span class="prelude-val">None </span>}
-		<span class="kw">let </span>f = T::field_info(<span class="self">self</span>.<span class="number">0</span>);
-		<span class="self">self</span>.<span class="number">0</span>+= <span class="number">1</span>;
-		<span class="prelude-val">Some</span>(f)
-	}
-}
-<span class="kw">impl</span>&lt;T: SqlRow&gt; ExactSizeIterator <span class="kw">for </span>SchemaIterator&lt;T&gt; {
-	<span class="kw">fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;usize { T::WIDTH }
-}
-
-<span class="doccomment">/// A trivial wrapper around a value.
-/// `S` is a flag which decides whether `SqlRow` is pass-through or
-/// ignored, and likewise for `P` and `Pack`.
+<span class="doccomment">/// A newtype which is pass-through for SQL and blocking for [`Pack`].
 </span><span class="attr">#[derive(Newtype)]
 </span><span class="kw">pub struct </span>NotPacked&lt;T&gt;(T);
 <span class="kw">impl</span>&lt;T: Default&gt; Pack <span class="kw">for </span>NotPacked&lt;T&gt; {
@@ -3049,8 +3001,8 @@
 	<span class="kw">fn </span>fieldtype(i: usize)-&gt;FieldType { T::fieldtype(i) }
 	<span class="kw">fn </span>primary_index()-&gt;<span class="prelude-ty">Option</span>&lt;usize&gt; { T::primary_index() }
 }
-
-<span class="attr">#[derive(Newtype,Pack)]
+<span class="doccomment">/// A wrapper which is pass-through for [`Pack`] and blocking for [`SqlRow`].
+</span><span class="attr">#[derive(Newtype,Pack)]
 </span><span class="kw">pub struct </span>NoSql&lt;T&gt;(T);
 <span class="kw">impl</span>&lt;T: Default&gt; SqlRow <span class="kw">for </span>NoSql&lt;T&gt; {
 	<span class="kw">const </span>WIDTH: usize = <span class="number">0</span>;
@@ -3074,10 +3026,7 @@
 	<span class="kw">where </span>T: std::ops::AddAssign&lt;I&gt; {
 	<span class="kw">fn </span>add_assign(<span class="kw-2">&amp;mut </span><span class="self">self</span>, rhs: I) { <span class="self">self</span>.<span class="number">0</span>.add_assign(rhs) }
 }
-<span class="comment">// pub type NoSql&lt;T&gt; = Wrapper&lt;T,false,true&gt;;
-// pub type NotPacked&lt;T&gt; = Wrapper&lt;T,true,false&gt;;
-
-</span>} <span class="comment">// mod sqltypes
+} <span class="comment">// mod struct_io
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>staticstrings {
 <span class="doccomment">//! Fixed-length string used as resource identifier.
 //! 
@@ -3249,8 +3198,6 @@
 <span class="kw">use </span>io::BufReader;
 
 <span class="kw">use </span><span class="kw">crate</span>::progress::{Progress};
-<span class="kw">use </span><span class="kw">crate</span>::struct_io::{FieldType};
-<span class="kw">use </span><span class="kw">crate</span>::schemas::{SqlType};
 <span class="kw">use </span><span class="kw">crate</span>::staticstrings::{StaticString};
 
 <span class="comment">// I. Basic types: StaticString, Resref, Strref etc.
@@ -3281,7 +3228,6 @@
 	}
 	<span class="kw">fn </span>pack(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Write)-&gt;io::Result&lt;()&gt; { <span class="self">self</span>.name.pack(f) }
 }
-<span class="kw">impl </span>SqlType <span class="kw">for </span>Resref { <span class="kw">const </span>SQL_TYPE: FieldType = FieldType::Resref; }
 <span class="kw">impl </span>ToSql <span class="kw">for </span>Resref {
 	<span class="kw">fn </span>to_sql(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;rusqlite::Result&lt;rusqlite::types::ToSqlOutput&lt;<span class="lifetime">&#39;_</span>&gt;&gt; { <span class="self">self</span>.name.as_ref().to_sql() }
 }
@@ -3313,9 +3259,6 @@
 	<span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>f: <span class="kw-2">&amp;mut </span>Formatter&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;std::result::Result&lt;(),fmt::Error&gt;{
 		<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>f, <span class="string">&quot;@{}&quot;</span>, <span class="self">self</span>.value)
 	}
-}
-<span class="kw">impl </span>SqlType <span class="kw">for </span>Strref {
-	<span class="kw">const </span>SQL_TYPE: FieldType = FieldType::Strref;
 }
 <span class="kw">impl </span>ToSql <span class="kw">for </span>Strref {
 	<span class="kw">fn </span>to_sql(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;rusqlite::Result&lt;rusqlite::types::ToSqlOutput&lt;<span class="lifetime">&#39;_</span>&gt;&gt; { <span class="self">self</span>.value.to_sql() }
@@ -3685,58 +3628,8 @@
 //! This mod groups everything which has access to the content of the
 //! [`Schema0`] struct.
 </span><span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
-<span class="kw">use </span><span class="kw">crate</span>::resources::{RESOURCES};
 <span class="kw">use </span><span class="kw">crate</span>::gamefiles::Restype;
-<span class="kw">use </span><span class="kw">crate</span>::struct_io::{SqlRow,FieldType};
-<span class="kw">use </span><span class="kw">crate</span>::database::TypedStatement;
-
-<span class="doccomment">/// One of the resource tables stored in the database.
-</span><span class="kw">pub trait </span>Resource: SqlRow {
-	<span class="kw">fn </span>schema()-&gt;Schema;
-	<span class="doccomment">/// Particular case of SELECT statement used for saving to game files.
-	</span><span class="kw">fn </span>select_query(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, s: <span class="kw">impl </span>Display)-&gt;<span class="prelude-ty">Result</span>&lt;TypedStatement&lt;<span class="lifetime">&#39;_</span>, <span class="self">Self</span>&gt;&gt; {
-		<span class="self">Self</span>::select_query_gen(db, <span class="string">&quot;save_&quot;</span>, <span class="self">Self</span>::schema().name, s)
-	}
-}
-<span class="attr">#[derive(Debug)]
-</span><span class="kw">pub enum </span>SchemaResource {
-<span class="attr">#[allow(dead_code)]
-	</span>Top { extension: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str, restype: Restype, },
-<span class="attr">#[allow(dead_code)]
-	</span>Sub { parent: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str, resref_index: usize, },
-}
-
-<span class="kw">impl </span>FieldType {
-	<span class="kw">pub const fn </span>affinity(<span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str {
-		<span class="kw">match </span><span class="self">self </span>{
-			<span class="self">Self</span>::Rowid |
-			<span class="self">Self</span>::Integer | <span class="self">Self</span>::Strref =&gt; <span class="string">r#&quot;integer default 0&quot;#</span>,
-			<span class="self">Self</span>::Text | <span class="self">Self</span>::Resref =&gt; <span class="string">r#&quot;text default &quot;&quot;&quot;#</span>,
-		}
-	}
-	<span class="kw">pub const fn </span>to_lua(<span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str {
-		<span class="kw">match </span><span class="self">self </span>{
-			FieldType::Integer =&gt; <span class="string">&quot;integer&quot;</span>,
-			FieldType::Text =&gt; <span class="string">&quot;text&quot;</span>,
-			FieldType::Resref =&gt; <span class="string">&quot;resref&quot;</span>,
-			FieldType::Strref =&gt; <span class="string">&quot;strref&quot;</span>,
-			FieldType::Rowid =&gt; <span class="string">&quot;auto&quot;</span>,
-		}
-	}
-}
-<span class="doccomment">/// A correspondence between (some) Rust types and SQL types.
-</span><span class="kw">pub trait </span>SqlType { <span class="kw">const </span>SQL_TYPE: FieldType; }
-<span class="kw">impl</span>&lt;T&gt; SqlType <span class="kw">for </span><span class="prelude-ty">Option</span>&lt;T&gt; <span class="kw">where </span>T: SqlType {
-	<span class="kw">const </span>SQL_TYPE: FieldType = T::SQL_TYPE;
-}
-<span class="kw">impl </span>SqlType <span class="kw">for </span><span class="kw-2">&amp;</span>str { <span class="kw">const </span>SQL_TYPE: FieldType = FieldType::Text; }
-<span class="kw">impl </span>SqlType <span class="kw">for </span>String { <span class="kw">const </span>SQL_TYPE: FieldType = FieldType::Text; }
-<span class="macro">macro_rules! </span>sqltype_int {
-	($(<span class="macro-nonterminal">$T</span>:ty),<span class="kw-2">*</span>) =&gt; { $(<span class="kw">impl </span>SqlType <span class="kw">for </span><span class="macro-nonterminal">$T </span>{
-		<span class="kw">const </span>SQL_TYPE: FieldType = FieldType::Integer;
-	})* }
-}
-<span class="macro">sqltype_int!</span>{i8,i16,i32,i64,u8,u16,u32,u64,usize}
+<span class="kw">use </span><span class="kw">crate</span>::struct_io::{FieldType};
 
 <span class="doccomment">/// Description of a field in a game resource.
 </span><span class="attr">#[derive(Debug)]
@@ -3748,17 +3641,61 @@
 	<span class="doccomment">/// Any extra information given to SQLite when creating the table.
 	</span><span class="kw">pub </span>extra: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str,
 }
-<span class="kw">impl </span>Field {
-	<span class="kw">pub const fn </span>new&lt;T: SqlType&gt;(fname: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str, extra: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str)-&gt;<span class="self">Self </span>{
-		<span class="self">Self </span>{ fname, ftype: T::SQL_TYPE, extra }
-	}
-}
-<span class="doccomment">/// This is a useful help for writing SQL statements.
+<span class="doccomment">/// Displays the quoted field name.
+/// This is a useful help for writing SQL statements.
 </span><span class="kw">impl </span>Display <span class="kw">for </span>Field {
 	<span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>Formatter&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;fmt::Result {
 		<span class="macro">write!</span>(f, <span class="string">r#&quot;&quot;{n}&quot;&quot;#</span>, n = <span class="self">self</span>.fname)
 	}
 }
+
+<span class="kw">pub trait </span>ColumnWriter {
+	<span class="kw">type </span>Elt: Display;
+	<span class="kw">type </span>Iter: ExactSizeIterator&lt;Item=<span class="self">Self</span>::Elt&gt;;
+	<span class="kw">fn </span>as_iter(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="self">Self</span>::Iter;
+	<span class="kw">fn </span>prefixed&lt;P: Display&gt;(<span class="self">self</span>, prefix: P)-&gt;ColumnPrefixed&lt;<span class="self">Self</span>, P&gt;
+	<span class="kw">where </span><span class="self">Self</span>: Sized { ColumnPrefixed(<span class="self">self</span>, prefix) }
+	<span class="kw">fn </span>cols(<span class="self">self</span>)-&gt;ColumnPrefixed&lt;<span class="self">Self</span>, NullDisplay&gt; <span class="kw">where </span><span class="self">Self</span>: Sized {
+		ColumnPrefixed(<span class="self">self</span>, NullDisplay())
+	}
+	<span class="kw">fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;usize { <span class="self">self</span>.as_iter().len() }
+}
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>&gt; ColumnWriter <span class="kw">for </span><span class="kw-2">&amp;</span><span class="lifetime">&#39;a</span>[Field] {
+	<span class="kw">type </span>Elt = <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>Field;
+	<span class="kw">type </span>Iter = std::slice::Iter&lt;<span class="lifetime">&#39;a</span>,Field&gt;;
+	<span class="kw">fn </span>as_iter(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="self">Self</span>::Iter { <span class="self">self</span>.iter() }
+}
+<span class="doccomment">/// An utility type to write column headers
+/// joined by commas and with a possible prefix (used for &quot;new.&quot;).
+</span><span class="kw">pub struct </span>ColumnPrefixed&lt;W,P&gt;(W,P);
+<span class="kw">impl</span>&lt;W: ColumnWriter, P: Display&gt; Display <span class="kw">for </span>ColumnPrefixed&lt;W, P&gt; {
+	<span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>Formatter&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;fmt::Result {
+		<span class="kw">let </span><span class="kw-2">mut </span>isfirst = <span class="bool-val">true</span>;
+		<span class="kw">for </span>element <span class="kw">in </span><span class="self">self</span>.<span class="number">0</span>.as_iter() {
+			<span class="kw">if </span>isfirst { isfirst = <span class="bool-val">false</span>; } <span class="kw">else </span>{ <span class="macro">write!</span>(f, <span class="string">&quot;,&quot;</span>)<span class="question-mark">?</span>; }
+			<span class="macro">write!</span>(f, <span class="string">r#&quot; {prefix}{element}&quot;#</span>, prefix = <span class="self">self</span>.<span class="number">1</span>)<span class="question-mark">?</span>;
+		}
+		<span class="prelude-val">Ok</span>(())
+	}
+}
+<span class="kw">impl</span>&lt;W: ColumnWriter, T: Display&gt; ColumnPrefixed&lt;W,T&gt; {
+	<span class="kw">pub fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;usize { <span class="self">self</span>.<span class="number">0</span>.len() }
+	<span class="doccomment">/// Returns the SQL select statement for these columns, as a String.
+	</span><span class="kw">pub fn </span>select_sql(<span class="self">self</span>, n1: <span class="kw">impl </span>Display, n2: <span class="kw">impl </span>Display, condition: <span class="kw">impl </span>Display)-&gt;String {
+		<span class="macro">format!</span>(<span class="string">r#&quot;select {self} from &quot;{n1}{n2}&quot; {condition}&quot;#</span>)
+	}
+	<span class="doccomment">/// Returns the SQL insert statement for these columns, as a String.
+	</span><span class="kw">pub fn </span>insert_sql(<span class="self">self</span>, or: <span class="kw">impl </span>Display, n1: <span class="kw">impl </span>Display, n2: <span class="kw">impl </span>Display)-&gt;String {
+		<span class="kw">let </span><span class="kw-2">mut </span>s = <span class="macro">format!</span>(<span class="string">&quot;insert {or} into \&quot;{n1}{n2}\&quot; ({self}) values (&quot;</span>);
+		<span class="kw">for </span>c <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.len()  {
+			<span class="kw">if </span>c &gt; <span class="number">0 </span>{ s.push(<span class="string">&#39;,&#39;</span>); }
+			s.push(<span class="string">&#39;?&#39;</span>);
+		}
+		s.push(<span class="string">&#39;)&#39;</span>);
+		s
+	}
+}
+
 <span class="doccomment">/// Description of several fields.
 ///
 /// This convenience type does several things for us, all related to the
@@ -3777,15 +3714,6 @@
 	<span class="kw">type </span>IntoIter = std::slice::Iter&lt;<span class="lifetime">&#39;a</span>,Field&gt;;
 	<span class="kw">fn </span>into_iter(<span class="self">self</span>)-&gt;<span class="self">Self</span>::IntoIter { <span class="self">self</span>.<span class="number">0</span>.iter() }
 }
-<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>,T&gt; Columns&lt;<span class="lifetime">&#39;a</span>, T&gt; {
-	<span class="doccomment">/// The length of this particular column set.
-	/// We need this since it is in general different from schema length.
-	</span><span class="kw">pub fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;usize { <span class="self">self</span>.<span class="number">0</span>.len() }
-	<span class="doccomment">/// Modifies a set of column headers by prepending a prefix, e.g. &quot;new.&quot;
-	</span><span class="kw">pub fn </span>with_prefix&lt;P: Display&gt;(<span class="self">self</span>, prefix: P)-&gt;Columns&lt;<span class="lifetime">&#39;a</span>, P&gt; {
-		Columns(<span class="self">self</span>.<span class="number">0</span>, prefix)
-	}
-}
 <span class="kw">impl</span>&lt;T: Display&gt; Display <span class="kw">for </span>Columns&lt;<span class="lifetime">&#39;_</span>,T&gt; {
 	<span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>Formatter&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;fmt::Result {
 		<span class="kw">let </span><span class="kw-2">mut </span>isfirst = <span class="bool-val">true</span>;
@@ -3796,6 +3724,282 @@
 		<span class="prelude-val">Ok</span>(())
 	}
 }
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>,T&gt; Columns&lt;<span class="lifetime">&#39;a</span>, T&gt; {
+	<span class="kw">pub fn </span>from(slice: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a</span>[Field], prefix: T)-&gt;<span class="self">Self </span>{ <span class="self">Self</span>(slice, prefix) }
+	<span class="doccomment">/// The length of this particular column set.
+	/// We need this since it is in general different from schema length.
+	</span><span class="kw">pub fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;usize { <span class="self">self</span>.<span class="number">0</span>.len() }
+	<span class="doccomment">/// Modifies a set of column headers by prepending a prefix, e.g. &quot;new.&quot;
+	</span><span class="kw">pub fn </span>with_prefix&lt;P: Display&gt;(<span class="self">self</span>, prefix: P)-&gt;Columns&lt;<span class="lifetime">&#39;a</span>, P&gt; {
+		Columns(<span class="self">self</span>.<span class="number">0</span>, prefix)
+	}
+}
+<span class="kw">impl</span>&lt;T: Display&gt; Columns&lt;<span class="lifetime">&#39;_</span>,T&gt; {
+	<span class="doccomment">/// Returns the SQL select statement for these columns, as a String.
+	</span><span class="kw">pub fn </span>select_sql(<span class="self">self</span>, n1: <span class="kw">impl </span>Display, n2: <span class="kw">impl </span>Display, condition: <span class="kw">impl </span>Display)-&gt;String {
+		<span class="macro">format!</span>(<span class="string">r#&quot;select {self} from &quot;{n1}{n2}&quot; {condition}&quot;#</span>)
+	}
+}
+
+<span class="doccomment">/// The identifier of the table for a schema.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">pub enum </span>SchemaResource {
+<span class="attr">#[allow(dead_code)]
+	</span>Top { extension: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str, restype: Restype, },
+<span class="attr">#[allow(dead_code)]
+	</span>Sub { parent: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str, resref_index: usize, },
+}
+
+<span class="doccomment">/// The full database description of a game resource.
+///
+/// This contains all relevant information to fully define a resource
+/// on the SQL side.
+///
+/// In practice there exists exactly one [`Schema`] instance per
+/// resource, and it is compiled by the [`Resource`] derive macro.
+///
+/// The structure of the schema is always as follows:
+/// 1. **Payload fields.** These are the fields present in game files.
+/// 2. **Context fields.** These fields identify the position of the
+///    resource in game fields.
+/// In turn, the context fields are always:
+///  - for top-level resources: only the associated resref.
+///  - for sub-resources: resref is the first field and the last field is
+///    `rowid` alias. (In particular there are always several context
+///    fields).
+/// In all cases, the primary key is guaranteed to be the last field,
+/// while context starts at the resref fields.
+/// This structure allows handling context as a (contiguous) slice of fields;
+/// see [`Schema::iter`], [`Schema::columns`].
+///
+/// A few fields in this struct (`extension`, etc.)
+/// are used only for top-level resources.
+/// Doing this saves us a bit of code (separating top-level resources as
+/// their own type + writing ad-hoc macros etc.). The most harm it does
+/// is (a) storing a few bytes of useless memory in the executable,
+/// and (b) possibly inserting a few always-empty tables in the database
+/// (we try to avoid this however).
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>Schema {
+	<span class="kw">pub </span>name: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str,
+	<span class="kw">pub </span>resource: SchemaResource,
+	<span class="kw">pub </span>fields: Vec&lt;Field&gt;,
+}
+<span class="kw">impl </span>Display <span class="kw">for </span>Schema {
+	<span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>Formatter&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;fmt::Result { f.write_str(<span class="self">self</span>.name) }
+}
+<span class="kw">impl </span>Schema {
+	<span class="doccomment">/// Returns the index of the resref field.
+	</span><span class="kw">fn </span>resref_idx(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;usize {
+		<span class="kw">match </span><span class="self">self</span>.resource {
+			SchemaResource::Top { .. } =&gt; <span class="self">self</span>.fields.len()-<span class="number">1</span>,
+			SchemaResource::Sub { resref_index, .. } =&gt; resref_index,
+		}
+	}
+	<span class="doccomment">/// Returns the name of the table containing the parent resref.
+	</span><span class="kw">pub fn </span>parent_table(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str {
+		<span class="kw">match </span><span class="self">self</span>.resource {
+			SchemaResource::Top { .. } =&gt; <span class="self">self</span>.name,
+			SchemaResource::Sub { parent, .. } =&gt; parent,
+		}
+	}
+	<span class="doccomment">/// Returns the Restype, or panics if this is not a top-level resource.
+	</span><span class="kw">pub fn </span>restype(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;Restype {
+		<span class="kw">match </span><span class="self">self</span>.resource {
+			SchemaResource::Top { restype, .. } =&gt; restype,
+			<span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">&quot;called restype on a resource which is not toplevel&quot;</span>),
+		}
+	}
+	<span class="doccomment">/// Returns the name of the field containing the resref for this
+	/// resource.
+	</span><span class="kw">pub fn </span>resref(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str { <span class="self">self</span>.fields[<span class="self">self</span>.resref_idx()].fname }
+	<span class="doccomment">/// Returns the name of the primary key.
+	</span><span class="kw">pub fn </span>primary(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str { <span class="self">self</span>.fields[<span class="self">self</span>.fields.len()-<span class="number">1</span>].fname }
+	<span class="doccomment">/// Returns the SQL statement creating a given table with this schema.
+	///
+	/// The parameters are the table name (not necessarily matching the
+	/// name of the schema) and the string defining extra columns, if any.
+	</span><span class="kw">pub fn </span>create_table(<span class="kw-2">&amp;</span><span class="self">self</span>, name: <span class="kw">impl </span>Display, more: <span class="kw">impl </span>Display)-&gt;String {
+		<span class="kw">let </span><span class="kw-2">mut </span>s = <span class="macro">format!</span>(<span class="string">&quot;create table \&quot;{name}\&quot; (&quot;</span>);
+		<span class="kw">let </span><span class="kw-2">mut </span>isfirst = <span class="bool-val">true</span>;
+		<span class="kw">for </span>Field { fname, ftype, extra, .. } <span class="kw">in </span><span class="self">self</span>.fields.iter() {
+			<span class="kw">if </span>isfirst { isfirst = <span class="bool-val">false</span>; }
+			<span class="kw">else </span>{ s.push(<span class="string">&#39;,&#39;</span>); }
+			<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>s, <span class="string">&quot;\n \&quot;{fname}\&quot; {} {extra}&quot;</span>, ftype.affinity());
+		}
+		<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>s, <span class="string">&quot;{more})&quot;</span>);
+		s
+	}
+	<span class="doccomment">/// Returns the SQL statement creating the main view for this schema.
+	</span><span class="kw">fn </span>create_main_view(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;String {
+		<span class="kw">let </span>Schema { name, .. } = <span class="self">self</span>;
+		<span class="kw">let </span>primary = <span class="self">self</span>.primary();
+		<span class="kw">let </span><span class="kw-2">mut </span>view = <span class="macro">format!</span>(<span class="string">r#&quot;create view &quot;{name}&quot; as
+	with &quot;u&quot; as (select {f} from &quot;load_{name}&quot; union select {f} from &quot;add_{name}&quot;) select &quot;#</span>, f = <span class="self">self</span>.fields.cols());
+		<span class="kw">for </span>Field {fname, .. } <span class="kw">in </span><span class="self">self</span>.fields[..<span class="self">self</span>.fields.len()-<span class="number">1</span>].iter() {
+			<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>view, <span class="string">r#&quot;ifnull((select &quot;value&quot; from &quot;edit_{name}&quot; where &quot;resource&quot;=&quot;{primary}&quot; and &quot;field&quot;=&#39;{fname}&#39; order by rowid desc limit 1), &quot;{fname}&quot;) as &quot;{fname}&quot;, &quot;#</span>);
+		}
+		<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>view, <span class="string">r#&quot;&quot;{primary}&quot; from &quot;u&quot;&quot;#</span>);
+		view
+	}
+	<span class="doccomment">/// Returns the SQL for creating the output view of a resource.
+	</span><span class="kw">fn </span>create_output_view(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;String {
+		<span class="kw">let </span>parent_key = <span class="self">self</span>.resref();
+		<span class="kw">let </span><span class="kw-2">mut </span>select = <span class="macro">format!</span>(<span class="string">r#&quot;create view &quot;save_{self}&quot; as select&quot;#</span>);
+		<span class="kw">let </span><span class="kw-2">mut </span>source = <span class="macro">format!</span>(<span class="string">r#&quot;
+from &quot;{self}&quot; as &quot;a&quot;&quot;#</span>);
+		<span class="kw">for </span>Field { fname: f, ftype, .. } <span class="kw">in </span><span class="self">self</span>.fields.iter() {
+			<span class="kw">match </span>ftype {
+				FieldType::Resref =&gt; {
+					<span class="kw">let </span>a = <span class="macro">format!</span>(<span class="string">r#&quot;&quot;a&quot;.&quot;{f}&quot;&quot;#</span>);
+					<span class="kw">let </span>b = <span class="macro">format!</span>(<span class="string">r#&quot;&quot;b_{f}&quot;&quot;#</span>);
+					<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>select, <span class="string">r#&quot;
+case when {a} in (select &quot;resref&quot; from &quot;resref_orig&quot;) then {a} else ifnull({b}.&quot;resref&quot;, &#39;&#39;) end as &quot;{f}&quot;,&quot;#</span>);
+					<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>source, <span class="string">r#&quot;
+left join &quot;resref_dict&quot; as {b} on {a} = {b}.&quot;key&quot;&quot;#</span>);
+				},
+				FieldType::Strref =&gt; {
+					<span class="kw">let </span>a = <span class="macro">format!</span>(<span class="string">r#&quot;&quot;a&quot;.&quot;{f}&quot;&quot;#</span>);
+					<span class="kw">let </span>b = <span class="macro">format!</span>(<span class="string">r#&quot;&quot;b_{f}&quot;&quot;#</span>);
+					<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>select, <span class="string">r#&quot;
+case when typeof({a}) == &#39;integer&#39; then {a} else ifnull({b}.&quot;strref&quot;, 0) end as &quot;{f}&quot;,&quot;#</span>);
+					<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>source, <span class="string">r#&quot;
+left join &quot;strref_dict&quot; as {b} on {a} = {b}.&quot;native&quot;&quot;#</span>);
+				},
+				<span class="kw">_ </span>=&gt; <span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>select, <span class="string">r#&quot;&quot;a&quot;.&quot;{f}&quot;,&quot;#</span>),
+			}
+		}
+		<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>select, <span class="string">r#&quot;&quot;a&quot;.&quot;{parent_key}&quot; as &quot;key&quot;{source}&quot;#</span>);
+		select
+	}
+	<span class="doccomment">/// Creates all tables and views in the database associated with a
+	/// given resource.
+	///
+	/// The tables are as follows:
+	/// - `load_{name}`: data read from game files.
+	/// - `add_{name}`: new data inserted by mods.
+	/// - `edit_{name}`: data modified by mods.
+	/// The views are:
+	/// - `{name}`: the main view on which edits are done by mods (and
+	/// propagated to `add_{name}` or `edit_{name}` by triggers as needed).
+	/// - `save_{name}`: the view used to save new or modified values to
+	/// game files.
+	</span><span class="kw">pub fn </span>create_tables_and_views&lt;T&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw">impl </span>Fn(String)-&gt;<span class="prelude-ty">Result</span>&lt;T&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
+		<span class="kw">let </span>name = <span class="self">self</span>.name;
+		<span class="kw">let </span>parent_key = <span class="self">self</span>.resref();
+		<span class="kw">let </span>parent_table = <span class="self">self</span>.parent_table();
+		<span class="kw">let </span>primary = <span class="self">self</span>.primary();
+
+		<span class="comment">// read-only table of initial resources:
+		</span>f(<span class="self">self</span>.create_table(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">&quot;load_{name}&quot;</span>), <span class="string">&quot;&quot;</span>))<span class="question-mark">?</span>;
+		<span class="comment">// table of resources inserted by mods:
+		</span>f(<span class="self">self</span>.create_table(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">&quot;add_{name}&quot;</span>), <span class="string">r#&quot;, &quot;source&quot; text&quot;#</span>))<span class="question-mark">?</span>;
+		<span class="comment">// table of fields edited by mods:
+		</span>f(<span class="macro">format!</span>(<span class="string">r#&quot;create table &quot;edit_{name}&quot; (&quot;source&quot; text, &quot;resource&quot; text, &quot;field&quot; text, &quot;value&quot;)&quot;#</span>))<span class="question-mark">?</span>;
+		f(<span class="self">self</span>.create_main_view())<span class="question-mark">?</span>;
+		f(<span class="self">self</span>.create_output_view())<span class="question-mark">?</span>;
+		<span class="kw">let </span>dirtytable = <span class="macro">format!</span>(<span class="string">&quot;dirty_{parent_table}&quot;</span>);
+		<span class="kw">if let </span>SchemaResource::Top { .. } = <span class="self">self</span>.resource {
+			<span class="comment">// only for top-level resource: create the dirty and orphan tables
+			</span>f(<span class="macro">format!</span>(<span class="string">r#&quot;create table &quot;{dirtytable}&quot; (&quot;name&quot; text primary key on conflict ignore)&quot;#</span>))<span class="question-mark">?</span>;
+			f(<span class="macro">format!</span>(<span class="string">r#&quot;create table &quot;orphan_{name}&quot; (&quot;name&quot; text primary key on conflict ignore)&quot;#</span>))<span class="question-mark">?</span>;
+			f(<span class="macro">format!</span>(<span class="string">r#&quot;create trigger &quot;orphan_{name}&quot; after delete on &quot;add_{name}&quot;
+begin
+	insert into &quot;orphan_{name}&quot; values (old.&quot;{primary}&quot;);
+end&quot;#</span>))<span class="question-mark">?</span>;
+		}
+		<span class="comment">// populate resref_dict or strref_dict as needed:
+		// There are two triggers which edit &quot;resref_dict&quot;; we build both
+		// of them from resref fields at once, by storing the text in
+		// `trans` (for update triggers) and `trans_insert` (for insert
+		// trigger).
+		</span><span class="kw">let </span><span class="kw-2">mut </span>trans_insert = String::new();
+		<span class="kw">for </span>Field {fname, ftype, ..} <span class="kw">in </span><span class="self">self</span>.fields.iter() {
+			<span class="kw">let </span>trans = <span class="kw">match </span>ftype {
+			FieldType::Resref =&gt; <span class="macro">format!</span>(
+	<span class="string">r#&quot;insert or ignore into &quot;resref_dict&quot; values (new.&quot;{fname}&quot;, null);&quot;#</span>),
+<span class="comment">// 			FieldType::Strref =&gt; format!(
+// 	r#&quot;insert or ignore into &quot;strref_dict&quot; values (new.&quot;{fname}&quot;, null);&quot;#),
+			</span><span class="kw">_ </span>=&gt; String::new()
+			};
+			trans_insert.push_str(<span class="kw-2">&amp;</span>trans);
+			f(<span class="macro">format!</span>(
+<span class="string">r#&quot;create trigger &quot;update_{name}_{fname}&quot;
+instead of update of &quot;{fname}&quot; on &quot;{name}&quot;
+begin
+	{trans}
+	insert or ignore into &quot;{dirtytable}&quot; values (new.&quot;{parent_key}&quot;);
+	insert into &quot;edit_{name}&quot; (&quot;source&quot;, &quot;resource&quot;, &quot;field&quot;, &quot;value&quot;) values
+		((select &quot;component&quot; from &quot;global&quot;), new.&quot;{primary}&quot;, &#39;{fname}&#39;,
+		new.&quot;{fname}&quot;);
+end&quot;#</span>))<span class="question-mark">?</span>;
+		}
+		f(<span class="macro">format!</span>(
+<span class="string">r#&quot;create trigger &quot;insert_{name}&quot;
+instead of insert on &quot;{name}&quot;
+begin
+	{trans_insert}
+	insert into &quot;add_{name}&quot; ({cols}) values ({newcols});
+	insert or ignore into &quot;{dirtytable}&quot; values (new.&quot;{parent_key}&quot;);
+end&quot;#</span>, cols = <span class="self">self</span>.fields.cols(), newcols = <span class="self">self</span>.fields.prefixed(<span class="string">&quot;new.&quot;</span>)))<span class="question-mark">?</span>;
+		f(<span class="macro">format!</span>(
+<span class="string">r#&quot;create trigger &quot;delete_{name}&quot;
+instead of delete on &quot;{name}&quot;
+begin
+	insert or ignore into &quot;{dirtytable}&quot; values (old.&quot;{parent_key}&quot;);
+	delete from &quot;add_{name}&quot; where &quot;{primary}&quot; = old.&quot;{primary}&quot;;
+end&quot;#</span>))<span class="question-mark">?</span>;
+		f(<span class="macro">format!</span>(
+<span class="string">r#&quot;create trigger &quot;unedit_{name}&quot;
+after delete on &quot;edit_{name}&quot;
+begin
+	insert or ignore into &quot;{dirtytable}&quot; values (old.&quot;resource&quot;);
+end&quot;#</span>))<span class="question-mark">?</span>;
+		<span class="prelude-val">Ok </span>(())
+	}
+	<span class="doccomment">/// The SQL code for inserting into a table.
+	///
+	/// This is used for both initial populating of the database from game
+	/// files and for `simod.insert`.
+	///
+	/// The `or` parameter allows calling SQL `INSERT OR IGNORE`;
+	/// this is used when initializing the database to ignore resources
+	/// which are superseded by override files.
+	</span><span class="kw">pub fn </span>insert_sql(<span class="kw-2">&amp;</span><span class="self">self</span>, or: <span class="kw">impl </span>Display, prefix: <span class="kw">impl </span>Display)-&gt;String {
+		<span class="self">self</span>.fields.cols().insert_sql(or, prefix, <span class="self">self</span>.name)
+	}
+	<span class="doccomment">/// Helper function for generating `new_strings` view.
+	</span><span class="kw">pub fn </span>append_new_strings_schema(<span class="kw-2">&amp;</span><span class="self">self</span>, w: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>fmt::Write, is_first: <span class="kw-2">&amp;mut </span>bool) {
+		<span class="kw">for </span>Field { fname, ftype, .. } <span class="kw">in </span><span class="self">self</span>.fields.iter() {
+			<span class="kw">if </span><span class="kw-2">*</span>ftype != FieldType::Strref { <span class="kw">continue </span>}
+			<span class="kw">if </span><span class="kw-2">*</span>is_first { <span class="kw-2">*</span>is_first = <span class="bool-val">false</span>; }
+			<span class="kw">else </span>{ <span class="macro">uwrite!</span>(w, <span class="string">&quot;\n\tunion &quot;</span>); }
+			<span class="comment">// the &#39;1&#39; column is a placeholder for flags:
+			</span><span class="macro">uwriteln!</span>(w, <span class="string">r#&quot;select &quot;{fname}&quot; as &quot;native&quot;, 1 as &quot;flags&quot; from &quot;add_{self}&quot;
+	union select &quot;value&quot; as &quot;native&quot;, 1 as &quot;flags&quot; from &quot;edit_{self}&quot; where &quot;field&quot;=&#39;{fname}&#39;&quot;#</span>);
+		}
+	}
+	<span class="doccomment">/// Helper function for generating `new_strings` triggers.
+	</span><span class="kw">pub fn </span>append_new_strings_trigger(<span class="kw-2">&amp;</span><span class="self">self</span>, w: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>fmt::Write) {
+		<span class="kw">let </span>resref = <span class="self">self</span>.resref();
+		<span class="kw">let </span>parent = <span class="self">self</span>.parent_table();
+		<span class="kw">let </span><span class="kw-2">mut </span>is_first_field = <span class="bool-val">true</span>;
+		<span class="kw">for </span>Field { fname, ftype, .. } <span class="kw">in </span><span class="self">self</span>.fields.iter() {
+			<span class="kw">if </span><span class="kw-2">*</span>ftype != FieldType::Strref { <span class="kw">continue </span>}
+			<span class="kw">if </span>is_first_field {
+				<span class="macro">uwrite!</span>(w, <span class="string">r#&quot;
+	insert into &quot;dirty_{parent}&quot; select &quot;{resref}&quot; from &quot;{self}&quot; where &quot;#</span>);
+				is_first_field = <span class="bool-val">false</span>;
+			}
+			<span class="kw">else </span>{ <span class="macro">uwrite!</span>(w, <span class="string">&quot; or &quot;</span>); }
+			<span class="macro">uwrite!</span>(w, <span class="string">r#&quot;&quot;{fname}&quot;=new.&quot;native&quot;&quot;#</span>);
+		}
+		<span class="kw">if </span>!is_first_field {
+			<span class="macro">uwriteln!</span>(w, <span class="string">&quot;;&quot;</span>);
+		}
+	}
+}
+
 <span class="doccomment">/// The full database description of a game resource.
 ///
 /// This contains all relevant information to fully define a resource
@@ -3948,317 +4152,6 @@
 </span><span class="doccomment">/// Convenience implem.: prints schema name.
 </span><span class="kw">impl </span>Display <span class="kw">for </span>Schema0&lt;<span class="lifetime">&#39;_</span>&gt; {
 	<span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>Formatter&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;fmt::Result { f.write_str(<span class="self">self</span>.name) }
-}
-<span class="doccomment">/// The full database description of a game resource.
-///
-/// This contains all relevant information to fully define a resource
-/// on the SQL side.
-///
-/// In practice there exists exactly one [`Schema`] instance per
-/// resource, and it is compiled by the [`Resource`] derive macro.
-///
-/// The structure of the schema is always as follows:
-/// 1. **Payload fields.** These are the fields present in game files.
-/// 2. **Context fields.** These fields identify the position of the
-///    resource in game fields.
-/// In turn, the context fields are always:
-///  - for top-level resources: only the associated resref.
-///  - for sub-resources: resref is the first field and the last field is
-///    `rowid` alias. (In particular there are always several context
-///    fields).
-/// In all cases, the primary key is guaranteed to be the last field,
-/// while context starts at the resref fields.
-/// This structure allows handling context as a (contiguous) slice of fields;
-/// see [`Schema::iter`], [`Schema::columns`].
-///
-/// A few fields in this struct (`extension`, etc.)
-/// are used only for top-level resources.
-/// Doing this saves us a bit of code (separating top-level resources as
-/// their own type + writing ad-hoc macros etc.). The most harm it does
-/// is (a) storing a few bytes of useless memory in the executable,
-/// and (b) possibly inserting a few always-empty tables in the database
-/// (we try to avoid this however).
-</span><span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>Schema {
-	<span class="kw">pub </span>name: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str,
-	<span class="kw">pub </span>resource: SchemaResource,
-	<span class="kw">pub </span>fields: Vec&lt;Field&gt;,
-}
-<span class="kw">impl </span>Display <span class="kw">for </span>Schema {
-	<span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>Formatter&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;fmt::Result { f.write_str(<span class="self">self</span>.name) }
-}
-<span class="kw">impl </span>Schema {
-	<span class="doccomment">/// Returns the index of the resref field.
-	</span><span class="kw">fn </span>resref_idx(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;usize {
-		<span class="kw">match </span><span class="self">self</span>.resource {
-			SchemaResource::Top { .. } =&gt; <span class="self">self</span>.fields.len()-<span class="number">1</span>,
-			SchemaResource::Sub { resref_index, .. } =&gt; resref_index,
-		}
-	}
-	<span class="doccomment">/// Returns the name of the table containing the parent resref.
-	</span><span class="kw">pub fn </span>parent_table(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str {
-		<span class="kw">match </span><span class="self">self</span>.resource {
-			SchemaResource::Top { .. } =&gt; <span class="self">self</span>.name,
-			SchemaResource::Sub { parent, .. } =&gt; parent,
-		}
-	}
-	<span class="doccomment">/// Returns the Restype, or panics if this is not a top-level resource.
-	</span><span class="kw">pub fn </span>restype(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;Restype {
-		<span class="kw">match </span><span class="self">self</span>.resource {
-			SchemaResource::Top { restype, .. } =&gt; restype,
-			<span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">&quot;called restype on a resource which is not toplevel&quot;</span>),
-		}
-	}
-	<span class="doccomment">/// Returns the name of the field containing the resref for this
-	/// resource.
-	</span><span class="kw">pub fn </span>resref(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str { <span class="self">self</span>.fields[<span class="self">self</span>.resref_idx()].fname }
-	<span class="doccomment">/// Returns the name of the primary key.
-	</span><span class="kw">pub fn </span>primary(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str { <span class="self">self</span>.fields[<span class="self">self</span>.fields.len()-<span class="number">1</span>].fname }
-<span class="comment">// 	/// Complete columns.
-// 	/// Returns an object implementing [`std::fmt::Display`] to write the
-// 	/// column headers for this schema in a SQL query.
-// 	pub fn columns(&amp;self)-&gt;Columns&lt;&#39;_,NullDisplay&gt; {
-// 		Columns(&amp;self.fields[..self.before_id()], NullDisplay())
-// 	}
-	</span><span class="doccomment">/// Columns of payload + context; no id.
-	///
-	/// In other words: these are the columns which can be inserted (id is
-	/// automatically computed by sqlite).
-	///
-	</span><span class="kw">pub fn </span>iter(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;Columns&lt;<span class="lifetime">&#39;_</span>,NullDisplay&gt; {
-		Columns(<span class="kw-2">&amp;</span><span class="self">self</span>.fields, NullDisplay())
-	}
-	<span class="doccomment">/// Returns the SQL statement creating a given table with this schema.
-	///
-	/// The parameters are the table name (not necessarily matching the
-	/// name of the schema) and the string defining extra columns, if any.
-	</span><span class="kw">pub fn </span>create_table(<span class="kw-2">&amp;</span><span class="self">self</span>, name: <span class="kw">impl </span>Display, more: <span class="kw">impl </span>Display)-&gt;String {
-		<span class="kw">let </span><span class="kw-2">mut </span>s = <span class="macro">format!</span>(<span class="string">&quot;create table \&quot;{name}\&quot; (&quot;</span>);
-		<span class="kw">let </span><span class="kw-2">mut </span>isfirst = <span class="bool-val">true</span>;
-		<span class="kw">for </span>Field { fname, ftype, extra, .. } <span class="kw">in </span><span class="self">self</span>.fields.iter() {
-			<span class="kw">if </span>isfirst { isfirst = <span class="bool-val">false</span>; }
-			<span class="kw">else </span>{ s.push(<span class="string">&#39;,&#39;</span>); }
-			<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>s, <span class="string">&quot;\n \&quot;{fname}\&quot; {} {extra}&quot;</span>, ftype.affinity()).unwrap();
-		}
-		<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>s, <span class="string">&quot;{more})&quot;</span>).unwrap();
-		s
-	}
-	<span class="doccomment">/// Returns the SQL statement creating the main view for this schema.
-	</span><span class="kw">fn </span>create_main_view(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;String {
-		<span class="kw">let </span>Schema { name, .. } = <span class="self">self</span>;
-		<span class="kw">let </span>primary = <span class="self">self</span>.primary();
-		<span class="kw">let </span><span class="kw-2">mut </span>view = <span class="macro">format!</span>(<span class="string">r#&quot;create view &quot;{name}&quot; as
-	with &quot;u&quot; as (select {f} from &quot;load_{name}&quot; union select {f} from &quot;add_{name}&quot;) select &quot;#</span>, f = <span class="self">self</span>.iter());
-		<span class="kw">for </span>Field {fname, .. } <span class="kw">in </span><span class="self">self</span>.fields[..<span class="self">self</span>.fields.len()-<span class="number">1</span>].iter() {
-			<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>view, <span class="string">r#&quot;ifnull((select &quot;value&quot; from &quot;edit_{name}&quot; where &quot;resource&quot;=&quot;{primary}&quot; and &quot;field&quot;=&#39;{fname}&#39; order by rowid desc limit 1), &quot;{fname}&quot;) as &quot;{fname}&quot;, &quot;#</span>).unwrap();
-		}
-		<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>view, <span class="string">r#&quot;&quot;{primary}&quot; from &quot;u&quot;&quot;#</span>).unwrap();
-		view
-	}
-	<span class="doccomment">/// Returns the SQL for creating the output view of a resource.
-	</span><span class="kw">fn </span>create_output_view(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;String {
-		<span class="kw">let </span>parent_key = <span class="self">self</span>.resref();
-		<span class="kw">let </span><span class="kw-2">mut </span>select = <span class="macro">format!</span>(<span class="string">r#&quot;create view &quot;save_{self}&quot; as select&quot;#</span>);
-		<span class="kw">let </span><span class="kw-2">mut </span>source = <span class="macro">format!</span>(<span class="string">r#&quot;
-from &quot;{self}&quot; as &quot;a&quot;&quot;#</span>);
-		<span class="kw">for </span>Field { fname: f, ftype, .. } <span class="kw">in </span><span class="self">self</span>.iter() {
-			<span class="kw">match </span>ftype {
-				FieldType::Resref =&gt; {
-					<span class="kw">let </span>a = <span class="macro">format!</span>(<span class="string">r#&quot;&quot;a&quot;.&quot;{f}&quot;&quot;#</span>);
-					<span class="kw">let </span>b = <span class="macro">format!</span>(<span class="string">r#&quot;&quot;b_{f}&quot;&quot;#</span>);
-					<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>select, <span class="string">r#&quot;
-case when {a} in (select &quot;resref&quot; from &quot;resref_orig&quot;) then {a} else ifnull({b}.&quot;resref&quot;, &#39;&#39;) end as &quot;{f}&quot;,&quot;#</span>).unwrap();
-					<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>source, <span class="string">r#&quot;
-left join &quot;resref_dict&quot; as {b} on {a} = {b}.&quot;key&quot;&quot;#</span>).unwrap();
-				},
-				FieldType::Strref =&gt; {
-					<span class="kw">let </span>a = <span class="macro">format!</span>(<span class="string">r#&quot;&quot;a&quot;.&quot;{f}&quot;&quot;#</span>);
-					<span class="kw">let </span>b = <span class="macro">format!</span>(<span class="string">r#&quot;&quot;b_{f}&quot;&quot;#</span>);
-					<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>select, <span class="string">r#&quot;
-case when typeof({a}) == &#39;integer&#39; then {a} else ifnull({b}.&quot;strref&quot;, 0) end as &quot;{f}&quot;,&quot;#</span>).unwrap();
-					<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>source, <span class="string">r#&quot;
-left join &quot;strref_dict&quot; as {b} on {a} = {b}.&quot;native&quot;&quot;#</span>).unwrap();
-				},
-				<span class="kw">_ </span>=&gt; <span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>select, <span class="string">r#&quot;&quot;a&quot;.&quot;{f}&quot;,&quot;#</span>).unwrap()
-			}
-		}
-		<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>select, <span class="string">r#&quot;&quot;a&quot;.&quot;{parent_key}&quot; as &quot;key&quot;{source}&quot;#</span>).unwrap();
-		select
-	}
-	<span class="doccomment">/// Creates all tables and views in the database associated with a
-	/// given resource.
-	///
-	/// The tables are as follows:
-	/// - `load_{name}`: data read from game files.
-	/// - `add_{name}`: new data inserted by mods.
-	/// - `edit_{name}`: data modified by mods.
-	/// The views are:
-	/// - `{name}`: the main view on which edits are done by mods (and
-	/// propagated to `add_{name}` or `edit_{name}` by triggers as needed).
-	/// - `save_{name}`: the view used to save new or modified values to
-	/// game files.
-	</span><span class="kw">pub fn </span>create_tables_and_views&lt;T&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw">impl </span>Fn(String)-&gt;<span class="prelude-ty">Result</span>&lt;T&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-		<span class="kw">let </span>name = <span class="self">self</span>.name;
-		<span class="kw">let </span>parent_key = <span class="self">self</span>.resref();
-		<span class="kw">let </span>parent_table = <span class="self">self</span>.parent_table();
-		<span class="kw">let </span>primary = <span class="self">self</span>.primary();
-
-		<span class="comment">// read-only table of initial resources:
-		</span>f(<span class="self">self</span>.create_table(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">&quot;load_{name}&quot;</span>), <span class="string">&quot;&quot;</span>))<span class="question-mark">?</span>;
-		<span class="comment">// table of resources inserted by mods:
-		</span>f(<span class="self">self</span>.create_table(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">&quot;add_{name}&quot;</span>), <span class="string">r#&quot;, &quot;source&quot; text&quot;#</span>))<span class="question-mark">?</span>;
-		<span class="comment">// table of fields edited by mods:
-		</span>f(<span class="macro">format!</span>(<span class="string">r#&quot;create table &quot;edit_{name}&quot; (&quot;source&quot; text, &quot;resource&quot; text, &quot;field&quot; text, &quot;value&quot;)&quot;#</span>))<span class="question-mark">?</span>;
-		f(<span class="self">self</span>.create_main_view())<span class="question-mark">?</span>;
-		f(<span class="self">self</span>.create_output_view())<span class="question-mark">?</span>;
-		<span class="kw">let </span>dirtytable = <span class="macro">format!</span>(<span class="string">&quot;dirty_{parent_table}&quot;</span>);
-		<span class="kw">if let </span>SchemaResource::Top { .. } = <span class="self">self</span>.resource {
-			<span class="comment">// only for top-level resource: create the dirty and orphan tables
-			</span>f(<span class="macro">format!</span>(<span class="string">r#&quot;create table &quot;{dirtytable}&quot; (&quot;name&quot; text primary key on conflict ignore)&quot;#</span>))<span class="question-mark">?</span>;
-			f(<span class="macro">format!</span>(<span class="string">r#&quot;create table &quot;orphan_{name}&quot; (&quot;name&quot; text primary key on conflict ignore)&quot;#</span>))<span class="question-mark">?</span>;
-			f(<span class="macro">format!</span>(<span class="string">r#&quot;create trigger &quot;orphan_{name}&quot; after delete on &quot;add_{name}&quot;
-begin
-	insert into &quot;orphan_{name}&quot; values (old.&quot;{primary}&quot;);
-end&quot;#</span>))<span class="question-mark">?</span>;
-		}
-		<span class="comment">// populate resref_dict or strref_dict as needed:
-		// There are two triggers which edit &quot;resref_dict&quot;; we build both
-		// of them from resref fields at once, by storing the text in
-		// `trans` (for update triggers) and `trans_insert` (for insert
-		// trigger).
-		</span><span class="kw">let </span><span class="kw-2">mut </span>trans_insert = String::new();
-		<span class="kw">for </span>Field {fname, ftype, ..} <span class="kw">in </span><span class="self">self</span>.iter() {
-			<span class="kw">let </span>trans = <span class="kw">match </span>ftype {
-			FieldType::Resref =&gt; <span class="macro">format!</span>(
-	<span class="string">r#&quot;insert or ignore into &quot;resref_dict&quot; values (new.&quot;{fname}&quot;, null);&quot;#</span>),
-<span class="comment">// 			FieldType::Strref =&gt; format!(
-// 	r#&quot;insert or ignore into &quot;strref_dict&quot; values (new.&quot;{fname}&quot;, null);&quot;#),
-			</span><span class="kw">_ </span>=&gt; String::new()
-			};
-			trans_insert.push_str(<span class="kw-2">&amp;</span>trans);
-			f(<span class="macro">format!</span>(
-<span class="string">r#&quot;create trigger &quot;update_{name}_{fname}&quot;
-instead of update of &quot;{fname}&quot; on &quot;{name}&quot;
-begin
-	{trans}
-	insert or ignore into &quot;{dirtytable}&quot; values (new.&quot;{parent_key}&quot;);
-	insert into &quot;edit_{name}&quot; (&quot;source&quot;, &quot;resource&quot;, &quot;field&quot;, &quot;value&quot;) values
-		((select &quot;component&quot; from &quot;global&quot;), new.&quot;{primary}&quot;, &#39;{fname}&#39;,
-		new.&quot;{fname}&quot;);
-end&quot;#</span>))<span class="question-mark">?</span>;
-		}
-		f(<span class="macro">format!</span>(
-<span class="string">r#&quot;create trigger &quot;insert_{name}&quot;
-instead of insert on &quot;{name}&quot;
-begin
-	{trans_insert}
-	insert into &quot;add_{name}&quot; ({cols}) values ({newcols});
-	insert or ignore into &quot;{dirtytable}&quot; values (new.&quot;{parent_key}&quot;);
-end&quot;#</span>, cols = <span class="self">self</span>.iter(), newcols = <span class="self">self</span>.iter().with_prefix(<span class="string">&quot;new.&quot;</span>)))<span class="question-mark">?</span>;
-		f(<span class="macro">format!</span>(
-<span class="string">r#&quot;create trigger &quot;delete_{name}&quot;
-instead of delete on &quot;{name}&quot;
-begin
-	insert or ignore into &quot;{dirtytable}&quot; values (old.&quot;{parent_key}&quot;);
-	delete from &quot;add_{name}&quot; where &quot;{primary}&quot; = old.&quot;{primary}&quot;;
-end&quot;#</span>))<span class="question-mark">?</span>;
-		f(<span class="macro">format!</span>(
-<span class="string">r#&quot;create trigger &quot;unedit_{name}&quot;
-after delete on &quot;edit_{name}&quot;
-begin
-	insert or ignore into &quot;{dirtytable}&quot; values (old.&quot;resource&quot;);
-end&quot;#</span>))<span class="question-mark">?</span>;
-		<span class="prelude-val">Ok </span>(())
-	}
-	<span class="kw">pub fn </span>select_statement(<span class="kw-2">&amp;</span><span class="self">self</span>, n1: <span class="kw">impl </span>Display, n2: <span class="kw">impl </span>Display, condition: <span class="kw">impl </span>Display)-&gt;String {
-		<span class="kw">let </span><span class="kw-2">mut </span>s = <span class="macro">format!</span>(<span class="string">r#&quot;select {cols} from &quot;{n1}{n2}&quot; {condition}&quot;#</span>,
-			cols = <span class="self">self</span>.iter());
-		<span class="kw">if let </span>SchemaResource::Sub { .. } = <span class="self">self</span>.resource {
-			<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>s, <span class="string">r#&quot; order by index&quot;#</span>).unwrap();
-		}
-		s
-	}
-	<span class="doccomment">/// The SQL code for inserting into a table.
-	///
-	/// This is used for both initial populating of the database from game
-	/// files and for `simod.insert`.
-	///
-	/// The `or` parameter allows calling SQL `INSERT OR IGNORE`;
-	/// this is used when initializing the database to ignore resources
-	/// which are superseded by override files.
-	</span><span class="kw">pub fn </span>insert_statement(<span class="kw-2">&amp;</span><span class="self">self</span>, or: <span class="kw">impl </span>Display, prefix: <span class="kw">impl </span>Display)-&gt;String {
-		<span class="kw">let </span>name = <span class="kw-2">&amp;</span><span class="self">self</span>.name;
-		<span class="kw">let </span>cols = <span class="self">self</span>.iter();
-		<span class="kw">let </span><span class="kw-2">mut </span>s = <span class="macro">format!</span>(<span class="string">&quot;insert {or} into \&quot;{prefix}{name}\&quot; ({cols}) values (&quot;</span>);
-		<span class="kw">for </span>c <span class="kw">in </span><span class="number">0</span>..cols.len()  {
-			<span class="kw">if </span>c &gt; <span class="number">0 </span>{ s.push(<span class="string">&#39;,&#39;</span>); }
-			s.push(<span class="string">&#39;?&#39;</span>);
-		}
-		s.push(<span class="string">&#39;)&#39;</span>);
-		s
-	}
-}
-<span class="doccomment">/// Builds the SQL statement creating the `new_strings` view.
-///
-/// This also builds a few triggers which mark resources as dirty
-/// whenever their strrefs are reassigned.
-</span><span class="kw">pub fn </span>create_new_strings&lt;T&gt;(f: <span class="kw">impl </span>Fn(String)-&gt;<span class="prelude-ty">Result</span>&lt;T&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-	<span class="kw">let </span><span class="kw-2">mut </span>create = String::from(
-	<span class="string">r#&quot;create view &quot;new_strings&quot;(&quot;native&quot;,&quot;strref&quot;,&quot;flags&quot;) as
-select &quot;a&quot;.&quot;native&quot;, &quot;strref&quot;, &quot;flags&quot;
-from (&quot;#</span>);
-	<span class="kw">let </span><span class="kw-2">mut </span>is_first = <span class="bool-val">true</span>;
-	<span class="kw">let </span><span class="kw-2">mut </span>trigger = String::from(
-<span class="string">r#&quot;create trigger &quot;update_strrefs&quot;
-after insert on &quot;strref_dict&quot;
-begin&quot;#</span>);
-	RESOURCES.map_mut(|schema,<span class="kw">_</span>| {
-		<span class="kw">let </span>resref = schema.resref();
-		<span class="kw">let </span>parent = schema.parent_table;
-		<span class="kw">let </span><span class="kw-2">mut </span>is_first_field = <span class="bool-val">true</span>;
-		<span class="kw">for </span>Field { fname, ftype, .. } <span class="kw">in </span>schema.iter() {
-			<span class="kw">if </span><span class="kw-2">*</span>ftype != FieldType::Strref { <span class="kw">continue </span>}
-			<span class="kw">if </span>is_first { is_first = <span class="bool-val">false</span>; }
-			<span class="kw">else </span>{ <span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>create, <span class="string">&quot;\n\tunion &quot;</span>)<span class="question-mark">?</span>; }
-			<span class="comment">// the 1 column is a placeholder for flags
-			</span><span class="macro">writeln!</span>(<span class="kw-2">&amp;mut </span>create, <span class="string">r#&quot;select &quot;{fname}&quot; as &quot;native&quot;, 1 as &quot;flags&quot; from &quot;add_{schema}&quot;
-	union select &quot;value&quot; as &quot;native&quot;, 1 as &quot;flags&quot; from &quot;edit_{schema}&quot; where &quot;field&quot;=&#39;{fname}&#39;&quot;#</span>)<span class="question-mark">?</span>;
-
-			<span class="kw">if </span>is_first_field {
-				<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>trigger, <span class="string">r#&quot;
-	insert into &quot;dirty_{parent}&quot; select &quot;{resref}&quot; from &quot;{schema}&quot; where &quot;#</span>)<span class="question-mark">?</span>;
-				is_first_field = <span class="bool-val">false</span>;
-			}
-			<span class="kw">else </span>{ <span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>trigger, <span class="string">&quot; or &quot;</span>)<span class="question-mark">?</span>; }
-			<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>trigger, <span class="string">r#&quot;&quot;{fname}&quot;=new.&quot;native&quot;&quot;#</span>)<span class="question-mark">?</span>;
-		}
-		<span class="kw">if </span>!is_first_field {
-			<span class="macro">writeln!</span>(<span class="kw-2">&amp;mut </span>trigger, <span class="string">&quot;;&quot;</span>)<span class="question-mark">?</span>;
-		}
-		<span class="macro">debug!</span>(<span class="string">&quot;  creating tables for resource &#39;{schema}&#39;&quot;</span>);
-		any_ok(())
-	}).unwrap();
-	<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>create, <span class="string">r#&quot;) as &quot;a&quot;
-left join &quot;strref_dict&quot; as &quot;b&quot; on &quot;a&quot;.&quot;native&quot; = &quot;b&quot;.&quot;native&quot;
-where typeof(&quot;a&quot;.&quot;native&quot;) = &#39;text&#39;&quot;#</span>)<span class="question-mark">?</span>;
-	<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>trigger, <span class="string">&quot;end&quot;</span>)<span class="question-mark">?</span>;
-	f(create)<span class="question-mark">?</span>;
-	f(trigger)<span class="question-mark">?</span>;
-	<span class="comment">// This triggers makes any update of `strref` in `new_strings`
-	// (with any dummy value; we use -1) produce the lowest still-available
-	// strref; see
-	// https://stackoverflow.com/questions/24587799/returning-the-lowest-integer-not-in-a-list-in-sql
-</span><span class="attr">#[allow(clippy::useless_format)]
-	</span>f(<span class="macro">format!</span>(<span class="string">r#&quot;create trigger &quot;update_new_strings&quot;
-instead of update of &quot;strref&quot; on &quot;new_strings&quot;
-begin
-	insert into &quot;strref_dict&quot;(&quot;native&quot;,&quot;strref&quot;)
-	values (new.&quot;native&quot;,
-		ifnull((select min(&quot;strref&quot;)+1 from &quot;strref_dict&quot;
-			where &quot;strref&quot;+1 not in (select &quot;strref&quot; from &quot;strref_dict&quot;)),
-			(select &quot;strref_count&quot; from &quot;global&quot;)));
-end&quot;#</span>))<span class="question-mark">?</span>;
-	<span class="prelude-val">Ok</span>(())
 }
 } <span class="comment">// mod schemas
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gamestrings {
@@ -4429,7 +4322,6 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 <span class="kw">use </span><span class="kw">crate</span>::gamefiles::GameIndex;
 <span class="kw">use </span><span class="kw">crate</span>::struct_io::SqlRow;
 <span class="kw">use </span><span class="kw">crate</span>::schemas::{Schema0};
-<span class="kw">use </span><span class="kw">crate</span>::schemas::Resource;
 
 <span class="comment">// I. Low-level stuff: basic types and extensions for `rusqlite` traits.
 </span><span class="kw">pub trait </span>RowExt {
@@ -4737,7 +4629,7 @@ create index &quot;strref_dict_reverse&quot; on &quot;strref_dict&quot; (&quot;s
 				<span class="macro">debug!</span>(<span class="string">&quot;  creating tables for resource &#39;{schema}&#39;&quot;</span>);
 				schema.create_tables_and_views(|s| db.exec(s))
 			}).context(<span class="string">&quot;cannot create main tables and views&quot;</span>)<span class="question-mark">?</span>;
-			<span class="kw">crate</span>::schemas::create_new_strings(|s| db.exec(s))<span class="question-mark">?</span>;
+			all_schemas().create_new_strings(|s| db.exec(s))<span class="question-mark">?</span>;
 			<span class="prelude-val">Ok</span>(())
 		}).context(<span class="string">&quot;creating global tables&quot;</span>)<span class="question-mark">?</span>;
 		db.create_language_tables(game).context(<span class="string">&quot;cannot create language tables&quot;</span>)<span class="question-mark">?</span>;
@@ -4786,7 +4678,8 @@ from &quot;new_strings&quot;
 				<span class="macro">trace!</span>(<span class="string">&quot;found resource {}.{:#04x}&quot;</span>, resref, restype.value);
 				base.register(<span class="kw-2">&amp;</span>resref)
 					.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;could not register resref:{resref}&quot;</span>))<span class="question-mark">?</span>;
-				<span class="kw">match </span>restype {
+				<span class="attr">#[allow(clippy::single_match)]
+				</span><span class="kw">match </span>restype {
 				Item::RESTYPE =&gt; Item::load_from_handle(<span class="kw-2">&amp;mut </span>base, resref, handle)<span class="question-mark">?</span>,
 				<span class="kw">_ </span>=&gt; (),
 				};
@@ -4815,11 +4708,10 @@ from &quot;new_strings&quot;
 	</span><span class="kw">pub fn </span>new(db: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw">impl </span>DbInterface)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
 		<span class="prelude-val">Ok</span>(<span class="self">Self </span>{ <span class="comment">// db,
 		</span>tables: all_schemas().map(|schema|
-			db.prepare(<span class="kw-2">&amp;</span>schema.insert_statement(<span class="string">&quot;or ignore&quot;</span>, <span class="string">&quot;load_&quot;</span>))
-			.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;insert statement for table &#39;{schema}&#39;&quot;</span>))
+			db.prepare(<span class="kw-2">&amp;</span>schema.insert_sql(<span class="string">&quot;or ignore&quot;</span>, <span class="string">&quot;load_&quot;</span>))
+				.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;insert statement for table &#39;{schema}&#39;&quot;</span>))
 		)<span class="question-mark">?</span>,
-		resource_count: all_schemas().map(|schema|
-			any_ok((schema.name, <span class="number">0</span>)))<span class="question-mark">?</span>,
+		resource_count: all_schemas().map(|schema| any_ok((schema.name, <span class="number">0</span>)))<span class="question-mark">?</span>,
 		add_resref: db.prepare(
 			<span class="string">r#&quot;insert or ignore into &quot;resref_orig&quot; values (?)&quot;#</span>)<span class="question-mark">?</span>,
 		add_override: db.prepare(
