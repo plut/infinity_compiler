@@ -1800,7 +1800,6 @@ use crate::prelude::*;
 use rusqlite::{Row};
 use crate::resources::*;
 use crate::gamefiles::GameIndex;
-use crate::schemas::{Schema0};
 
 // I. Low-level stuff: basic types and extensions for `rusqlite` traits.
 /// Detecting recoverable errors due to incorrect SQL typing.
@@ -1911,42 +1910,41 @@ update "new_strings" set "strref"=-1 where "strref" is null"#))
 	/// Deletes from current directory all resources marked as 'orphan' in
 	/// the database. This also clears the list of orphan resources.
 	fn clear_orphan_resources(&self)->Result<()> {
-		RESOURCES.map(|schema, _| {
-			let Schema0 { name, extension, .. } = schema;
-			if !extension.is_empty() {
-				let mut stmt = self.prepare(
-					format!(r#"select "name" from "orphan_{name}""#))?;
-				let mut rows = stmt.query(())?;
-				while let Some(row) = rows.next()? {
-					let mut file = row.get::<_,String>(0)
-						.with_context(|| format!(r#"bad entry in "orphan_{name}""#))?;
-					file.push('.');
-					file.push_str(extension);
-					fs::remove_file(&file)
-					.or_else(|e| match e.kind() {
-						io::ErrorKind::NotFound => {
+		all_schemas().map(|schema| {
+			let extension = match schema.resource {
+				crate::schemas::SchemaResource::Top { extension, .. } => extension,
+				_ => return any_ok(())
+			};
+			let mut stmt = self.prepare(
+				format!(r#"select "name" from "orphan_{schema}""#))?;
+			let mut rows = stmt.query(())?;
+			while let Some(row) = rows.next() ? {
+				let mut file = row.get::<_,String>(0)
+					.with_context(|| format!(r#"bad entry in "orphan_{schema}""#))?;
+				file.push('.');
+				file.push_str(extension);
+				fs::remove_file(&file).or_else(|e| match e.kind() {
+					io::ErrorKind::NotFound => {
 						warn!(r#"should have removed orphan file "{file}""#);
 						Ok(())
 					},
-						_ => Err(e) })
-					.with_context(|| format!(r#"cannot remove file "{file}""#))?;
-				}
+					_ => Err(e)
+				}).with_context(|| format!(r#"cannot remove file "{file}""#))?;
 			}
 			any_ok(())
-		})
-			.context("cannot clear orphan resources")?;
+		}).context("cannot clear orphan resources")?;
 		Ok(())
 	}
 	/// Cleans the dirty bit from all resources after saving.
 	fn unmark_dirty_resources(&self)->Result<()> {
-		RESOURCES.map(|schema, _| {
-			if !schema.extension.is_empty() {
+		all_schemas().map(|schema| {
+			if matches!(schema.resource, crate::schemas::SchemaResource::Top { .. }) {
 				self.exec(format!(r#"delete from "dirty_{schema}""#))?;
 				self.exec(format!(r#"delete from "orphan_{schema}""#))?;
-			}
+			};
 			any_ok(())
 		})?;
-		Ok(())
+		any_ok(())
 	}
 }
 impl<T: Deref<Target=Connection>>  DbInterface for T {

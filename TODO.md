@@ -22,8 +22,10 @@ resources: Resource (full schema + payload)
 
   - move TypedStatement, RowExt, DbTypeCheck to struct_io
   - make Strref, Resref into newtypes
+  - kill RESOURCES
   - kill Schema0
   - then Columns
+  - move all_resources() to a field of GameDB (etc.)
 
 # Override
  - [x] improve backup procedure: a full backup as part of init
