@@ -66,10 +66,9 @@ impl Display for Error {
 impl std::error::Error for Error { }
 
 /// Just like `write!` except that it is unwrapped.
-macro_rules! uwrite {
-	($($a:tt)*) => { write!($($a)*).unwrap() }
-}
-pub(crate) use uwrite;
+macro_rules! uwrite { ($($a:tt)*) => { write!($($a)*).unwrap() } }
+macro_rules! uwriteln { ($($a:tt)*) => { writeln!($($a)*).unwrap() } }
+pub(crate) use {uwrite,uwriteln};
 
 }
 pub(crate) mod progress {
@@ -255,6 +254,24 @@ pub enum FieldType {
 	Strref,
 	Rowid,
 }
+impl FieldType {
+	pub const fn affinity(self)->&'static str {
+		match self {
+			Self::Rowid |
+			Self::Integer | Self::Strref => r#"integer default 0"#,
+			Self::Text | Self::Resref => r#"text default """#,
+		}
+	}
+	pub const fn to_lua(self)->&'static str {
+		match self {
+			FieldType::Integer => "integer",
+			FieldType::Text => "text",
+			FieldType::Resref => "resref",
+			FieldType::Strref => "strref",
+			FieldType::Rowid => "auto",
+		}
+	}
+}
 /// A leaf SQL type: this can be converted from, to SQL and knows its own
 /// affinity.
 pub trait SqlLeaf: FromSql + ToSql {
@@ -351,9 +368,6 @@ impl<T: SqlLeaf> SqlRow for T {
 	fn primary_index()->Option<usize> { None }
 }
 
-// Two iterators:
-// - `ContentIterator` iterates over the content of an actual struct,
-// - `FieldsIterator` iterates over the (static) schema.
 /// An iterator over all content fields of a [`SqlRow`].
 ///
 /// This iterates over the content of a struct.
@@ -586,8 +600,6 @@ use rusqlite::types::{FromSql,ToSql, ValueRef};
 use io::BufReader;
 
 use crate::progress::{Progress};
-use crate::struct_io::{FieldType};
-use crate::schemas::{SqlType};
 use crate::staticstrings::{StaticString};
 
 // I. Basic types: StaticString, Resref, Strref etc.
@@ -618,7 +630,6 @@ impl Pack for Resref {
 	}
 	fn pack(&self, f: &mut impl Write)->io::Result<()> { self.name.pack(f) }
 }
-impl SqlType for Resref { const SQL_TYPE: FieldType = FieldType::Resref; }
 impl ToSql for Resref {
 	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> { self.name.as_ref().to_sql() }
 }
@@ -650,9 +661,6 @@ impl Display for Strref {
 	fn fmt(&self, mut f: &mut Formatter<'_>)->std::result::Result<(),fmt::Error>{
 		write!(&mut f, "@{}", self.value)
 	}
-}
-impl SqlType for Strref {
-	const SQL_TYPE: FieldType = FieldType::Strref;
 }
 impl ToSql for Strref {
 	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> { self.value.to_sql() }
@@ -1022,49 +1030,8 @@ pub(crate) mod schemas {
 //! This mod groups everything which has access to the content of the
 //! [`Schema0`] struct.
 use crate::prelude::*;
-use crate::resources::{all_schemas};
 use crate::gamefiles::Restype;
 use crate::struct_io::{FieldType};
-
-#[derive(Debug)]
-pub enum SchemaResource {
-#[allow(dead_code)]
-	Top { extension: &'static str, restype: Restype, },
-#[allow(dead_code)]
-	Sub { parent: &'static str, resref_index: usize, },
-}
-
-impl FieldType {
-	pub const fn affinity(self)->&'static str {
-		match self {
-			Self::Rowid |
-			Self::Integer | Self::Strref => r#"integer default 0"#,
-			Self::Text | Self::Resref => r#"text default """#,
-		}
-	}
-	pub const fn to_lua(self)->&'static str {
-		match self {
-			FieldType::Integer => "integer",
-			FieldType::Text => "text",
-			FieldType::Resref => "resref",
-			FieldType::Strref => "strref",
-			FieldType::Rowid => "auto",
-		}
-	}
-}
-/// A correspondence between (some) Rust types and SQL types.
-pub trait SqlType { const SQL_TYPE: FieldType; }
-impl<T> SqlType for Option<T> where T: SqlType {
-	const SQL_TYPE: FieldType = T::SQL_TYPE;
-}
-impl SqlType for &str { const SQL_TYPE: FieldType = FieldType::Text; }
-impl SqlType for String { const SQL_TYPE: FieldType = FieldType::Text; }
-macro_rules! sqltype_int {
-	($($T:ty),*) => { $(impl SqlType for $T {
-		const SQL_TYPE: FieldType = FieldType::Integer;
-	})* }
-}
-sqltype_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
 
 /// Description of a field in a game resource.
 #[derive(Debug)]
@@ -1075,11 +1042,6 @@ pub struct Field {
 	pub ftype: FieldType,
 	/// Any extra information given to SQLite when creating the table.
 	pub extra: &'static str,
-}
-impl Field {
-	pub const fn new<T: SqlType>(fname: &'static str, extra: &'static str)->Self {
-		Self { fname, ftype: T::SQL_TYPE, extra }
-	}
 }
 /// Displays the quoted field name.
 /// This is a useful help for writing SQL statements.
@@ -1113,17 +1075,27 @@ impl<W: ColumnWriter, P: Display> Display for ColumnPrefixed<W, P> {
 		let mut isfirst = true;
 		for element in self.0.as_iter() {
 			if isfirst { isfirst = false; } else { write!(f, ",")?; }
-			write!(f, r#" {prefix}"{element}""#, prefix = self.1)?;
+			write!(f, r#" {prefix}{element}"#, prefix = self.1)?;
 		}
 		Ok(())
 	}
 }
 impl<W: ColumnWriter, T: Display> ColumnPrefixed<W,T> {
-	/// Returns the SQL select statement for this schema, as a String.
+	pub fn len(&self)->usize { self.0.len() }
+	/// Returns the SQL select statement for these columns, as a String.
 	pub fn select_sql(self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
 		format!(r#"select {self} from "{n1}{n2}" {condition}"#)
 	}
-	pub fn len(&self)->usize { self.0.len() }
+	/// Returns the SQL insert statement for these columns, as a String.
+	pub fn insert_sql(self, or: impl Display, n1: impl Display, n2: impl Display)->String {
+		let mut s = format!("insert {or} into \"{n1}{n2}\" ({self}) values (");
+		for c in 0..self.len()  {
+			if c > 0 { s.push(','); }
+			s.push('?');
+		}
+		s.push(')');
+		s
+	}
 }
 
 /// Description of several fields.
@@ -1165,10 +1137,19 @@ impl<'a,T> Columns<'a, T> {
 	}
 }
 impl<T: Display> Columns<'_,T> {
-	/// Returns the SQL select statement for this schema, as a String.
+	/// Returns the SQL select statement for these columns, as a String.
 	pub fn select_sql(self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
 		format!(r#"select {self} from "{n1}{n2}" {condition}"#)
 	}
+}
+
+/// The identifier of the table for a schema.
+#[derive(Debug)]
+pub enum SchemaResource {
+#[allow(dead_code)]
+	Top { extension: &'static str, restype: Restype, },
+#[allow(dead_code)]
+	Sub { parent: &'static str, resref_index: usize, },
 }
 
 /// The full database description of a game resource.
@@ -1386,78 +1367,39 @@ end"#))?;
 	/// The `or` parameter allows calling SQL `INSERT OR IGNORE`;
 	/// this is used when initializing the database to ignore resources
 	/// which are superseded by override files.
-	pub fn insert_statement(&self, or: impl Display, prefix: impl Display)->String {
-		let cols = self.fields.cols();
-		let mut s = format!("insert {or} into \"{prefix}{self}\" ({cols}) values (");
-		for c in 0..cols.len()  {
-			if c > 0 { s.push(','); }
-			s.push('?');
-		}
-		s.push(')');
-		s
+	pub fn insert_sql(&self, or: impl Display, prefix: impl Display)->String {
+		self.fields.cols().insert_sql(or, prefix, self.name)
 	}
-}
-/// Builds the SQL statement creating the `new_strings` view.
-///
-/// This also builds a few triggers which mark resources as dirty
-/// whenever their strrefs are reassigned.
-pub fn create_new_strings<T>(f: impl Fn(String)->Result<T>)->Result<()> {
-	let mut create = String::from(
-	r#"create view "new_strings"("native","strref","flags") as
-select "a"."native", "strref", "flags"
-from ("#);
-	let mut is_first = true;
-	let mut trigger = String::from(
-r#"create trigger "update_strrefs"
-after insert on "strref_dict"
-begin"#);
-	all_schemas().map_mut(|schema| {
-		let resref = schema.resref();
-		let parent = schema.parent_table();
-		let mut is_first_field = true;
-		for Field { fname, ftype, .. } in schema.fields.iter() {
+	/// Helper function for generating `new_strings` view.
+	pub fn append_new_strings_schema(&self, w: &mut impl fmt::Write, is_first: &mut bool) {
+		for Field { fname, ftype, .. } in self.fields.iter() {
 			if *ftype != FieldType::Strref { continue }
-			if is_first { is_first = false; }
-			else { write!(&mut create, "\n\tunion ")?; }
-			// the 1 column is a placeholder for flags
-			writeln!(&mut create, r#"select "{fname}" as "native", 1 as "flags" from "add_{schema}"
-	union select "value" as "native", 1 as "flags" from "edit_{schema}" where "field"='{fname}'"#)?;
-
+			if *is_first { *is_first = false; }
+			else { uwrite!(w, "\n\tunion "); }
+			// the '1' column is a placeholder for flags:
+			uwriteln!(w, r#"select "{fname}" as "native", 1 as "flags" from "add_{self}"
+	union select "value" as "native", 1 as "flags" from "edit_{self}" where "field"='{fname}'"#);
+		}
+	}
+	/// Helper function for generating `new_strings` triggers.
+	pub fn append_new_strings_trigger(&self, w: &mut impl fmt::Write) {
+		let resref = self.resref();
+		let parent = self.parent_table();
+		let mut is_first_field = true;
+		for Field { fname, ftype, .. } in self.fields.iter() {
+			if *ftype != FieldType::Strref { continue }
 			if is_first_field {
-				write!(&mut trigger, r#"
-	insert into "dirty_{parent}" select "{resref}" from "{schema}" where "#)?;
+				uwrite!(w, r#"
+	insert into "dirty_{parent}" select "{resref}" from "{self}" where "#);
 				is_first_field = false;
 			}
-			else { write!(&mut trigger, " or ")?; }
-			write!(&mut trigger, r#""{fname}"=new."native""#)?;
+			else { uwrite!(w, " or "); }
+			uwrite!(w, r#""{fname}"=new."native""#);
 		}
 		if !is_first_field {
-			writeln!(&mut trigger, ";")?;
+			uwriteln!(w, ";");
 		}
-		debug!("  creating tables for resource '{schema}'");
-		any_ok(())
-	}).unwrap();
-	write!(&mut create, r#") as "a"
-left join "strref_dict" as "b" on "a"."native" = "b"."native"
-where typeof("a"."native") = 'text'"#)?;
-	write!(&mut trigger, "end")?;
-	f(create)?;
-	f(trigger)?;
-	// This triggers makes any update of `strref` in `new_strings`
-	// (with any dummy value; we use -1) produce the lowest still-available
-	// strref; see
-	// https://stackoverflow.com/questions/24587799/returning-the-lowest-integer-not-in-a-list-in-sql
-#[allow(clippy::useless_format)]
-	f(format!(r#"create trigger "update_new_strings"
-instead of update of "strref" on "new_strings"
-begin
-	insert into "strref_dict"("native","strref")
-	values (new."native",
-		ifnull((select min("strref")+1 from "strref_dict"
-			where "strref"+1 not in (select "strref" from "strref_dict")),
-			(select "strref_count" from "global")));
-end"#))?;
-	Ok(())
+	}
 }
 
 /// The full database description of a game resource.
@@ -2089,7 +2031,7 @@ create index "strref_dict_reverse" on "strref_dict" ("strref");
 				debug!("  creating tables for resource '{schema}'");
 				schema.create_tables_and_views(|s| db.exec(s))
 			}).context("cannot create main tables and views")?;
-			crate::schemas::create_new_strings(|s| db.exec(s))?;
+			all_schemas().create_new_strings(|s| db.exec(s))?;
 			Ok(())
 		}).context("creating global tables")?;
 		db.create_language_tables(game).context("cannot create language tables")?;
@@ -2168,8 +2110,8 @@ impl<'a> DbInserter<'a> {
 	pub fn new(db: &'a impl DbInterface)->Result<Self> {
 		Ok(Self { // db,
 		tables: all_schemas().map(|schema|
-			db.prepare(&schema.insert_statement("or ignore", "load_"))
-			.with_context(|| format!("insert statement for table '{schema}'"))
+			db.prepare(&schema.insert_sql("or ignore", "load_"))
+				.with_context(|| format!("insert statement for table '{schema}'"))
 		)?,
 		resource_count: all_schemas().map(|schema| any_ok((schema.name, 0)))?,
 		add_resref: db.prepare(

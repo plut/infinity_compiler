@@ -400,3 +400,43 @@ Attack type: {atype}",
 produce_resource_list!();
 all_resources!();
 
+impl AllResources<Schema> {
+	/// Builds the SQL statement creating the `new_strings` view.
+	///
+	/// This also builds a few triggers which mark resources as dirty
+	/// whenever their strrefs are reassigned.
+	pub fn create_new_strings<T>(&mut self, f: impl Fn(&str)->Result<T>)->Result<()> {
+		let mut create = String::from(
+r#"create view "new_strings"("native","strref","flags") as
+select "a"."native", "strref", "flags" from ("#);
+		let mut is_first = true;
+		let mut trigger = String::from(r#"create trigger "update_strrefs"
+after insert on "strref_dict"
+begin"#);
+		all_schemas().map_mut(|schema| {
+			schema.append_new_strings_schema(&mut create, &mut is_first);
+			schema.append_new_strings_trigger(&mut trigger);
+			any_ok(())
+		})?;
+		write!(&mut create, r#") as "a"
+	left join "strref_dict" as "b" on "a"."native" = "b"."native"
+	where typeof("a"."native") = 'text'"#)?;
+		write!(&mut trigger, "end")?;
+		f(&create)?;
+		f(&trigger)?;
+		// This triggers makes any update of `strref` in `new_strings`
+		// (with any dummy value; we use -1) produce the lowest still-available
+		// strref; see
+		// https://stackoverflow.com/questions/24587799/returning-the-lowest-integer-not-in-a-list-in-sql
+		f(r#"create trigger "update_new_strings"
+	instead of update of "strref" on "new_strings"
+	begin
+		insert into "strref_dict"("native","strref")
+		values (new."native",
+			ifnull((select min("strref")+1 from "strref_dict"
+				where "strref"+1 not in (select "strref" from "strref_dict")),
+				(select "strref_count" from "global")));
+	end"#)?;
+		Ok(())
+	}
+}
