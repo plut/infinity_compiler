@@ -257,7 +257,7 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 	}
 	let buildf = fields.build_from(&buildv);
 	let code = quote! {
-		impl #generics crate::struct_io::Pack for #ident #generics
+		impl #generics crate::pack::Pack for #ident #generics
 		#where_pack {
 			fn unpack(f: &mut impl std::io::Read)->std::io::Result<Self> {
 				#readf Ok(#buildf)

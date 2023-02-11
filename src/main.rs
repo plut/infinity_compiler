@@ -86,21 +86,23 @@ impl Display for NullDisplay {
 	fn fmt(&self, _: &mut Formatter<'_>)->fmt::Result { Ok(()) }
 }
 /// Join together two [`Display`] implementations.
-pub struct DisplayTwo<X: Display, Y: Display>(X, Y);
-impl<X: Display, Y: Display> Display for DisplayTwo<X,Y> {
+///
+/// Invoked by e.g. "string".cat(string). This creates a (very simple,
+/// but sufficient for our purposes) lazy formatter.
+pub struct DisplayCat<X: Display, Y: Display>(X, Y);
+impl<X: Display, Y: Display> Display for DisplayCat<X,Y> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		self.0.fmt(f)?; self.1.fmt(f)
 	}
 }
 pub trait DisplayExt: Display+Sized {
-	fn prepend<X: Display>(self, x:X)->DisplayTwo<X, Self> { DisplayTwo(x, self) }
+	fn cat<Y: Display>(self, y:Y)->DisplayCat<Self, Y> { DisplayCat(self, y) }
 }
 impl<T: Display+Sized> DisplayExt for T { }
 
 thread_local! {
 	static COUNT: RefCell<usize> = RefCell::new(0);
-	static MULTI: RefCell<MultiProgress> =
-		RefCell::new(MultiProgress::new());
+	static MULTI: RefCell<MultiProgress> = RefCell::new(MultiProgress::new());
 }
 /// A stacked progress bar.
 ///
@@ -155,16 +157,8 @@ macro_rules! scope_trace {
 }
 pub(crate) use scope_trace;
 } // mod progress
-pub(crate) mod struct_io {
-//! Basic types for interaction with SQL and binary files.
-//! The main entry points for this module are the traits [`Pack`]
-//! and [`SqlRow`].
+pub(crate) mod pack {
 use crate::prelude::*;
-use rusqlite::{ToSql};
-use rusqlite::types::{ToSqlOutput,FromSql};
-use crate::database::TypedStatement;
-use crate::schemas::{Field,ColumnWriter};
-
 /// A type which may be packed to binary.
 ///
 /// This trait is implemented by the derive macro.
@@ -233,7 +227,43 @@ impl Pack for String { // String is ignored on pack/unpack:
 	fn unpack(_f: &mut impl Read)->io::Result<Self> { Ok(Self::new()) }
 	fn pack(&self, _f: &mut impl Write)->io::Result<()> { Ok(()) }
 }
+/// A newtype which is pass-through for SQL and blocking for [`Pack`].
+#[derive(Newtype)]
+pub struct NotPacked<T>(T);
+impl<T: Default> Pack for NotPacked<T> {
+	fn unpack(_r: &mut impl Read)->io::Result<Self> { Ok(Self(T::default())) }
+	fn pack(&self, _w: &mut impl Write)->io::Result<()> { Ok(()) }
+}
 
+}
+pub(crate) mod struct_io {
+//! Basic types for interaction with SQL and binary files.
+//! The main entry points for this module are the traits [`Pack`]
+//! and [`SqlRow`].
+use crate::prelude::*;
+use rusqlite::{ToSql};
+use rusqlite::types::{ToSqlOutput,FromSql};
+use crate::schemas::{Field,ColumnWriter};
+use crate::pack::{Pack,NotPacked};
+
+pub trait RowExt {
+	fn dump(&self);
+}
+impl RowExt for rusqlite::Row<'_> {
+	/// Dumps all values found in a single row to stdout.
+	fn dump(&self) {
+		for (i, c) in self.as_ref().column_names().iter().enumerate() {
+			use rusqlite::types::ValueRef::*;
+			match self.get_ref(i) {
+				Ok(Null) => println!("  [{i:3}] {c} = \x1b[31mNull\x1b[m"),
+				Ok(Text(s)) => println!("  [{i:3}] {c} = Text(\"{}\")",
+					std::str::from_utf8(s).unwrap()),
+				Ok(x) => println!("  [{i:3}] {c} = {x:?}"),
+				_ => break
+			}
+		}
+	}
+}
 /// An utility enum defining SQL behaviour for a given resource field type.
 ///
 /// This is somewhat different from [`rusqlite::types::Type`]:
@@ -346,8 +376,8 @@ pub trait SqlRow: Sized {
 	///
 	/// This returns a [`Result<TypedStatement>`]: it is possible to iterate
 	/// over the result and recover structures of the original type.
-	fn select_query_gen(db: &impl DbInterface, n1: impl Display, n2: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
-		let t = Self::fields().cols().select_sql(n1, n2, cond);
+	fn select_query_gen(db: &impl DbInterface, n: impl Display, cond: impl Display)->Result<TypedStatement<'_,Self>> {
+		let t = Self::fields().cols().select_sql(n, cond);
 		Ok(TypedStatement::new(db.prepare(&t)?))
 	}
 }
@@ -384,19 +414,13 @@ impl<'a,T: SqlRow> Iterator for ContentIterator<'a,T> {
 impl<T: SqlRow> ExactSizeIterator for ContentIterator<'_,T> {
 	fn len(&self)->usize { T::WIDTH }
 }
-/// A newtype which is pass-through for SQL and blocking for [`Pack`].
-#[derive(Newtype)]
-pub struct NotPacked<T>(T);
-impl<T: Default> Pack for NotPacked<T> {
-	fn unpack(_r: &mut impl Read)->io::Result<Self> { Ok(Self(T::default())) }
-	fn pack(&self, _w: &mut impl Write)->io::Result<()> { Ok(()) }
-}
+
 impl<T: SqlRow> SqlRow for NotPacked<T> {
 	const WIDTH: usize = T::WIDTH;
 	fn from_row_at(row: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
-		T::from_row_at(row, offset).map(Self)
+		T::from_row_at(row, offset).map(Self::from)
 	}
-	fn get_field(&self, i: usize)->ToSqlOutput<'_> { self.0.get_field(i) }
+	fn get_field(&self, i: usize)->ToSqlOutput<'_> { self.as_ref().get_field(i) }
 	fn fieldname_ctx(ctx: &'static str, i: usize)->&'static str {
 		T::fieldname_ctx(ctx, i)
 	}
@@ -428,6 +452,59 @@ impl<T,I> std::ops::AddAssign<I> for NoSql<T>
 	where T: std::ops::AddAssign<I> {
 	fn add_assign(&mut self, rhs: I) { self.0.add_assign(rhs) }
 }
+
+/// A statement aware of the associated table type.
+///
+/// We need a few types parametrized by a Resource0:
+///  - `TypedStatement`: this gets saved as a (mut) local variable;
+///  - `TypedRows`: the iterator producing Resource0 objects from the query.
+#[derive(Debug)]
+pub struct TypedStatement<'s, T: SqlRow> (Statement<'s>, PhantomData<T>);
+impl<'stmt,T: SqlRow> TypedStatement<'stmt, T> {
+	pub fn new(stmt: Statement<'stmt>)->Self { Self(stmt, PhantomData) }
+	/// Iterates over this statement, returning (possibly) Rust structs of
+	/// the type associated with this table.
+	pub fn iter<P: rusqlite::Params>(&mut self, params: P) ->rusqlite::Result<TypedRows<'_,T>> {
+		let rows = self.0.query(params)?;
+		Ok(TypedRows { rows, _marker: PhantomData, index: 0 })
+	}
+}
+/// An enriched version of `rusqlite::Rows`.
+///
+/// This struct retains information about the output type,
+/// as well as the current row index.
+///
+/// This also behaves as an `Iterator` (throwing when the underlying
+/// `Row` iterator fails).
+#[allow(missing_debug_implementations)]
+pub struct TypedRows<'stmt,T: SqlRow> {
+	rows: rusqlite::Rows<'stmt>,
+	_marker: PhantomData<T>,
+	index: usize,
+}
+impl<T: SqlRow> Iterator for TypedRows<'_,T> {
+	type Item = Result<T>;
+	fn next(&mut self)->Option<Self::Item> {
+		loop {
+			let row = match self.rows.next() {
+				Ok(Some(row)) => row,
+				Ok(None) => break,
+				Err(e) => return Some(Err(e.into()))
+			};
+			self.index+= 1;
+			let t = T::from_row(row);
+			match t {
+			Err(e) => {
+				println!("cannot read a {} from row {}: {e:?}",
+				std::any::type_name::<T>(), self.index);
+				row.dump();
+				continue },
+			_ => return Some(t)
+			}
+		}
+		None
+	}
+}
 } // mod struct_io
 pub(crate) mod staticstrings {
 //! Fixed-length string used as resource identifier.
@@ -441,7 +518,7 @@ pub(crate) mod staticstrings {
 use std::fmt::{self,Debug,Display,Formatter};
 use std::io::{self,Read,Write};
 use std::cmp::min;
-use crate::struct_io::Pack;
+use crate::pack::Pack;
 
 /// A fixed-length string.
 #[derive(Clone,Copy)]
@@ -594,7 +671,7 @@ pub(crate) mod gamefiles {
 //! Visibility barrier: this mod is the only place using the internals of
 //! key/bif game files.
 use crate::prelude::*;
-use crate::struct_io::{Pack};
+use crate::pack::{Pack};
 use rusqlite::types::{FromSql,ToSql, ValueRef};
 
 use io::BufReader;
@@ -1083,8 +1160,8 @@ impl<W: ColumnWriter, P: Display> Display for ColumnPrefixed<W, P> {
 impl<W: ColumnWriter, T: Display> ColumnPrefixed<W,T> {
 	pub fn len(&self)->usize { self.0.len() }
 	/// Returns the SQL select statement for these columns, as a String.
-	pub fn select_sql(self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
-		format!(r#"select {self} from "{n1}{n2}" {condition}"#)
+	pub fn select_sql(self, n: impl Display, condition: impl Display)->String {
+		format!(r#"select {self} from "{n}" {condition}"#)
 	}
 	/// Returns the SQL insert statement for these columns, as a String.
 	pub fn insert_sql(self, or: impl Display, n1: impl Display, n2: impl Display)->String {
@@ -1564,7 +1641,8 @@ use crate::prelude::*;
 use crate::progress::{Progress};
 use crate::database::{self,DbInterface};
 use crate::gamefiles::{GameIndex};
-use crate::struct_io::{Pack,NotPacked,NoSql,SqlRow};
+use crate::pack::{Pack,NotPacked};
+use crate::struct_io::{NoSql,SqlRow};
 use macros::{Pack,SqlRow};
 
 #[derive(Debug,Pack)]
@@ -1697,7 +1775,7 @@ pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 		let count = 1+db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
 			(), |row| row.get::<_,usize>(0))?;
 		let mut vec = vec![GameString::default(); count];
-		let mut sel_str = GameString::select_query_gen(db, "strings_", lang, "")?;
+		let mut sel_str = GameString::select_query_gen(db, "strings_".cat(lang),  "")?;
 		for row in sel_str.iter(())? {
 			if row.is_db_malformed() { continue }
 			let gamestring = row?;
@@ -1722,28 +1800,9 @@ use crate::prelude::*;
 use rusqlite::{Row};
 use crate::resources::*;
 use crate::gamefiles::GameIndex;
-use crate::struct_io::SqlRow;
 use crate::schemas::{Schema0};
 
 // I. Low-level stuff: basic types and extensions for `rusqlite` traits.
-pub trait RowExt {
-	fn dump(&self);
-}
-impl RowExt for Row<'_> {
-	/// Dumps all values found in a single row to stdout.
-	fn dump(&self) {
-		for (i, c) in self.as_ref().column_names().iter().enumerate() {
-			use rusqlite::types::ValueRef::*;
-			match self.get_ref(i) {
-				Ok(Null) => println!("  [{i:3}] {c} = \x1b[31mNull\x1b[m"),
-				Ok(Text(s)) => println!("  [{i:3}] {c} = Text(\"{}\")",
-					std::str::from_utf8(s).unwrap()),
-				Ok(x) => println!("  [{i:3}] {c} = {x:?}"),
-				_ => break
-			}
-		}
-	}
-}
 /// Detecting recoverable errors due to incorrect SQL typing.
 pub trait DbTypeCheck {
 	/// Returns `true` when a `Result` is an `Err` variant corresponding to
@@ -1764,58 +1823,6 @@ impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
 }
 
 // III. Structure accessing directly SQL data
-/// A statement aware of the associated table type.
-///
-/// We need a few types parametrized by a Resource0:
-///  - `TypedStatement`: this gets saved as a (mut) local variable;
-///  - `TypedRows`: the iterator producing Resource0 objects from the query.
-#[derive(Debug)]
-pub struct TypedStatement<'s, T: SqlRow> (Statement<'s>, PhantomData<T>);
-impl<'stmt,T: SqlRow> TypedStatement<'stmt, T> {
-	pub fn new(stmt: Statement<'stmt>)->Self { Self(stmt, PhantomData) }
-	/// Iterates over this statement, returning (possibly) Rust structs of
-	/// the type associated with this table.
-	pub fn iter<P: rusqlite::Params>(&mut self, params: P) ->rusqlite::Result<TypedRows<'_,T>> {
-		let rows = self.0.query(params)?;
-		Ok(TypedRows { rows, _marker: PhantomData, index: 0 })
-	}
-}
-/// An enriched version of `rusqlite::Rows`.
-///
-/// This struct retains information about the output type,
-/// as well as the current row index.
-///
-/// This also behaves as an `Iterator` (throwing when the underlying
-/// `Row` iterator fails).
-#[allow(missing_debug_implementations)]
-pub struct TypedRows<'stmt,T: SqlRow> {
-	rows: rusqlite::Rows<'stmt>,
-	_marker: PhantomData<T>,
-	index: usize,
-}
-impl<T: SqlRow> Iterator for TypedRows<'_,T> {
-	type Item = Result<T>;
-	fn next(&mut self)->Option<Self::Item> {
-		loop {
-			let row = match self.rows.next() {
-				Ok(Some(row)) => row,
-				Ok(None) => break,
-				Err(e) => return Some(Err(e.into()))
-			};
-			self.index+= 1;
-			let t = T::from_row(row);
-			match t {
-			Err(e) => {
-				println!("cannot read a {} from row {}: {e:?}",
-				std::any::type_name::<T>(), self.index);
-				row.dump();
-				continue },
-			_ => return Some(t)
-			}
-		}
-		None
-	}
-}
 /// A trivial wrapper on [`rusqlite::Connection`];
 /// mainly used for standardizing log messages.
 #[derive(Debug)]
@@ -2123,15 +2130,6 @@ impl<'a> DbInserter<'a> {
 	pub fn register(&mut self, resref: &Resref)->rusqlite::Result<usize> {
 		self.add_resref.execute((resref,))
 	}
-// 	/// Loads a new top-level resource
-// 	pub fn load<T: ToplevelResource>(&mut self, resref: Resref, mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
-// 		T::load(self, handle.open()?, resref)?;
-// 		if handle.is_override() {
-// 			self.add_override.execute((resref, T::SCHEMA.extension))?;
-// 		}
-// // 		*(<T as NamedTable>::find_field_mut(&mut self.resource_count))+=1;
-// 		Ok(())
-// 	}
 }
 impl Drop for DbInserter<'_> {
 	fn drop(&mut self) {
@@ -2352,7 +2350,7 @@ fn delete(db: &impl DbInterface, (table, key): (String, mlua::Value<'_>))->Resul
 /// All code with a higher level is written in lua and loaded from the
 /// "init.lua" file.
 pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
-	use crate::database::RowExt;
+	use crate::struct_io::RowExt;
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
 

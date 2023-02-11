@@ -26,9 +26,10 @@
 //! for joins with the edit tables.
 use crate::prelude::*;
 use macros::{produce_resource_list,all_resources,Resource};
-use crate::struct_io::{Pack,SqlRow,NotPacked,NoSql};
+use crate::pack::{Pack,NotPacked};
+use crate::struct_io::{SqlRow,NoSql,TypedStatement};
 use crate::schemas::{Schema};
-use crate::database::{DbTypeCheck,DbInterface,DbInserter,TypedStatement};
+use crate::database::{DbTypeCheck,DbInterface,DbInserter};
 use crate::gamefiles::{Restype};
 
 /// One of the resource tables stored in the database.
@@ -46,7 +47,7 @@ pub trait Resource: SqlRow {
 	fn schema()->Schema;
 	/// Particular case of SELECT statement used for saving to game files.
 	fn select_query(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
-		Self::select_query_gen(db, "save_", Self::schema().name, s)
+		Self::select_query_gen(db, "save_".cat(Self::schema().name), s)
 	}
 }
 

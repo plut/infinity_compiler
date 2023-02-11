@@ -11,16 +11,19 @@ all resources have: table name (primary key)
 main resources have: resource type, extension
 subresources have: sorting, parent key, parent resource
 
-for top:
-resource(items,"itm",0x03ed)
-for sub:
-resource(item_abilities,itemref,items)
 
 + keep resources organized by table name only (
 
-convert Resref, Strref, Restype to Wrappers
-use derive_more...
 
+struct_io: SqlRow (fields only)
+schemas: Schema (no payload), Columns (fields, no payload)
+resources: Resource (full schema + payload)
+??: anything depending on all_schemas
+
+  - move TypedStatement, RowExt, DbTypeCheck to struct_io
+  - make Strref, Resref into newtypes
+  - kill Schema0
+  - then Columns
 
 # Override
  - [x] improve backup procedure: a full backup as part of init
