@@ -2275,11 +2275,56 @@ impl<'a> LuaStatements<'a> {
 		})
 	}
 }
+trait CallbackToSql<'a> {
+	const NAME: &'static str;
+	/// Converts to a `&mut` reference to the `AllResources<Statement>`
+	/// contents.
+	fn as_mut(&mut self)->&mut AllResources<Statement<'a>>;
+	/// Actual implementation for this callback.
+	/// This is the part of the function which reads values from SQL and
+	/// builds the Lua structure.
+	fn build<'lua>(rows: &mut rusqlite::Rows<'_>, lua: &'lua Lua)->Result<mlua::Value<'lua>>;
+	/// Handles arguments from Lua, passes them to the Sql statement,
+	/// then calls the [`Self::execute`] handler.
+	fn prepare<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
+		let found = args.len();
+		let function = Self::NAME;
+		let table = pop_arg_as::<String>(&mut args, lua)
+			.with_context(|| format!(
+				"first argument to '{function}' callback must be a string"))?;
+		let stmt = self.as_mut().by_name_mut(&table)?;
+		// increase by 1 because we just popped the table name
+		let expected = stmt.parameter_count() + 1;
+		if found != expected {
+			return Err(Error::BadArgumentNumber { function, expected, found }.into())
+		}
+		let mut rows = stmt.query(args.as_params())?;
+		Self::build(&mut rows, lua) .with_context(|| format!(
+			"converting from SQL to Lua in '{function}' callback"))
+	}
+// 	/// The wrapper making the callback function.
+// 	///
+// **NOTE**:
+// The lifetime parameters were determined after **a lot** of trial
+// and error....
+// So this code is **precious** and we keep it for future reference.
+	fn callback<'scope,'closure>(&'scope mut self, scope: &'closure mlua::Scope<'_,'scope>)->mlua::Result<mlua::Function<'closure>> {
+		scope.create_function_mut(|lua, args|
+			self.prepare(lua, args).to_lua_err())
+	}
+	/// The wrapper installing the callback function in a table.
+	fn install_callback<'scope>(&'scope mut self, table: &mlua::Table<'scope>, scope: &mlua::Scope<'_,'scope>)->mlua::Result<()> {
+		table.set(Self::NAME, scope.create_function_mut(|lua, args|
+			self.prepare(lua, args).to_lua_err())?)
+	}
+}
 /// A newtype around `AllResources<Statement>`,
 /// implementing the `simod.list` callback.
 #[derive(Debug)]
 struct ListKeys<'a>(AllResources<Statement<'a>>);
-impl ListKeys<'_> {
+impl<'a> CallbackToSql<'a> for ListKeys<'a> {
+	const NAME: &'static str = "list";
+	fn as_mut(&mut self)->&mut AllResources<Statement<'a>> { &mut self.0 }
 	/// Implementation of `simod.list`.
 	///
 	/// This takes as parameters either
@@ -2288,49 +2333,22 @@ impl ListKeys<'_> {
 	///    top-level resource,
 	/// and returns in a Lua table the list of all primary keys matching
 	/// this condition.
-	pub fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Table<'lua>> {
-		let found = args.len();
-		let name = pop_arg_as::<String>(&mut args, lua)
-			.context("first argument should be a string")?;
-		let stmt = self.0.by_name_mut(&name)?;
-		// increase by 1 because we just popped the table name
-		let expected = stmt.parameter_count() + 1;
-		if found != expected {
-			return Err(Error::BadArgumentNumber { function: "simod.list",
-				expected, found }.into())
-		}
-		let mut rows = stmt.query(args.as_params())?;
+	fn build<'lua>(rows: &mut rusqlite::Rows<'_>, lua: &'lua Lua)->Result<mlua::Value<'lua>> {
 		let ret = lua.create_table()?;
 		while let Some(row) = rows.next()? {
 			let v_sql = row.get_ref(0)?;
 			let v_lua = sql_to_lua(v_sql, lua)?;
 			ret.push(v_lua)?;
 		}
-		Ok(ret)
+		Ok(mlua::Value::Table(ret))
 	}
 }
 #[derive(Debug)]
 struct SelectRow<'a>(AllResources<Statement<'a>>);
-impl SelectRow<'_> {
-	/// Implementation of `simod.select`.
-	///
-	/// Given the name of one of the resource tables
-	/// and a value for the primary key,
-	/// this reads the corresponding row and returns it as a Lua table.
-	///
-	/// If the row is not found then this returns `nil` instead.
-	pub fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
-		let found = args.len();
-		let name = pop_arg_as::<String>(&mut args, lua)
-			.context("first argument should be a string")?;
-		let stmt = self.0.by_name_mut(&name)?;
-		// increase by 1 because we just popped the table name
-		let expected = stmt.parameter_count() + 1;
-		if found != expected {
-			return Err(Error::BadArgumentNumber { function: "simod.list",
-				expected, found }.into())
-		}
-		let mut rows = stmt.query(args.as_params())?;
+impl<'a> CallbackToSql<'a> for SelectRow<'a> {
+	const NAME: &'static str = "list";
+	fn as_mut(&mut self)->&mut AllResources<Statement<'a>> { &mut self.0 }
+	fn build<'lua>(rows: &mut rusqlite::Rows<'_>, lua: &'lua Lua)->Result<mlua::Value<'lua>> {
 		match rows.next()? {
 			Some(row) => {
 				let ret = lua.create_table()?;
@@ -2345,7 +2363,6 @@ impl SelectRow<'_> {
 		}
 	}
 }
-
 /// Implementation of `simod.update`.
 ///
 /// Updates a single field in one of the resource tables.
@@ -2440,14 +2457,8 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 			}
 			Ok::<_,mlua::Error>(())
 		})?)?;
-		simod.set("list", scope.create_function_mut(
-			|_lua, args| statements.list_keys.execute(&lua, args)
-			.context("'simod.list' callback").to_lua_err())?)?;
-		simod.set("select", scope.create_function_mut(
-			|_lua, args| statements.select_row.execute(&lua, args)
-			.context("'simod.select' callback").to_lua_err())?)?;
-// 		simod.set("select", scope.create_function(
-// 			|_lua, args| select(&db, &lua, args).to_lua_err())?)?;
+		statements.list_keys.install_callback(&simod, scope)?;
+		statements.select_row.install_callback(&simod, scope)?;
 		simod.set("update", scope.create_function(
 			|_lua, args| update(&db, args).to_lua_err())?)?;
 		simod.set("insert", scope.create_function(
