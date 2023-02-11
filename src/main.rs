@@ -323,10 +323,11 @@ impl<T> SqlLeaf for Option<T> where T: SqlLeaf {
 ///
 /// Since we cannot implement the [`rusqlite::Params`] trait ourselves,
 /// this is the closest we can do.
-pub trait ToParams<T: ToSql>: Sized {
-	type Iter: Iterator<Item=T>;
-	fn params_iter(self)->Self::Iter;
-	fn params(self)->rusqlite::ParamsFromIter<Self::Iter> {
+pub trait AsParams {
+	type Elt<'a>: ToSql where Self: 'a;
+	type Iter<'a>: Iterator<Item=Self::Elt<'a>> where Self: 'a;
+	fn params_iter(&self)->Self::Iter<'_>;
+	fn as_params(&self)->rusqlite::ParamsFromIter<Self::Iter<'_>> {
 		rusqlite::params_from_iter(self.params_iter())
 	}
 }
@@ -354,13 +355,6 @@ pub trait SqlRow: Sized {
 	/// (constraints, etc.)
 	fn field_create_text(_i: usize)->&'static str { "" }
 	fn primary_index()->Option<usize>;
-	// Provided functions:
-	/// Converts this resource to a struct implementing
-	/// [`rusqlite::Params`], allowing it to be passed to a
-	/// [`rusqlite::Statement`].
-	fn as_params(&self)->rusqlite::ParamsFromIter<ContentIterator<'_,Self>> {
-		rusqlite::params_from_iter(ContentIterator(0, self))
-	}
 	/// Reads a whole [`rusqlite::Row`] into a struct.
 	fn from_row(row: &rusqlite::Row<'_>,)->Result<Self> {
 		Self::from_row_at(row, 0)
@@ -409,11 +403,10 @@ impl<T: SqlLeaf> SqlRow for T {
 	fn fieldname_ctx(ctx: &'static str, _i: usize)->&'static str { ctx }
 	fn primary_index()->Option<usize> { None }
 }
-impl<'a, T: SqlRow> ToParams<ToSqlOutput<'a>> for &'a T {
-	type Iter = ContentIterator<'a,T>;
-	fn params_iter(self)->Self::Iter {
-		ContentIterator(0, self)
-	}
+impl<T: SqlRow> AsParams for T {
+	type Elt<'a> = ToSqlOutput<'a> where Self: 'a;
+	type Iter<'a> = ContentIterator<'a,T> where Self: 'a;
+	fn params_iter(&self)->Self::Iter<'_> { ContentIterator(0, self) }
 }
 
 /// An iterator over all content fields of a [`SqlRow`].
@@ -2198,7 +2191,7 @@ use mlua::{Lua,ExternalResult};
 use crate::prelude::*;
 use crate::resources::{AllResources,RESOURCES};
 use crate::schemas::Schema;
-use crate::struct_io::{FieldType,ToParams};
+use crate::struct_io::{FieldType,AsParams};
 /// Runtime errors during interface between SQL and Lua.
 /// A simple wrapper allowing `mlua::Value` to be converted to SQL.
 #[derive(Debug)]
@@ -2223,7 +2216,7 @@ impl<'lua> mlua::FromLua<'lua> for LuaToSql<'lua> {
 		Ok(Self(v))
 	}
 }
-struct LuaToSqlRef<'a>(&'a mlua::Value<'a>);
+pub struct LuaToSqlRef<'a>(&'a mlua::Value<'a>);
 impl<'a> From<&'a mlua::Value<'a>> for LuaToSqlRef<'a> {
 	fn from(source: &'a mlua::Value<'a>)->Self { Self(source) }
 }
@@ -2291,7 +2284,7 @@ fn pop_arg_as<'lua, T: mlua::FromLua<'lua>>(args: &mut mlua::MultiValue<'lua>, l
 }
 /// A structure interfacing between [`mlua::Multivalue`] and
 /// [`rusqlite::Params`].
-struct LuaParamsIterator<'lua> {
+pub struct LuaParamsIterator<'lua> {
 	values: &'lua mlua::MultiValue<'lua>,
 	index: usize,
 }
@@ -2301,9 +2294,10 @@ impl<'lua> Iterator for LuaParamsIterator<'lua> {
 		self.values.get(self.index).map(LuaToSqlRef::from)
 	}
 }
-impl<'a> ToParams<LuaToSqlRef<'a>> for &'a mlua::MultiValue<'a> {
-	type Iter = LuaParamsIterator<'a>;
-	fn params_iter(self)->Self::Iter {
+impl AsParams for mlua::MultiValue<'_> {
+	type Elt<'a> = LuaToSqlRef<'a> where Self: 'a;
+	type Iter<'a> = LuaParamsIterator<'a> where Self: 'a;
+	fn params_iter(&self)->Self::Iter<'_> {
 		LuaParamsIterator{ values: self, index: 0 }
 	}
 }
@@ -2335,7 +2329,7 @@ impl<'a> LuaStatements<'a> {
 			return Err(Error::BadArgumentNumber { function: "simod.list",
 				expected, found }.into())
 		}
-		let mut rows = stmt.query(args.params())?;
+		let mut rows = stmt.query(args.as_params())?;
 		let ret = lua.create_table()?;
 		while let Some(row) = rows.next()? {
 			let v_sql = row.get_ref(0)?;
