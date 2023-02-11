@@ -2174,11 +2174,19 @@ impl<'lua> mlua::FromLua<'lua> for LuaToSql<'lua> {
 		Ok(Self(v))
 	}
 }
-pub struct LuaToSqlRef<'a>(&'a mlua::Value<'a>);
-impl<'a> From<&'a mlua::Value<'a>> for LuaToSqlRef<'a> {
+pub struct LuaValueRef<'a>(&'a mlua::Value<'a>);
+impl<'a> From<&'a mlua::Value<'a>> for LuaValueRef<'a> {
 	fn from(source: &'a mlua::Value<'a>)->Self { Self(source) }
 }
-impl rusqlite::ToSql for LuaToSqlRef<'_> {
+impl Debug for LuaValueRef<'_> {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+		match self.0 {
+			mlua::Value::String(s) => f.write_str(&s.to_string_lossy()),
+			x => write!(f, "{x:?}"),
+		}
+	}
+}
+impl rusqlite::ToSql for LuaValueRef<'_> {
 	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
 		use rusqlite::types::{ToSqlOutput::Owned,Value as SqlValue};
 		match self.0 {
@@ -2207,17 +2215,6 @@ fn sql_to_lua<'lua>(v: rusqlite::types::ValueRef<'_>, lua: &'lua Lua)->Result<ml
 	}
 }
 
-/// A trivial wrapper giving a slightly better [`Debug`] implementation
-/// for Lua values (displaying the actual contents of strings).
-struct LuaInspect<'lua>(&'lua mlua::Value<'lua>);
-impl Debug for LuaInspect<'_> {
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		match self.0 {
-			mlua::Value::String(s) => f.write_str(&s.to_string_lossy()),
-			x => write!(f, "{x:?}"),
-		}
-	}
-}
 /// Helper function for reading arguments passed to Lua callbacks.
 ///
 /// Reads an argument as the given `FromLua` type and returns it,
@@ -2235,13 +2232,13 @@ pub struct LuaParamsIterator<'lua> {
 	index: usize,
 }
 impl<'lua> Iterator for LuaParamsIterator<'lua> {
-	type Item = LuaToSqlRef<'lua>;
+	type Item = LuaValueRef<'lua>;
 	fn next(&mut self)->Option<Self::Item> {
-		self.values.get(self.index).map(LuaToSqlRef::from)
+		self.values.get(self.index).map(LuaValueRef::from)
 	}
 }
 impl AsParams for mlua::MultiValue<'_> {
-	type Elt<'a> = LuaToSqlRef<'a> where Self: 'a;
+	type Elt<'a> = LuaValueRef<'a> where Self: 'a;
 	type Iter<'a> = LuaParamsIterator<'a> where Self: 'a;
 	fn params_iter(&self)->Self::Iter<'_> {
 		LuaParamsIterator{ values: self, index: 0 }
@@ -2370,11 +2367,11 @@ impl<'a> CallbackToSql<'a> for SelectRow<'a> {
 /// constraint when creating the tables?).
 fn update(db: &impl DbInterface, (table, key, field, value): (String, String, String, mlua::Value<'_>))->Result<()> {
 	scope_trace!("callback 'simod.update' invoked with: '{}' '{}' '{} '{:?}'",
-		table, key, field, LuaInspect(&value));
+		table, key, field, LuaValueRef(&value));
 	let s = format!(
 		r#"update "{table}" set "{field}"=? where "{primary}"='{key}'"#,
 		primary = RESOURCES.table_schema(&table)?.primary());
-	trace!("executing sql: {s} {:?}", LuaInspect(&value));
+	trace!("executing sql: {s} {:?}", LuaValueRef(&value));
 	db.execute(&s, (LuaToSql(value),))?;
 	Ok(())
 }
