@@ -2,7 +2,7 @@
 #![allow(
 	unused_attributes,
 // 	unused_imports,
-	dead_code,
+// 	dead_code,
 // 	unreachable_code,
 // 	unused_macros,
 // 	unused_variables,
@@ -57,11 +57,15 @@ pub(crate) enum Error{
 // 	BadType(String),
 // 	BadArgumentNumber(usize, &'static str),
 	CallbackMissingArgument,
-	CallbackExtraArgument,
 }
 impl Display for Error {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		fmt::Debug::fmt(&self, f)
+		match self {
+			Self::UnknownTable(s) => write!(f, "Unknown table: '{s}'"),
+			Self::BadArgumentNumber { function, expected, found } =>
+				write!(f, "Bad number of arguments for function '{function}': found {found}, expected {expected}"),
+			_ => write!(f, "Error: &{self:?}"),
+		}
 	}
 }
 impl std::error::Error for Error { }
@@ -1214,21 +1218,10 @@ impl<T: Display> Display for Columns<'_,T> {
 		Ok(())
 	}
 }
-impl<'a,T> Columns<'a, T> {
-	pub fn from(slice: &'a[Field], prefix: T)->Self { Self(slice, prefix) }
+impl<T> Columns<'_, T> {
 	/// The length of this particular column set.
 	/// We need this since it is in general different from schema length.
 	pub fn len(&self)->usize { self.0.len() }
-	/// Modifies a set of column headers by prepending a prefix, e.g. "new."
-	pub fn with_prefix<P: Display>(self, prefix: P)->Columns<'a, P> {
-		Columns(self.0, prefix)
-	}
-}
-impl<T: Display> Columns<'_,T> {
-	/// Returns the SQL select statement for these columns, as a String.
-	pub fn select_sql(self, n1: impl Display, n2: impl Display, condition: impl Display)->String {
-		format!(r#"select {self} from "{n1}{n2}" {condition}"#)
-	}
 }
 
 /// The identifier of the table for a schema.
@@ -1291,13 +1284,6 @@ impl Schema {
 		match self.resource {
 			SchemaResource::Top { .. } => self.name,
 			SchemaResource::Sub { parent, .. } => parent,
-		}
-	}
-	/// Returns the Restype, or panics if this is not a top-level resource.
-	pub fn restype(&self)->Restype {
-		match self.resource {
-			SchemaResource::Top { restype, .. } => restype,
-			_ => panic!("called restype on a resource which is not toplevel"),
 		}
 	}
 	/// Returns the name of the field containing the resref for this
@@ -1579,14 +1565,6 @@ impl<'schema> Schema0<'schema> {
 	pub fn context(&'schema self)->Columns<'schema, NullDisplay> {
 		Columns(&self.fields[self.resref_key..self.before_id()], NullDisplay())
 	}
-	/// All the columns except the primary key.
-	pub fn except_primary(&'schema self)->Columns<'schema, NullDisplay> {
-		Columns(&self.fields[..self.fields.len()-1], NullDisplay())
-	}
-	/// The resref for this schema (as a string).
-	pub fn resref(&'schema self)->&str {
-		self.fields[self.resref_key].fname
-	}
 	/// The primary key for this schema (as a string).
 	///
 	/// Note that the [`Schema0`] structure imposes that this is always the
@@ -1617,24 +1595,6 @@ impl<'schema> Schema0<'schema> {
 		}
 		s.push(')');
 		s
-	}
-	fn all_keys_gen<T>(&self, db: &impl DbInterface, condition: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
-		let s = format!(r#"select "{primary}" from "{table}" {condition} order by {sort}"#,
-			table = self.name, primary = self.primary(), sort = self.context());
-		let mut stmt = db.prepare(&s)?;
-		let mut rows = stmt.query(())?;
-		let mut v = Vec::<T>::new();
-		while let Some(row) = rows.next()? {
-			v.push(f(row.get_ref(0)?)?);
-		}
-		Ok(v)
-	}
-	pub fn all_keys<T>(&self, db: &impl DbInterface, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
-		self.all_keys_gen::<T>(db, "", f)
-	}
-	pub fn all_keys_with_parent<T>(&self, db: &impl DbInterface, value: impl Display, f: impl Fn(rusqlite::types::ValueRef<'_>)->Result<T>)->Result<Vec<T>> {
-		self.all_keys_gen(db, format!(r#"where "{parent_key}"='{value}'"#,
-			parent_key = self.resref()), f)
 	}
 	/// Collects parameters for a SQL statement from the fields of the
 	/// schema.
@@ -2189,7 +2149,7 @@ pub(crate) mod lua_api {
 use mlua::{Lua,ExternalResult};
 
 use crate::prelude::*;
-use crate::resources::{AllResources,RESOURCES};
+use crate::resources::{AllResources,all_schemas,RESOURCES};
 use crate::schemas::Schema;
 use crate::struct_io::{FieldType,AsParams};
 /// Runtime errors during interface between SQL and Lua.
@@ -2307,8 +2267,8 @@ impl AsParams for mlua::MultiValue<'_> {
 /// the Lua API.
 #[derive(Debug)]
 struct LuaStatements<'a> {
-	/// We keep an owned copy of the original table schemas.
-	schemas: AllResources<Schema>,
+// 	/// We keep an owned copy of the original table schemas.
+// 	schemas: AllResources<Schema>,
 	/// Used for `simod.list_keys`.
 	list_keys: AllResources<Statement<'a>>,
 }
@@ -2316,7 +2276,7 @@ impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface, schemas: AllResources<Schema>)->Result<Self> {
 		Ok(Self {
 			list_keys: schemas.map(|schema| db.prepare(schema.list_keys_sql()))?,
-			schemas,
+// 			schemas,
 		})
 	}
 	pub fn list<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Table<'lua>> {
@@ -2340,27 +2300,6 @@ impl<'a> LuaStatements<'a> {
 	}
 }
 
-/// Implementation of `simod.list`.
-// fn list_keys(db: &Connection, (table,): (String,))->Result<Vec<String>> {
-// 	Ok(table_schema(&table)?.all_keys(db)?)
-// }
-fn list_keys<'lua>(db: &impl DbInterface, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Vec<mlua::Value<'lua>>> {
-	scope_trace!("callback 'simod.list' invoked with: {:?}", args);
-	let name = pop_arg_as::<String>(&mut args, lua)
-		.context("first argument should be a string")?;
-	trace!(r#"  first argument is "{name}""#);
-	let schema = RESOURCES.table_schema(&name)?;
-	match args.len() {
-		0 => Ok(schema.all_keys(db, |v| sql_to_lua(v, lua))?),
-		1 => {
-			let key = pop_arg_as::<String>(&mut args, lua)
-				.context("'simod.list' callback")?;
-			trace!(r#"  second argument is "{key}""#);
-			Ok(schema.all_keys_with_parent(db, key, |v| sql_to_lua(v,lua))?)
-		},
-		_ => Err(Error::CallbackExtraArgument.into()),
-	}
-}
 /// Implementation of `simod.select`.
 ///
 /// Reads a full row from one of the resource tables and returns it as a
@@ -2453,13 +2392,15 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 	use crate::struct_io::RowExt;
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
+	let mut statements = LuaStatements::new(&db, all_schemas())?;
+
 
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
 	lua.scope(|scope| {
 		let simod = lua.create_table()?;
 		let lua_schema = lua.create_table()?;
-		RESOURCES.map(|schema, _| {
+		RESOURCES.map_mut(|schema, _| {
 			let fields = lua.create_table()?;
 			let context = lua.create_table()?;
 			for col in schema.columns() {
@@ -2486,8 +2427,8 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 			}
 			Ok::<_,mlua::Error>(())
 		})?)?;
-		simod.set("list", scope.create_function(
-			|_lua, args| list_keys(&db, &lua, args).to_lua_err())?)?;
+		simod.set("list", scope.create_function_mut(
+			|_lua, args| statements.list(&lua, args).to_lua_err())?)?;
 		simod.set("select", scope.create_function(
 			|_lua, args| select(&db, &lua, args).to_lua_err())?)?;
 		simod.set("update", scope.create_function(
