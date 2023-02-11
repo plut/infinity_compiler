@@ -194,14 +194,15 @@ pub trait ToplevelResource: ToplevelResourceData {
 	/// some `Vec` with elements (subresource, linking-info).
 	type Subresources<'a>;
 	/// Inserts a single resource in the database.
-	fn load(db: &mut DbInserter<'_>, cursor: impl Read+Seek, resref: Resref)
+	fn load(tables: &mut AllResources<Statement<'_>>, cursor: impl Read+Seek, resref: Resref)
 		->Result<()>;
 	fn load_from_handle(db: &mut DbInserter<'_>, resref: Resref,
 			mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
-		Self::load(db, handle.open()?, resref)?;
+		Self::load(&mut db.tables, handle.open()?, resref)?;
 		if handle.is_override() {
 			db.add_override.execute((resref, Self::EXTENSION))?;
 		}
+// // 		*(<T as NamedTable>::find_field_mut(&mut self.resource_count))+=1;
 // 		*count+= 1;
 		Ok(())
 	}
@@ -254,11 +255,11 @@ pub trait ToplevelResource: ToplevelResourceData {
 impl ToplevelResource for Item {
 	type Subresources<'a> = (&'a mut [ItemAbility], &'a mut[(ItemEffect,usize)]);
 	/// load an item from cursor
-	fn load(db: &mut DbInserter<'_>, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
+	fn load(tables: &mut AllResources<Statement<'_>>, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
 		let mut item = Item::unpack(&mut cursor)
 			.context("cannot unpack Item0 main struct")?;
 		item.itemref = resref.into();
-		db.tables.items.execute(item.as_params())
+		tables.items.execute(item.as_params())
 			.context("inserting into 'items'")?;
 		cursor.seek(SeekFrom::Start(item.abilities_offset.unwrap() as u64))?;
 
@@ -270,7 +271,7 @@ impl ToplevelResource for Item {
 					ab_index, item.abilities_count))?;
 			ab.itemref = resref.into();
 			ab.index = ab_index.into();
-			db.tables.item_abilities.execute(ab.as_params())
+			tables.item_abilities.execute(ab.as_params())
 				.context("inserting into 'item_abilities'")?;
 			ab_n.push(ab.effect_count.unwrap());
 		}
@@ -283,7 +284,7 @@ impl ToplevelResource for Item {
 			eff.itemref = resref.into();
 			eff.ability = 0.into();
 			eff.index = j.into();
-			db.tables.item_effects.execute(eff.as_params())
+			tables.item_effects.execute(eff.as_params())
 				.context("inserting into 'item_effects'")?;
 		}
 		for (i, n) in ab_n.iter().enumerate() {
@@ -293,7 +294,7 @@ impl ToplevelResource for Item {
 				eff.itemref = resref.into();
 				eff.ability = (1+i as i64).into();
 				eff.index = j.into();
-				db.tables.item_effects.execute(eff.as_params())
+				tables.item_effects.execute(eff.as_params())
 					.context("inserting into 'item_effects'")?;
 			}
 		}
