@@ -490,8 +490,8 @@
 </span><span class="kw">pub trait </span>Resource: SqlRow {
 	<span class="kw">fn </span>schema()-&gt;Schema;
 	<span class="doccomment">/// Particular case of SELECT statement used for saving to game files.
-	</span><span class="kw">fn </span>select_query(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, s: <span class="kw">impl </span>Display)-&gt;<span class="prelude-ty">Result</span>&lt;TypedStatement&lt;<span class="lifetime">&#39;_</span>, <span class="self">Self</span>&gt;&gt; {
-		<span class="self">Self</span>::select_query_gen(db, <span class="string">&quot;save_&quot;</span>.cat(<span class="self">Self</span>::schema().name), s)
+	</span><span class="kw">fn </span>select_typed(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, s: <span class="kw">impl </span>Display)-&gt;<span class="prelude-ty">Result</span>&lt;TypedStatement&lt;<span class="lifetime">&#39;_</span>, <span class="self">Self</span>&gt;&gt; {
+		<span class="self">Self</span>::select_from_typed(db, <span class="string">&quot;save_&quot;</span>.cat(<span class="self">Self</span>::schema().name), s)
 	}
 }
 
@@ -784,9 +784,9 @@
 	</span><span class="kw">fn </span>for_each&lt;F,C&gt;(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, condition: C, f:F)-&gt;<span class="prelude-ty">Result</span>&lt;i32&gt;
 		<span class="kw">where </span>F: Fn(Resref, <span class="kw-2">&amp;mut </span><span class="self">Self</span>, <span class="self">Self</span>::Subresources&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt;,
 			C: Display {
-		<span class="kw">let </span><span class="kw-2">mut </span>sel_item = Item::select_query(db, <span class="kw-2">&amp;</span>condition)<span class="question-mark">?</span>;
-		<span class="kw">let </span><span class="kw-2">mut </span>sel_item_ab = ItemAbility::select_query(db, <span class="string">r#&quot;where &quot;key&quot;=?&quot;#</span>)<span class="question-mark">?</span>;
-		<span class="kw">let </span><span class="kw-2">mut </span>sel_item_eff = ItemEffect::select_query(db, <span class="string">r#&quot;where &quot;key&quot;=?&quot;#</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span><span class="kw-2">mut </span>sel_item = Item::select_typed(db, <span class="kw-2">&amp;</span>condition)<span class="question-mark">?</span>;
+		<span class="kw">let </span><span class="kw-2">mut </span>sel_item_ab = ItemAbility::select_typed(db, <span class="string">r#&quot;where &quot;key&quot;=?&quot;#</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span><span class="kw-2">mut </span>sel_item_eff = ItemEffect::select_typed(db, <span class="string">r#&quot;where &quot;key&quot;=?&quot;#</span>)<span class="question-mark">?</span>;
 		<span class="kw">let </span><span class="kw-2">mut </span>n_items = <span class="number">0</span>;
 		<span class="macro">debug!</span>(<span class="string">&quot;processing items under condition: {condition}&quot;</span>);
 		<span class="kw">for </span>x <span class="kw">in </span>sel_item.iter(())<span class="question-mark">? </span>{

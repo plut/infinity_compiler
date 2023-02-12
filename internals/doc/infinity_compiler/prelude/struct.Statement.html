@@ -95,7 +95,7 @@ cannot detect, such as by calling it on a statement which <em>updates</em>
 a single item rather than inserting one. Please don’t do that.</p>
 <h5 id="failure-3"><a href="#failure-3">Failure</a></h5>
 <p>Will return <code>Err</code> if no row is inserted or many rows are inserted.</p>
-</div></details><details class="rustdoc-toggle method-toggle" open><summary><section id="method.query" class="method has-srclink"><h4 class="code-header">pub fn <a href="#method.query" class="fn">query</a>&lt;P&gt;(&amp;mut self, params: P) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.67.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;Rows&lt;'_&gt;, Error&gt;<span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;P: Params,</span></h4></section></summary><div class="docblock"><p>Execute the prepared statement, returning a handle to the resulting
+</div></details><details class="rustdoc-toggle method-toggle" open><summary><section id="method.query" class="method has-srclink"><h4 class="code-header">pub fn <a href="#method.query" class="fn">query</a>&lt;P&gt;(&amp;mut self, params: P) -&gt; <a class="enum" href="https://doc.rust-lang.org/1.67.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="struct.Rows.html" title="struct infinity_compiler::prelude::Rows">Rows</a>&lt;'_&gt;, Error&gt;<span class="where fmt-newline">where<br>&nbsp;&nbsp;&nbsp;&nbsp;P: Params,</span></h4></section></summary><div class="docblock"><p>Execute the prepared statement, returning a handle to the resulting
 rows.</p>
 <p>Due to lifetime restrictions, the rows handle returned by <code>query</code> does
 not implement the <code>Iterator</code> trait. Consider using
@@ -310,7 +310,7 @@ functions in the <a href="struct.Statement.html#method.execute" title="Statement
 <h5 id="failure-11"><a href="#failure-11">Failure</a></h5>
 <p>Will return <code>Err</code> if the executed statement returns rows (in which case
 <code>query</code> should be used instead), or the underlying SQLite call fails.</p>
-</div></details><details class="rustdoc-toggle method-toggle" open><summary><section id="method.raw_query" class="method has-srclink"><h4 class="code-header">pub fn <a href="#method.raw_query" class="fn">raw_query</a>(&amp;mut self) -&gt; Rows&lt;'_&gt;</h4></section></summary><div class="docblock"><p>Low level API to get <code>Rows</code> for this query given that all parameters
+</div></details><details class="rustdoc-toggle method-toggle" open><summary><section id="method.raw_query" class="method has-srclink"><h4 class="code-header">pub fn <a href="#method.raw_query" class="fn">raw_query</a>(&amp;mut self) -&gt; <a class="struct" href="struct.Rows.html" title="struct infinity_compiler::prelude::Rows">Rows</a>&lt;'_&gt;</h4></section></summary><div class="docblock"><p>Low level API to get <code>Rows</code> for this query given that all parameters
 were bound explicitly with the <a href="struct.Statement.html#method.raw_bind_parameter" title="Statement::raw_bind_parameter"><code>Statement::raw_bind_parameter</code></a> API.</p>
 <h5 id="caveats-2"><a href="#caveats-2">Caveats</a></h5>
 <p>Any unbound parameters will have <code>NULL</code> as their value.</p>
