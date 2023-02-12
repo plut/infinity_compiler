@@ -26,6 +26,10 @@ resources: Resource (full schema + payload)
   - then Columns
   - move all_resources() to a field of GameDB (etc.)
   - list_keys should return a Lua table, not a Vec
+  - decide if LuaStatements takes a Schema by value or by ref
+   (it probably owns a value)
+  - `simod.insert`: use previous algo. (iterating over schema)
+  - rename `new`/`run` to `prepare`/`execute`
 
 # Override
  - [x] improve backup procedure: a full backup as part of init

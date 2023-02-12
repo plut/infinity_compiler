@@ -863,8 +863,8 @@ pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 			/// Number of resources in this table.
 			pub fn len(&self)->usize { #n }
 			/// Calls a closure for each resource type in the game.
-			pub fn map<U,E,F>(&self, f:F)->Result<AllResources<U>,E>
-			where U: Debug, F: Fn(&T)->Result<U,E> {
+			pub fn map<'a,U,E,F>(&'a self, f:F)->Result<AllResources<U>,E>
+			where U: Debug, F: Fn(&'a T)->Result<U,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData, #map })
 			}
 			/// Calls a closure for each resource type in the game.

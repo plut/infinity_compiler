@@ -55,9 +55,11 @@ pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
 pub(crate) enum Error{
 	UnknownTable(String),
 	BadArgumentNumber { function: &'static str, expected: usize, found: usize },
+	BadArgumentType { expected: &'static str },
 // 	BadType(String),
 // 	BadArgumentNumber(usize, &'static str),
 	CallbackMissingArgument,
+	Any(String),
 }
 impl Display for Error {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
@@ -65,6 +67,8 @@ impl Display for Error {
 			Self::UnknownTable(s) => write!(f, "Unknown table: '{s}'"),
 			Self::BadArgumentNumber { function, expected, found } =>
 				write!(f, "Bad number of arguments for function '{function}': found {found}, expected {expected}"),
+			Self::BadArgumentType { expected } =>
+				write!(f, "Bad argument type: expected {expected}"),
 			_ => write!(f, "Error: &{self:?}"),
 		}
 	}
@@ -1127,7 +1131,7 @@ use crate::gamefiles::Restype;
 use crate::struct_io::{FieldType};
 
 /// Description of a field in a game resource.
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct Field {
 	/// Name of this column.
 	pub fname: &'static str,
@@ -1226,7 +1230,7 @@ impl<T> Columns<'_, T> {
 }
 
 /// The identifier of the table for a schema.
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub enum SchemaResource {
 #[allow(dead_code)]
 	Top { extension: &'static str, restype: Restype, },
@@ -1263,7 +1267,7 @@ pub enum SchemaResource {
 /// is (a) storing a few bytes of useless memory in the executable,
 /// and (b) possibly inserting a few always-empty tables in the database
 /// (we try to avoid this however).
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct Schema {
 	pub name: &'static str,
 	pub resource: SchemaResource,
@@ -1474,23 +1478,6 @@ end"#))?;
 		if !is_first_field {
 			uwriteln!(w, ";");
 		}
-	}
-	/// Prepares the statement listing all the keys for Lua interface.
-	///
-	/// For top-level resources, this lists all keys.
-	/// For sub-resources, this lists all keys linked to a given parent key.
-	pub fn list_keys_sql(&self)->String {
-		let mut s = format!(r#"select "{primary}" from "{self}""#,
-			primary = self.primary());
-		if matches!(self.resource, SchemaResource::Sub { .. }) {
-			uwrite!(&mut s, r#" where "{resref}"=? order by "index""#,
-				resref = self.resref());
-		}
-		s
-	}
-	pub fn select_row_sql(&self)->String {
-		self.fields.cols().select_sql(self,
-			lazy_format!(r#"where "{primary}"=?"#, primary=self.primary()))
 	}
 }
 
@@ -2247,66 +2234,20 @@ impl AsParams for mlua::MultiValue<'_> {
 	}
 }
 
-
-/// A collection of all the prepared SQL statements used for implementing
-/// the Lua API.
-///
-/// Since we need to split this struct when passing `&mut Statement` values
-/// to various `FnMut` closures, the fields are not typed as
-/// `AllResources<Statement<'a>>` but as newtype wrappers;
-/// each newtype runs only the appropriate conversion between the
-/// prepared SQL statement and Lua values.
-#[derive(Debug)]
-struct LuaStatements<'a> {
-// 	/// We keep an owned copy of the original table schemas.
-// 	schemas: AllResources<Schema>,
-	/// Prepared statements for `simod.list`.
-	list_keys: AllCallbacks<'a,ListKeysEach<'a>>,
-// 	select_row: SelectRow<'a>,
-	// Prepared statements for `simod.select`.
+macro_rules! fail {
+	($($a:tt)+) => { return Err(Error::$($a)+.into()) }
 }
-impl<'a> LuaStatements<'a> {
-	pub fn new(db: &'a impl DbInterface, schemas: AllResources<Schema>)->Result<Self> {
-		Ok(Self {
-			list_keys: AllCallbacks::<'_,ListKeysEach<'_>>::new(db, &schemas)?,
-// 			list_keys: ListKeys(schemas.map(|schema| db.prepare(schema.list_keys_sql()))?),
-// 			select_row: SelectRow(schemas.map(|schema| db.prepare(schema.select_row_sql()))?),
-// 			schemas,
-		})
-	}
-}
-// #[derive(Debug)]
-// struct Callback2<T,F>
-// 	where T:Debug,
-// 	F: for<'lua> Fn(&mut T, &'lua Lua, mlua::MultiValue<'lua>)
-// 		->Result<mlua::Value<'lua>> {
-// 	name: &'static str,
-// 	content: AllResources<T>,
-// 	build: F,
-// }
-// impl<T,F> Callback2<T,F>
-// 	where T:Debug,
-// 	F: for<'lua> Fn(&mut T, &'lua Lua, mlua::MultiValue<'lua>)
-// 		->Result<mlua::Value<'lua>> {
-// 	fn new(name: &'static str, schemas: AllResources<Schema>, each: impl Fn(&Schema)->Result<T>, build: F)->Result<Self> {
-// 		Ok(Self { name, build, content: schemas.map(|s| each(s))?, })
-// 	}
-// }
-
-// we need Callback<Each> where Each is a *struct* implementing
-// CallbackEach
-trait CallbackEach<'a>: Debug+Sized {
+trait Callback<'a>: Debug+Sized {
 	const NAME: &'static str;
 	/// Builds the data for the callback from the table schema.
-	fn new(db: &'a impl DbInterface, schema: &Schema)->Result<Self>;
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self>;
 	/// Runs the callback (from the selected table, etc.) and builds the
 	/// resulting Lua value.
-	fn call<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>>;
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>>;
 	/// Utility function to check that arguments match statement.
-	fn check_arg_count(stmt: &Statement<'_>, args: &mlua::MultiValue<'_>)->Result<()> {
+	fn expect_arguments(args: &mlua::MultiValue<'_>, expected: usize)->Result<()> {
 		// We assume that one argument was discarded (table name).
 		let found = args.len() + 1;
-		let expected = stmt.parameter_count() + 1;
 		if found != expected {
 			Err(Error::BadArgumentNumber { function: Self::NAME, expected, found }.into())
 		} else {
@@ -2316,120 +2257,18 @@ trait CallbackEach<'a>: Debug+Sized {
 }
 /// Implementation of `simod.list`.
 #[derive(Debug)]
-struct ListKeysEach<'a>(Statement<'a>);
-impl<'a> CallbackEach<'a> for ListKeysEach<'a> {
+struct ListKeys<'a>(Statement<'a>);
+impl<'a> Callback<'a> for ListKeys<'a> {
 	const NAME: &'static str = "list";
-	fn new(db: &'a impl DbInterface, schema: &Schema)->Result<Self> {
-		Ok(Self(db.prepare(schema.list_keys_sql())?))
-	}
-	/// Implementation of `simod.list`.
-	///
-	/// This takes as parameters either
-	/// 1. the name of a top-level resource table, or
-	/// 2. the name of a sub-resource + a resref for the corresponding
-	///    top-level resource,
-	/// and returns in a Lua table the list of all primary keys matching
-	/// this condition.
-	fn call<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
-		Self::check_arg_count(&self.0, &args)?;
-		let mut rows = self.0.query(args.as_params())?;
-		let ret = lua.create_table()?;
-		while let Some(row) = rows.next()? {
-			let v_sql = row.get_ref(0)?;
-			let v_lua = sql_to_lua(v_sql, lua)?;
-			ret.push(v_lua)?;
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+		let mut s = format!(r#"select "{primary}" from "{schema}""#,
+			primary = schema.primary());
+		if matches!(schema.resource, crate::schemas::SchemaResource::Sub { .. }) {
+			uwrite!(&mut s, r#" where "{resref}"=? order by "index""#,
+				resref = schema.resref());
 		}
-		Ok(mlua::Value::Table(ret))
+		db.prepare(s).map(Self)
 	}
-}
-/// A structure grouping all callbacks for all tables.
-#[derive(Debug)]
-struct AllCallbacks<'a,T: CallbackEach<'a>> {
-	content: AllResources<T>,
-	_marker: PhantomData::<&'a()>,
-}
-impl<'a,T: CallbackEach<'a>> AllCallbacks<'a,T> {
-	fn new(db: &'a impl DbInterface, schemas: &AllResources<Schema>)->Result<Self> {
-		Ok(Self { content: schemas.map(|s| T::new(db, s))?, _marker: PhantomData })
-	}
-	/// Handles arguments from Lua, passes them to the Sql statement,
-	/// then calls the [`Self::execute`] handler.
-	fn prepare<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
-		let function = T::NAME;
-		let table = pop_arg_as::<String>(&mut args, lua)
-			.with_context(|| format!(
-				"first argument to '{function}' callback must be a string"))?;
-		self.content.by_name_mut(&table)?.call(lua, args)
-// 		let mut rows = stmt.query(args.as_params())?;
-// 		Self::build(&mut rows, lua)
-				.with_context(|| format!(
-					"converting from SQL to Lua in '{function}' callback"))
-	}
-// 	/// The wrapper making the callback function.
-// 	///
-// **NOTE**:
-// The lifetime parameters were determined after **a lot** of trial
-// and error....
-// So this code is **precious** and we keep it for future reference.
-// 	fn callback<'scope,'closure>(&'scope mut self, scope: &'closure mlua::Scope<'_,'scope>)->mlua::Result<mlua::Function<'closure>> {
-// 		scope.create_function_mut(|lua, args|
-// 			self.prepare(lua, args).to_lua_err())
-// 	}
-	/// The wrapper installing the callback function in a table.
-	fn install_callback<'scope>(&'scope mut self, table: &mlua::Table<'scope>, scope: &mlua::Scope<'_,'scope>)->mlua::Result<()> {
-		table.set(T::NAME, scope.create_function_mut(|lua, args|
-			self.prepare(lua, args).to_lua_err())?)
-	}
-}
-
-trait Callback {
-	/// The content wrapped by this type; one of these for each resource
-	/// table:
-	type Content: Debug;
-	const NAME: &'static str;
-	/// Converts to a `&mut` reference to the `AllResources<Statement>`
-	/// contents.
-	fn as_mut(&mut self)->&mut AllResources<Self::Content>;
-	/// Actual implementation for this callback.
-	/// This is the part of the function which reads values from SQL and
-	/// builds the Lua structure.
-	fn build<'lua>(content: &mut Self::Content, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>>;
-	/// Handles arguments from Lua, passes them to the Sql statement,
-	/// then calls the [`Self::execute`] handler.
-	fn prepare<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
-		let function = Self::NAME;
-		let table = pop_arg_as::<String>(&mut args, lua)
-			.with_context(|| format!(
-				"first argument to '{function}' callback must be a string"))?;
-		Self::build(self.as_mut().by_name_mut(&table)?, lua, args)
-// 		let mut rows = stmt.query(args.as_params())?;
-// 		Self::build(&mut rows, lua)
-				.with_context(|| format!(
-					"converting from SQL to Lua in '{function}' callback"))
-	}
-// 	/// The wrapper making the callback function.
-// 	///
-// **NOTE**:
-// The lifetime parameters were determined after **a lot** of trial
-// and error....
-// So this code is **precious** and we keep it for future reference.
-// 	fn callback<'scope,'closure>(&'scope mut self, scope: &'closure mlua::Scope<'_,'scope>)->mlua::Result<mlua::Function<'closure>> {
-// 		scope.create_function_mut(|lua, args|
-// 			self.prepare(lua, args).to_lua_err())
-// 	}
-	/// The wrapper installing the callback function in a table.
-	fn install_callback<'scope>(&'scope mut self, table: &mlua::Table<'scope>, scope: &mlua::Scope<'_,'scope>)->mlua::Result<()> {
-		table.set(Self::NAME, scope.create_function_mut(|lua, args|
-			self.prepare(lua, args).to_lua_err())?)
-	}
-}
-/// Implementation of the `simod.list` callback.
-#[derive(Debug)]
-struct ListKeys<'a>(AllResources<Statement<'a>>);
-impl<'a> Callback for ListKeys<'a> {
-	type Content = Statement<'a>;
-	const NAME: &'static str = "list";
-	fn as_mut(&mut self)->&mut AllResources<Statement<'a>> { &mut self.0 }
 	/// Implementation of `simod.list`.
 	///
 	/// This takes as parameters either
@@ -2438,9 +2277,9 @@ impl<'a> Callback for ListKeys<'a> {
 	///    top-level resource,
 	/// and returns in a Lua table the list of all primary keys matching
 	/// this condition.
-	fn build<'lua>(stmt: &mut Statement<'a>, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
-// 		Self::check_arg_count(stmt, &args)?;
-		let mut rows = stmt.query(args.as_params())?;
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
+		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
+		let mut rows = self.0.query(args.as_params())?;
 		let ret = lua.create_table()?;
 		while let Some(row) = rows.next()? {
 			let v_sql = row.get_ref(0)?;
@@ -2452,14 +2291,26 @@ impl<'a> Callback for ListKeys<'a> {
 }
 /// Implementation of the `simod.select` callback.
 #[derive(Debug)]
-struct SelectRow<'a>(AllResources<Statement<'a>>);
-impl<'a> Callback for SelectRow<'a> {
-	type Content = Statement<'a>;
-	const NAME: &'static str = "list";
-	fn as_mut(&mut self)->&mut AllResources<Self::Content> { &mut self.0 }
-	fn build<'lua>(stmt: &mut Statement<'a>, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
-// 		Self::check_arg_count(stmt, &args)?;
-		let mut rows = stmt.query(args.as_params())?;
+struct SelectRow<'a>(Statement<'a>);
+impl<'a> Callback<'a> for SelectRow<'a> {
+	const NAME: &'static str = "select";
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+		use crate::schemas::ColumnWriter;
+		let s = schema.fields.cols().select_sql(schema,
+			lazy_format!(r#"where "{primary}"=?"#, primary=schema.primary()));
+		db.prepare(s).map(Self)
+	}
+	/// Implementation of `simod.list`.
+	///
+	/// This takes as parameters either
+	/// 1. the name of a top-level resource table, or
+	/// 2. the name of a sub-resource + a resref for the corresponding
+	///    top-level resource,
+	/// and returns in a Lua table the list of all primary keys matching
+	/// this condition.
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
+		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
+		let mut rows = self.0.query(args.as_params())?;
 		match rows.next()? {
 			Some(row) => {
 				let ret = lua.create_table()?;
@@ -2474,16 +2325,97 @@ impl<'a> Callback for SelectRow<'a> {
 		}
 	}
 }
-/// Implementation of `simod.update`.
-struct UpdateRow<'a>(AllResources<Vec<Statement<'a>>>);
-impl<'a> Callback for UpdateRow<'a> {
-	type Content = Vec<Statement<'a>>;
-	const NAME: &'static str = "update";
-	fn as_mut(&mut self)->&mut AllResources<Vec<Statement<'a>>> { &mut self.0 }
-	fn build<'lua>(_sch: &mut Vec<Statement<'a>>, _lua: &'lua Lua, mut _args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
+/// Implementation of `simod.insert`.
+#[derive(Debug)]
+struct InsertRow<'a>(Statement<'a>,Schema);
+impl<'a> Callback<'a> for InsertRow<'a> {
+	const NAME: &'static str = "insert";
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+		let s = schema.insert_sql(NullDisplay(), NullDisplay());
+		Ok(Self(db.prepare(s)?, (*schema).clone()))
+	}
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
+		Self::expect_arguments(&args, 2)?;
+		let table = match args.pop_front().unwrap() {
+			mlua::Value::Table(t) => t,
+			_ => fail!(BadArgumentType { expected: "table" }),
+		};
+		for pair in table.pairs() {
+			let (k, value): (mlua::Value<'_>, mlua::Value<'_>) = pair?;
+			let key = match k {
+				mlua::Value::String(ref s) => s.to_str()?,
+				_ => fail!(Any("bad table key".into())),
+			};
+			println!("got a table key: {key}; {value:?}", value = LuaValueRef(&value));
+		}
 		todo!()
 	}
 }
+
+
+/// This extension trait allows factoring the code for selecting the
+/// appropriate table for a Lua callback.
+/// Once this is done, the individual [`Callback`] instance for this
+/// table is run.
+#[ext]
+impl<'a, T: Callback<'a>> AllResources<T> {
+	fn prepare(db: &'a impl DbInterface, schemas: &'a AllResources<Schema>)->Result<Self> where Self: Sized {
+		schemas.map(|s| T::prepare(db, s))
+	}
+	/// Selects the appropriate individual callback from the first argument
+	/// (table name) and runs it.
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
+		let function = T::NAME;
+		let table = pop_arg_as::<String>(&mut args, lua)
+			.with_context(|| format!(
+				"first argument to '{function}' callback must be a string"))?;
+		self.by_name_mut(&table)?.execute(lua, args)
+			.with_context(|| format!(
+				"converting from SQL to Lua in '{function}' callback"))
+	}
+	/// The wrapper installing the callback function in a table.
+	fn install_callback<'scope>(&'scope mut self, table: &mlua::Table<'scope>, scope: &mlua::Scope<'_,'scope>)->mlua::Result<()> {
+// **NOTE**:
+// The lifetime parameters were determined after **a lot** of trial
+// and error....
+// So this code is **precious** and we keep it for future reference.
+// 	fn callback<'scope,'closure>(&'scope mut self, scope: &'closure mlua::Scope<'_,'scope>)->mlua::Result<mlua::Function<'closure>> {
+// 		scope.create_function_mut(|lua, args|
+// 			self.prepare(lua, args).to_lua_err())
+// 	}
+		table.set(T::NAME, scope.create_function_mut(|lua, args|
+			self.execute(lua, args).to_lua_err())?)
+	}
+}
+
+/// A collection of all the prepared SQL statements used for implementing
+/// the Lua API.
+///
+/// Since we need to split this struct when passing `&mut Statement` values
+/// to various `FnMut` closures, the fields are not typed as
+/// `AllResources<Statement<'a>>` but as newtype wrappers;
+/// each newtype runs only the appropriate conversion between the
+/// prepared SQL statement and Lua values.
+#[derive(Debug)]
+struct LuaStatements<'a> {
+// 	/// We keep an owned copy of the original table schemas.
+// 	schemas: AllResources<Schema>,
+	/// Prepared statements for `simod.list`.
+	list_keys: AllResources<ListKeys<'a>>,
+	select_row: AllResources<SelectRow<'a>>,
+// 	select_row: SelectRow<'a>,
+	// Prepared statements for `simod.select`.
+}
+impl<'a> LuaStatements<'a> {
+	pub fn new(db: &'a impl DbInterface, schemas: &'a AllResources<Schema>)->Result<Self> {
+		Ok(Self {
+			list_keys: AllResources::<_>::prepare(db, &schemas)?,
+			select_row: AllResources::<_>::prepare(db, &schemas)?,
+// 			schemas,
+		})
+	}
+}
+
 /// Implementation of `simod.update`.
 ///
 /// Updates a single field in one of the resource tables.
@@ -2543,7 +2475,8 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 	use crate::struct_io::RowExt;
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
-	let mut statements = LuaStatements::new(&db, all_schemas())?;
+	let schemas = all_schemas();
+	let mut statements = LuaStatements::new(&db, &schemas)?;
 
 
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
@@ -2579,7 +2512,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 			Ok::<_,mlua::Error>(())
 		})?)?;
 		statements.list_keys.install_callback(&simod, scope)?;
-// 		statements.select_row.install_callback(&simod, scope)?;
+		statements.select_row.install_callback(&simod, scope)?;
 		simod.set("update", scope.create_function(
 			|_lua, args| update(&db, args).to_lua_err())?)?;
 		simod.set("insert", scope.create_function(
