@@ -47,7 +47,7 @@ pub(crate) use std::path::{Path, PathBuf};
 pub(crate) use macros::{Pack,Resource0,SqlRow,Newtype};
 pub(crate) use crate::gamefiles::{Resref,Strref};
 pub(crate) use crate::database::{GameDB,DbInterface};
-pub(crate) use crate::progress::{Progress,scope_trace,NullDisplay,DisplayExt};
+pub(crate) use crate::progress::{Progress,scope_trace,NullDisplay};
 
 pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
 
@@ -95,20 +95,6 @@ use indicatif::{ProgressBar,ProgressStyle,MultiProgress};
 impl Display for NullDisplay {
 	fn fmt(&self, _: &mut Formatter<'_>)->fmt::Result { Ok(()) }
 }
-/// Join together two [`Display`] implementations.
-///
-/// Invoked by e.g. "string".cat(string). This creates a (very simple,
-/// but sufficient for our purposes) lazy formatter.
-pub struct DisplayCat<X: Display, Y: Display>(X, Y);
-impl<X: Display, Y: Display> Display for DisplayCat<X,Y> {
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		self.0.fmt(f)?; self.1.fmt(f)
-	}
-}
-pub trait DisplayExt: Display+Sized {
-	fn cat<Y: Display>(self, y:Y)->DisplayCat<Self, Y> { DisplayCat(self, y) }
-}
-impl<T: Display+Sized> DisplayExt for T { }
 
 thread_local! {
 	static COUNT: RefCell<usize> = RefCell::new(0);
@@ -1743,8 +1729,8 @@ pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 		let count = 1+db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
 			(), |row| row.get::<_,usize>(0))?;
 		let mut vec = vec![GameString::default(); count];
-		let mut sel_str = GameString::select_from_typed(db, "strings_".cat(lang),
-			NullDisplay())?;
+		let mut sel_str = GameString::select_from_typed(db,
+			lazy_format!("strings_{lang}"), NullDisplay())?;
 		for row in sel_str.iter(())? {
 			if row.is_db_malformed() { continue }
 			let gamestring = row?;
@@ -2409,8 +2395,8 @@ struct LuaStatements<'a> {
 impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface, schemas: &'a AllResources<Schema>)->Result<Self> {
 		Ok(Self {
-			list_keys: AllResources::<_>::prepare(db, &schemas)?,
-			select_row: AllResources::<_>::prepare(db, &schemas)?,
+			list_keys: AllResources::<_>::prepare(db, schemas)?,
+			select_row: AllResources::<_>::prepare(db, schemas)?,
 // 			schemas,
 		})
 	}

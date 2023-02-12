@@ -47,7 +47,7 @@ pub trait Resource: SqlRow {
 	fn schema()->Schema;
 	/// Particular case of SELECT statement used for saving to game files.
 	fn select_typed(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
-		Self::select_from_typed(db, "save_".cat(Self::schema().name), s)
+		Self::select_from_typed(db, lazy_format!("save_{name}", name=Self::schema().name), s)
 	}
 }
 
