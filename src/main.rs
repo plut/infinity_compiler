@@ -326,6 +326,32 @@ pub trait AsParams {
 		rusqlite::params_from_iter(self.params_iter())
 	}
 }
+pub trait AsParams2: {
+	type Iter<'a>: Iterator where Self: 'a;
+	type Target<'a>: ToSql where Self: 'a;
+	fn transform<'a>(a: <Self::Iter<'a> as Iterator>::Item)->Self::Target<'a>
+		where Self: 'a;
+	fn params_iter(&self)->Self::Iter<'_>;
+	//The following associated type default is unstable:
+// 	type Item<'a> = <Self::Iter<'a> as Iterator>::Item;
+	// so we are forced to allow this:
+	#[allow(clippy::type_complexity)]
+	fn as_params2<'a>(&'a self)->rusqlite::ParamsFromIter<std::iter::Map<Self::Iter<'a>,fn(<Self::Iter<'a> as Iterator>::Item)->Self::Target<'a>>> {
+		rusqlite::params_from_iter(self.params_iter().map(Self::transform))
+	}
+}
+/// Converting an object to something implementing [`rusqlite::Params`].
+///
+/// Since we cannot implement the [`rusqlite::Params`] trait ourselves,
+/// this is the closest we can do.
+pub trait AsParams3 {
+	type Elt<'a>: ToSql where Self: 'a;
+	type Iter<'a>: Iterator<Item=Self::Elt<'a>> where Self: 'a;
+	fn params_iter(&self)->Self::Iter<'_>;
+	fn as_params(&self)->rusqlite::ParamsFromIter<Self::Iter<'_>> {
+		rusqlite::params_from_iter(self.params_iter())
+	}
+}
 /// A struct mapped to a SQL row.
 pub trait SqlRow: Sized {
 	/// The number of fields in the SQL row.
@@ -994,7 +1020,7 @@ impl GameIndex {
 			let path = self.root.join(filename);
 			let mut bif = BifFile::new(path);
 			let pb1 = Progress::new(self.resources.len(), filename);
-			for res in self.resources.iter() {
+			for res in &self.resources {
 				if res.location.sourcefile() != sourcefile { continue }
 				let rread = ResHandle::Bif(&mut bif, res.location, res.restype,);
 				pb.inc(1);
@@ -1289,7 +1315,7 @@ impl Schema {
 	pub fn create_table(&self, name: impl Display, more: impl Display)->String {
 		let mut s = format!("create table \"{name}\" (");
 		let mut isfirst = true;
-		for Field { fname, ftype, extra, .. } in self.fields.iter() {
+		for Field { fname, ftype, extra, .. } in &self.fields {
 			if isfirst { isfirst = false; }
 			else { s.push(','); }
 			uwrite!(&mut s, "\n \"{fname}\" {} {extra}", ftype.affinity());
@@ -1303,7 +1329,7 @@ impl Schema {
 		let primary = self.primary();
 		let mut view = format!(r#"create view "{name}" as
 	with "u" as (select {f} from "load_{name}" union select {f} from "add_{name}") select "#, f = self.fields.cols());
-		for Field {fname, .. } in self.fields[..self.fields.len()-1].iter() {
+		for Field {fname, .. } in &self.fields[..self.fields.len()-1] {
 			uwrite!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{primary}" and "field"='{fname}' order by rowid desc limit 1), "{fname}") as "{fname}", "#);
 		}
 		uwrite!(&mut view, r#""{primary}" from "u""#);
@@ -1315,7 +1341,7 @@ impl Schema {
 		let mut select = format!(r#"create view "save_{self}" as select"#);
 		let mut source = format!(r#"
 from "{self}" as "a""#);
-		for Field { fname: f, ftype, .. } in self.fields.iter() {
+		for Field { fname: f, ftype, .. } in &self.fields {
 			match ftype {
 				FieldType::Resref => {
 					let a = format!(r#""a"."{f}""#);
@@ -1381,7 +1407,7 @@ end"#))?;
 		// `trans` (for update triggers) and `trans_insert` (for insert
 		// trigger).
 		let mut trans_insert = String::new();
-		for Field {fname, ftype, ..} in self.fields.iter() {
+		for Field {fname, ftype, ..} in &self.fields {
 			let trans = match ftype {
 			FieldType::Resref => format!(
 	r#"insert or ignore into "resref_dict" values (new."{fname}", null);"#),
@@ -1437,7 +1463,7 @@ end"#))?;
 	}
 	/// Helper function for generating `new_strings` view.
 	pub fn append_new_strings_schema(&self, w: &mut impl fmt::Write, is_first: &mut bool) {
-		for Field { fname, ftype, .. } in self.fields.iter() {
+		for Field { fname, ftype, .. } in &self.fields {
 			if *ftype != FieldType::Strref { continue }
 			if *is_first { *is_first = false; }
 			else { uwrite!(w, "\n\tunion "); }
@@ -1451,7 +1477,7 @@ end"#))?;
 		let resref = self.resref();
 		let parent = self.parent_table();
 		let mut is_first_field = true;
-		for Field { fname, ftype, .. } in self.fields.iter() {
+		for Field { fname, ftype, .. } in &self.fields {
 			if *ftype != FieldType::Strref { continue }
 			if is_first_field {
 				uwrite!(w, r#"
@@ -1724,7 +1750,7 @@ fn load_language(db: &impl DbInterface, langname: &str, path: &(impl AsRef<Path>
 pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	use database::DbTypeCheck;
 	let pb = Progress::new(game.languages.len(), "save translations");
-	for (lang, _) in game.languages.iter() {
+	for (lang, _) in &game.languages {
 		pb.inc(1);
 		let count = 1+db.query_row(&format!(r#"select max("strref") from "strings_{lang}""#),
 			(), |row| row.get::<_,usize>(0))?;
@@ -2008,7 +2034,7 @@ create index "strref_dict_reverse" on "strref_dict" ("strref");
 		self.transaction(|db| {
 // 		const SCHEMA: &str = r#"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer)"#;
 // 		const SCHEMA1: &str = r#"("native" string primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer)"#;
-		for (lang, _) in game.languages.iter() {
+		for (lang, _) in &game.languages {
 			db.batch(&format!(r#"
 	create table "load_strings_{lang}"("strref" integer primary key, "string" text, "flags" integer, "sound" text, "volume" integer, "pitch" integer);
 	create table "translations_{lang}"("native" string primary key, "string" text, "sound" text, "volume" integer, "pitch" integer);
@@ -2149,6 +2175,10 @@ impl<'lua> mlua::FromLua<'lua> for LuaToSql<'lua> {
 }
 /// A newtype around [`&mlua::Value`], allowing us to implement various
 /// extra traits: [`rusqlite::ToSql`], custom [`Debug`] etc.
+///
+/// This would be more properly written with *two* lifetime parameters
+/// `'a` and `'lua`, but we have no use for this right now, so for the
+/// sake of simplicity we keep only the shortest lifetime `'a`.
 pub struct LuaValueRef<'a>(&'a mlua::Value<'a>);
 impl<'a> From<&'a mlua::Value<'a>> for LuaValueRef<'a> {
 	fn from(source: &'a mlua::Value<'a>)->Self { Self(source) }
@@ -2200,24 +2230,20 @@ fn pop_arg_as<'lua, T: mlua::FromLua<'lua>>(args: &mut mlua::MultiValue<'lua>, l
 		format!("cannot convert argument to type {}", std::any::type_name::<T>()))?;
 	Ok(r)
 }
-/// A structure interfacing between [`mlua::Multivalue`] and
-/// [`rusqlite::Params`].
-pub struct LuaParamsIterator<'lua> {
-	values: &'lua mlua::MultiValue<'lua>,
-	index: usize,
-}
-impl<'lua> Iterator for LuaParamsIterator<'lua> {
-	type Item = LuaValueRef<'lua>;
-	fn next(&mut self)->Option<Self::Item> {
-		self.values.get(self.index).map(LuaValueRef::from)
-	}
-}
-impl AsParams for mlua::MultiValue<'_> {
+/// Small simplification for [`mlua::MultiValue`] impl of [`AsParams`].
+type MluaMultiIter<'a,'lua> = std::iter::Rev<std::slice::Iter<'a,mlua::Value<'lua>>>;
+impl<'lua> AsParams for mlua::MultiValue<'lua> {
 	type Elt<'a> = LuaValueRef<'a> where Self: 'a;
-	type Iter<'a> = LuaParamsIterator<'a> where Self: 'a;
+	type Iter<'a> = std::iter::Map<MluaMultiIter<'a,'lua>,fn(&'a mlua::Value<'lua>)->LuaValueRef<'a>> where Self: 'a;
 	fn params_iter(&self)->Self::Iter<'_> {
-		LuaParamsIterator{ values: self, index: 0 }
+		self.into_iter().map(LuaValueRef::from)
 	}
+}
+impl<'lua> crate::struct_io::AsParams2 for mlua::MultiValue<'lua> {
+	type Iter<'a> = MluaMultiIter<'a,'lua> where 'lua: 'a;
+	type Target<'a> = LuaValueRef<'a> where 'lua: 'a;
+	fn transform<'a>(a: &'a mlua::Value<'lua>)->Self::Target<'a> where 'lua: 'a { LuaValueRef::from(a) }
+	fn params_iter(&self)->Self::Iter<'_> { self.into_iter() }
 }
 
 macro_rules! fail {
@@ -2313,12 +2339,12 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 }
 /// Implementation of `simod.insert`.
 #[derive(Debug)]
-struct InsertRow<'a>(Statement<'a>,Schema);
+struct InsertRow<'a>(Statement<'a>,&'a Schema);
 impl<'a> Callback<'a> for InsertRow<'a> {
 	const NAME: &'static str = "insert";
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let s = schema.insert_sql(NullDisplay(), NullDisplay());
-		Ok(Self(db.prepare(s)?, (*schema).clone()))
+		Ok(Self(db.prepare(s)?, schema))
 	}
 	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
 		Self::expect_arguments(&args, 2)?;
@@ -2326,6 +2352,7 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 			mlua::Value::Table(t) => t,
 			_ => fail!(BadArgumentType { expected: "table" }),
 		};
+		// TODO: write an iterator over the schema fields,
 		for pair in table.pairs() {
 			let (k, value): (mlua::Value<'_>, mlua::Value<'_>) = pair?;
 			let key = match k {
@@ -2693,7 +2720,7 @@ fn main() -> Result<()> {
 			},
 			Some(s) => {
 				let schema = all_schemas().by_name(&s)?;
-				for crate::schemas::Field { fname, ftype, .. } in schema.fields.iter() {
+				for crate::schemas::Field { fname, ftype, .. } in &schema.fields {
 					println!("{fname:30?}{}", ftype.to_lua());
 				}
 			},

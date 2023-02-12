@@ -30,6 +30,10 @@ resources: Resource (full schema + payload)
    (it probably owns a value)
   - `simod.insert`: use previous algo. (iterating over schema)
   - rename `new`/`run` to `prepare`/`execute`
+  - for MultiValue: replace vector by pop
+    i.e. LuaValueRef by LuaValue (owned)
+    this will fit better with tables (who cannot return references to
+    their fields)
 
 # Override
  - [x] improve backup procedure: a full backup as part of init
