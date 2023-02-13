@@ -848,8 +848,8 @@ pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 /// A struct holding one field for each game resource type.
 ///
 /// This is used for iterating similar code for each resources.
-		#[derive(Debug)] #[allow(clippy::missing_docs)]
-		pub struct AllResources<T: Debug> {
+		#[allow(clippy::missing_docs)]
+		pub struct AllResources<T> {
 #[allow(clippy::missing_docs)]
 			_marker: std::marker::PhantomData::<T>, #fields }
 		pub fn all_schemas()->AllResources<Schema> {
@@ -859,17 +859,17 @@ pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 // 		pub const SCHEMAS: AllResources<> = AllResources0 {
 // 			_marker: std::marker::PhantomData, #data };
 		#[allow(clippy::len_without_is_empty)]
-		impl<T: Debug> AllResources<T> {
+		impl<T> AllResources<T> {
 			/// Number of resources in this table.
 			pub fn len(&self)->usize { #n }
 			/// Calls a closure for each resource type in the game.
 			pub fn map<'a,U,E,F>(&'a self, f:F)->Result<AllResources<U>,E>
-			where U: Debug, F: Fn(&'a T)->Result<U,E> {
+			where F: Fn(&'a T)->Result<U,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData, #map })
 			}
 			/// Calls a closure for each resource type in the game.
 			pub fn map_mut<U,E,F>(&self, mut f:F)->Result<AllResources<U>,E>
-			where U: Debug, F: FnMut(&T)->Result<U,E> {
+			where F: FnMut(&T)->Result<U,E> {
 				Ok(AllResources { _marker: std::marker::PhantomData, #map })
 			}
 			/// Given a SQL table name, returns the schema for this table,
@@ -897,6 +897,12 @@ pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 				}
 			}
 // 			pub fn by_resource<R: Resource>(&self)->&T { R::find(self) }
+		}
+		impl<T: Debug> Debug for AllResources<T> {
+			// TODO: make this a bit more explicit
+			fn fmt(&self, f: &mut Formatter<'_>)->std::fmt::Result {
+				self.map_mut(|x| write!(f, "{:?}", x))?; Ok(())
+			}
 		}
 	};
 	code.into()

@@ -54,21 +54,21 @@ pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
 #[derive(Debug)]
 pub(crate) enum Error{
 	UnknownTable(String),
-	BadArgumentNumber { function: &'static str, expected: usize, found: usize },
+	BadArgumentNumber { expected: usize, found: usize },
 	BadArgumentType { expected: &'static str },
-// 	BadType(String),
-// 	BadArgumentNumber(usize, &'static str),
+	BadParameterCount { expected: usize, found: usize },
 	CallbackMissingArgument,
-	Any(String),
 }
 impl Display for Error {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		match self {
 			Self::UnknownTable(s) => write!(f, "Unknown table: '{s}'"),
-			Self::BadArgumentNumber { function, expected, found } =>
-				write!(f, "Bad number of arguments for function '{function}': found {found}, expected {expected}"),
+			Self::BadArgumentNumber { expected, found } =>
+				write!(f, "Bad number of arguments: found {found}, expected {expected}"),
 			Self::BadArgumentType { expected } =>
 				write!(f, "Bad argument type: expected {expected}"),
+			Self::BadParameterCount { expected, found } =>
+				write!(f, "Bad parameter count for SQL statement: found {found}, expected {expected}"),
 			_ => write!(f, "Error: &{self:?}"),
 		}
 	}
@@ -324,20 +324,6 @@ pub trait AsParams {
 	fn params_iter(&self)->Self::Iter<'_>;
 	fn as_params(&self)->rusqlite::ParamsFromIter<Self::Iter<'_>> {
 		rusqlite::params_from_iter(self.params_iter())
-	}
-}
-pub trait AsParams2: {
-	type Iter<'a>: Iterator where Self: 'a;
-	type Target<'a>: ToSql where Self: 'a;
-	fn transform<'a>(a: <Self::Iter<'a> as Iterator>::Item)->Self::Target<'a>
-		where Self: 'a;
-	fn params_iter(&self)->Self::Iter<'_>;
-	//The following associated type default is unstable:
-// 	type Item<'a> = <Self::Iter<'a> as Iterator>::Item;
-	// so we are forced to allow this:
-	#[allow(clippy::type_complexity)]
-	fn as_params2<'a>(&'a self)->rusqlite::ParamsFromIter<std::iter::Map<Self::Iter<'a>,fn(<Self::Iter<'a> as Iterator>::Item)->Self::Target<'a>>> {
-		rusqlite::params_from_iter(self.params_iter().map(Self::transform))
 	}
 }
 /// Converting an object to something implementing [`rusqlite::Params`].
@@ -1249,6 +1235,9 @@ pub enum SchemaResource {
 #[allow(dead_code)]
 	Sub { parent: &'static str, resref_index: usize, },
 }
+impl SchemaResource {
+	pub fn is_subresource(&self)->bool { matches!(self, Self::Sub { .. }) }
+}
 
 /// The full database description of a game resource.
 ///
@@ -1289,6 +1278,8 @@ impl Display for Schema {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { f.write_str(self.name) }
 }
 impl Schema {
+	/// Returns `true` iff this describes a sub-resource.
+	pub fn is_subresource(&self)->bool { self.resource.is_subresource() }
 	/// Returns the index of the resref field.
 	fn resref_idx(&self)->usize {
 		match self.resource {
@@ -1820,16 +1811,33 @@ impl Deref for GameTransaction<'_> {
 /// A trait for trivial wrappers of [`rusqlite::Connection`].
 pub trait DbInterface {
 	// Required methods
+	/// Access to the actual database.
+	fn db(&self)->&Connection;
 	/// Executes a statement with arguments (and logging).
-	fn execute(&self, s: impl AsRef<str>, params: impl rusqlite::Params+Debug)->Result<usize>;
+	fn execute(&self, s: impl AsRef<str>, params: impl rusqlite::Params+Debug)->Result<usize> {
+		let s = s.as_ref();
+		debug!("executing SQL statement: {s} with parameters {params:?}");
+		self.db().execute(s, params)
+			.with_context(|| format!("failed SQL statement:\n {s}"))
+	}
 	/// Prepares a statement (and logs it).
-	fn prepare(&self, s: impl AsRef<str>)->Result<Statement<'_>>;
-	fn last_insert_rowid(&self)->i64;
+	fn prepare(&self, s: impl AsRef<str>)->Result<Statement<'_>> {
+		let s = s.as_ref();
+		debug!("preparing SQL statement: {s}");
+		self.db().prepare(s)
+			.with_context(|| format!("failed to prepare SQL statement:\n {s}"))
+	}
+	fn last_insert_rowid(&self)->i64 { self.db().last_insert_rowid() }
 	// Provided low-level methods
 	/// Executes a statement without arguments (but with logging).
 	fn exec(&self, s: impl AsRef<str>)->Result<usize> { self.execute(s, ()) }
 	/// Executes a batch of statements (with logging).
-	fn batch(&self, s: impl AsRef<str>)->Result<()>;
+	fn batch(&self, s: impl AsRef<str>)->Result<()> {
+		let s = s.as_ref();
+		debug!("executing a batch of SQL statements: {s}");
+		self.db().execute_batch(s)
+			.with_context(|| format!("failed batched SQL statements:\n {s}"))
+	}
 	/// Prepares and executes a statement returning a single row.
 	fn query_row<T>(&self, s: impl AsRef<str>, params: impl rusqlite::Params+Debug, f: impl FnOnce(&Row<'_>)->rusqlite::Result<T>)->Result<T> {
 		self.prepare(s)?.query_row(params, f).map_err(|e| e.into())
@@ -1929,26 +1937,7 @@ update "new_strings" set "strref"=-1 where "strref" is null"#))
 	}
 }
 impl<T: Deref<Target=Connection>>  DbInterface for T {
-	fn execute(&self, s: impl AsRef<str>, params: impl rusqlite::Params+Debug)->Result<usize> {
-		let s = s.as_ref();
-		debug!("executing SQL statement: {s} with parameters {params:?}");
-		self.deref().execute(s, params)
-			.with_context(|| format!("failed SQL statement:\n {s}"))
-	}
-	fn prepare(&self, s: impl AsRef<str>)->Result<Statement<'_>> {
-		let s = s.as_ref();
-		debug!("preparing SQL statement: {s}");
-		self.deref().prepare(s)
-			.with_context(|| format!("failed to prepare SQL statement:\n {s}"))
-	}
-	fn last_insert_rowid(&self)->i64 { self.deref().last_insert_rowid() }
-	/// Executes a batch of statements (with logging).
-	fn batch(&self, s: impl AsRef<str>)->Result<()> {
-		let s = s.as_ref();
-		debug!("executing a batch of SQL statements: {s}");
-		self.deref().execute_batch(s)
-			.with_context(|| format!("failed batched SQL statements:\n {s}"))
-	}
+	fn db(&self)->&Connection { self.deref() }
 }
 impl GameDB {
 	/// Wraps a closure inside a game transaction.
@@ -2143,34 +2132,64 @@ pub(crate) mod lua_api {
 //! Any error occurring during execution of one of those functions
 //! (including SQL errors) is passed back to Lua in the form of a
 //! callback error.
-use mlua::{Lua,ExternalResult};
+use mlua::{Lua,ExternalResult,Value};
+use rusqlite::{ToSql, types::ToSqlOutput};
 
 use crate::prelude::*;
 use crate::resources::{AllResources,all_schemas,RESOURCES};
 use crate::schemas::Schema;
 use crate::struct_io::{FieldType,AsParams};
+/// Small simplification for frequent use in callbacks.
+macro_rules! fail {
+	($($a:tt)+) => { return Err(Error::$($a)+.into()) }
+}
 /// Runtime errors during interface between SQL and Lua.
-/// A simple wrapper allowing `mlua::Value` to be converted to SQL.
+/// A simple wrapper allowing `Value` to be converted to SQL.
 #[derive(Debug)]
-struct LuaToSql<'a>(mlua::Value<'a>);
-impl rusqlite::ToSql for LuaToSql<'_> {
-	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+struct LuaToSql<'a>(Value<'a>);
+impl ToSql for LuaToSql<'_> {
+	fn to_sql(&self)->rusqlite::Result<ToSqlOutput<'_>> {
 		use rusqlite::types::{ToSqlOutput::Owned,Value as SqlValue};
 		let LuaToSql(value,) = self;
 		match value {
-		mlua::Value::Nil => Ok(Owned(SqlValue::Null)),
-		mlua::Value::Boolean(b) => Ok(Owned(SqlValue::Integer(*b as i64))),
-		mlua::Value::Integer(n) => Ok(Owned(SqlValue::Integer(*n))),
-		mlua::Value::Number(x) => Ok(Owned(SqlValue::Real(*x))),
-		mlua::Value::String(ref s) =>
+		Value::Nil => Ok(Owned(SqlValue::Null)),
+		Value::Boolean(b) => Ok(Owned(SqlValue::Integer(*b as i64))),
+		Value::Integer(n) => Ok(Owned(SqlValue::Integer(*n))),
+		Value::Number(x) => Ok(Owned(SqlValue::Real(*x))),
+		Value::String(ref s) =>
 			Ok(Owned(SqlValue::from(s.to_str().unwrap().to_owned()))),
 		e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
 		}
 	}
 }
 impl<'lua> mlua::FromLua<'lua> for LuaToSql<'lua> {
-	fn from_lua(v: mlua::Value<'lua>, _lua: &'lua Lua)->mlua::Result<Self> {
+	fn from_lua(v: Value<'lua>, _lua: &'lua Lua)->mlua::Result<Self> {
 		Ok(Self(v))
+	}
+}
+#[ext]
+impl<'lua> Value<'lua> {
+	/// Conversion to SQL.
+	/// We need this as (1) a tool for impl of [`ToLua`] for a newtype
+	/// around [`&Value`], and (2) to decouple the lifetime of the
+	/// resulting `ToSqlOutput` from the incoming reference
+	/// (since we are producing owned values here, we can use `'static`).
+	///
+	/// Note that this is almost costless: most values are integers anyway,
+	/// and strings need copying from Lua to ensure UTF-8 validity.
+	fn to_sql_owned(&self)->rusqlite::Result<ToSqlOutput<'static>> {
+		use rusqlite::types::{ToSqlOutput::Owned,Value as SqlValue};
+		match self {
+		Value::Nil => Ok(Owned(SqlValue::Null)),
+		Value::Boolean(b) => Ok(Owned((*b).into())),
+		Value::Integer(n) => Ok(Owned((*n).into())),
+		Value::Number(x) => Ok(Owned((*x).into())),
+		Value::String(ref s) =>
+		// TODO: replace unwrap() by map_err()
+			Ok(Owned(s.to_str().unwrap().to_owned().into())),
+		// TODO: use proper error
+		e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
+		}
 	}
 }
 /// A newtype around [`&mlua::Value`], allowing us to implement various
@@ -2179,43 +2198,32 @@ impl<'lua> mlua::FromLua<'lua> for LuaToSql<'lua> {
 /// This would be more properly written with *two* lifetime parameters
 /// `'a` and `'lua`, but we have no use for this right now, so for the
 /// sake of simplicity we keep only the shortest lifetime `'a`.
-pub struct LuaValueRef<'a>(&'a mlua::Value<'a>);
-impl<'a> From<&'a mlua::Value<'a>> for LuaValueRef<'a> {
-	fn from(source: &'a mlua::Value<'a>)->Self { Self(source) }
+pub struct LuaValueRef<'a>(&'a Value<'a>);
+impl<'a> From<&'a Value<'a>> for LuaValueRef<'a> {
+	fn from(source: &'a Value<'a>)->Self { Self(source) }
 }
 impl Debug for LuaValueRef<'_> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		match self.0 {
-			mlua::Value::String(s) => f.write_str(&s.to_string_lossy()),
+			Value::String(s) => f.write_str(&s.to_string_lossy()),
 			x => write!(f, "{x:?}"),
 		}
 	}
 }
-impl rusqlite::ToSql for LuaValueRef<'_> {
-	fn to_sql(&self)->rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-		use rusqlite::types::{ToSqlOutput::Owned,Value as SqlValue};
-		match self.0 {
-		mlua::Value::Nil => Ok(Owned(SqlValue::Null)),
-		mlua::Value::Boolean(b) => Ok(Owned(SqlValue::Integer(*b as i64))),
-		mlua::Value::Integer(n) => Ok(Owned(SqlValue::Integer(*n))),
-		mlua::Value::Number(x) => Ok(Owned(SqlValue::Real(*x))),
-		mlua::Value::String(ref s) =>
-			Ok(Owned(SqlValue::from(s.to_str().unwrap().to_owned()))),
-		e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
-		}
-	}
+impl ToSql for LuaValueRef<'_> {
+	fn to_sql(&self)->rusqlite::Result<ToSqlOutput<'_>> { self.0.to_sql_owned() }
 }
 /// Value conversion in the Sql->Lua direction.
 ///
 /// Note that this function needs access to the `[mlua::Lua]` instance so
 /// that it may allocate strings.
-fn sql_to_lua<'lua>(v: rusqlite::types::ValueRef<'_>, lua: &'lua Lua)->Result<mlua::Value<'lua>> {
+fn sql_to_lua<'lua>(v: rusqlite::types::ValueRef<'_>, lua: &'lua Lua)->Result<Value<'lua>> {
 	use rusqlite::types::{ValueRef::*};
 	match v {
-		Null => Ok(mlua::Value::Nil),
-		Integer(n) => Ok(mlua::Value::Integer(n)),
-		Real(x) => Ok(mlua::Value::Number(x)),
-		Text(s) => Ok(mlua::Value::String(lua.create_string(&s)?)),
+		Null => Ok(Value::Nil),
+		Integer(n) => Ok(Value::Integer(n)),
+		Real(x) => Ok(Value::Number(x)),
+		Text(s) => Ok(Value::String(lua.create_string(&s)?)),
 		_ => Err(rusqlite::types::FromSqlError::InvalidType.into()),
 	}
 }
@@ -2231,37 +2239,27 @@ fn pop_arg_as<'lua, T: mlua::FromLua<'lua>>(args: &mut mlua::MultiValue<'lua>, l
 	Ok(r)
 }
 /// Small simplification for [`mlua::MultiValue`] impl of [`AsParams`].
-type MluaMultiIter<'a,'lua> = std::iter::Rev<std::slice::Iter<'a,mlua::Value<'lua>>>;
+type MluaMultiIter<'a,'lua> = std::iter::Rev<std::slice::Iter<'a,Value<'lua>>>;
 impl<'lua> AsParams for mlua::MultiValue<'lua> {
 	type Elt<'a> = LuaValueRef<'a> where Self: 'a;
-	type Iter<'a> = std::iter::Map<MluaMultiIter<'a,'lua>,fn(&'a mlua::Value<'lua>)->LuaValueRef<'a>> where Self: 'a;
+	type Iter<'a> = std::iter::Map<MluaMultiIter<'a,'lua>,fn(&'a Value<'lua>)->LuaValueRef<'a>> where Self: 'a;
 	fn params_iter(&self)->Self::Iter<'_> {
 		self.into_iter().map(LuaValueRef::from)
 	}
 }
-impl<'lua> crate::struct_io::AsParams2 for mlua::MultiValue<'lua> {
-	type Iter<'a> = MluaMultiIter<'a,'lua> where 'lua: 'a;
-	type Target<'a> = LuaValueRef<'a> where 'lua: 'a;
-	fn transform<'a>(a: &'a mlua::Value<'lua>)->Self::Target<'a> where 'lua: 'a { LuaValueRef::from(a) }
-	fn params_iter(&self)->Self::Iter<'_> { self.into_iter() }
-}
-
-macro_rules! fail {
-	($($a:tt)+) => { return Err(Error::$($a)+.into()) }
-}
-trait Callback<'a>: Debug+Sized {
+trait Callback<'a>: Sized {
 	const NAME: &'static str;
 	/// Builds the data for the callback from the table schema.
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self>;
 	/// Runs the callback (from the selected table, etc.) and builds the
 	/// resulting Lua value.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>>;
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<Value<'lua>>;
 	/// Utility function to check that arguments match statement.
 	fn expect_arguments(args: &mlua::MultiValue<'_>, expected: usize)->Result<()> {
 		// We assume that one argument was discarded (table name).
 		let found = args.len() + 1;
 		if found != expected {
-			Err(Error::BadArgumentNumber { function: Self::NAME, expected, found }.into())
+			Err(Error::BadArgumentNumber { expected, found }.into())
 		} else {
 			Ok(())
 		}
@@ -2275,7 +2273,7 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let mut s = format!(r#"select "{primary}" from "{schema}""#,
 			primary = schema.primary());
-		if matches!(schema.resource, crate::schemas::SchemaResource::Sub { .. }) {
+		if schema.is_subresource() {
 			uwrite!(&mut s, r#" where "{resref}"=? order by "index""#,
 				resref = schema.resref());
 		}
@@ -2289,7 +2287,7 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 	///    top-level resource,
 	/// and returns in a Lua table the list of all primary keys matching
 	/// this condition.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
 		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
 		let mut rows = self.0.query(args.as_params())?;
 		let ret = lua.create_table()?;
@@ -2298,7 +2296,7 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 			let v_lua = sql_to_lua(v_sql, lua)?;
 			ret.push(v_lua)?;
 		}
-		Ok(mlua::Value::Table(ret))
+		Ok(Value::Table(ret))
 	}
 }
 /// Implementation of the `simod.select` callback.
@@ -2320,7 +2318,7 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 	///    top-level resource,
 	/// and returns in a Lua table the list of all primary keys matching
 	/// this condition.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
 		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
 		let mut rows = self.0.query(args.as_params())?;
 		match rows.next()? {
@@ -2331,40 +2329,57 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 						.with_context(|| format!("cannot read field {i} in row"))?;
 					ret.set(row.as_ref().column_name(i)?, sql_to_lua(val, lua)?)?;
 				}
-				Ok(mlua::Value::Table(ret))
+				Ok(Value::Table(ret))
 			},
-			None => Ok(mlua::Value::Nil),
+			None => Ok(Value::Nil),
 		}
 	}
 }
 /// Implementation of `simod.insert`.
 #[derive(Debug)]
-struct InsertRow<'a>(Statement<'a>,&'a Schema);
+struct InsertRow<'a>(&'a Connection, Statement<'a>,&'a Schema);
 impl<'a> Callback<'a> for InsertRow<'a> {
 	const NAME: &'static str = "insert";
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let s = schema.insert_sql(NullDisplay(), NullDisplay());
-		Ok(Self(db.prepare(s)?, schema))
+		// TODO: use a restricted form of insertion where primary is not
+		// inserted
+		Ok(Self(db.db(), db.prepare(s)?, schema))
 	}
-	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
+	fn execute<'lua>(&mut self, _lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
 		Self::expect_arguments(&args, 2)?;
 		let table = match args.pop_front().unwrap() {
-			mlua::Value::Table(t) => t,
+			Value::Table(t) => t,
 			_ => fail!(BadArgumentType { expected: "table" }),
 		};
-		// TODO: write an iterator over the schema fields,
-		for pair in table.pairs() {
-			let (k, value): (mlua::Value<'_>, mlua::Value<'_>) = pair?;
-			let key = match k {
-				mlua::Value::String(ref s) => s.to_str()?,
-				_ => fail!(Any("bad table key".into())),
-			};
-			println!("got a table key: {key}; {value:?}", value = LuaValueRef(&value));
+		let Self(db, stmt, schema) = self;
+		// We could use two strategies here:
+		// 1. build an iterator from schema.fields, then map to SQL values,
+		//    then pass to [`rusqlite::params_from_iter`],
+		// 2. use a loop and raw bind to the statement.
+		// Since [`rusqlite::params_from_iter`] does not accept `Result`
+		// values, taking option 2 will produce better failure messages.
+		let fields = &schema.fields[..];
+		let found = fields.len();
+		let expected = stmt.parameter_count();
+		if found != expected {
+			fail!(BadParameterCount { expected, found })
 		}
-		todo!()
+		for (i, field) in fields.iter().enumerate() {
+			let v_lua: Value<'_> = table.get(field.fname)?;
+			// TODO: if this is the primary key then insert NULL
+			// Note that sqlite uses 1-based indexing.
+			stmt.raw_bind_parameter(i+1, v_lua.to_sql_owned()?)?;
+		}
+		stmt.raw_execute()?;
+		// If this was a sub-resource, then we set its 'id' field
+		// to its primary key (a rowid alias).
+		if schema.is_subresource() {
+			table.set("id", db.last_insert_rowid())?;
+		}
+		Ok(Value::Table(table))
 	}
 }
-
 
 /// This extension trait allows factoring the code for selecting the
 /// appropriate table for a Lua callback.
@@ -2377,7 +2392,7 @@ impl<'a, T: Callback<'a>> AllResources<T> {
 	}
 	/// Selects the appropriate individual callback from the first argument
 	/// (table name) and runs it.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<mlua::Value<'lua>> {
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
 		let function = T::NAME;
 		let table = pop_arg_as::<String>(&mut args, lua)
 			.with_context(|| format!(
@@ -2416,7 +2431,7 @@ struct LuaStatements<'a> {
 	/// Prepared statements for `simod.list`.
 	list_keys: AllResources<ListKeys<'a>>,
 	select_row: AllResources<SelectRow<'a>>,
-// 	select_row: SelectRow<'a>,
+	insert_row: AllResources<InsertRow<'a>>,
 	// Prepared statements for `simod.select`.
 }
 impl<'a> LuaStatements<'a> {
@@ -2424,6 +2439,7 @@ impl<'a> LuaStatements<'a> {
 		Ok(Self {
 			list_keys: AllResources::<_>::prepare(db, schemas)?,
 			select_row: AllResources::<_>::prepare(db, schemas)?,
+			insert_row: AllResources::<_>::prepare(db, schemas)?,
 // 			schemas,
 		})
 	}
@@ -2434,7 +2450,7 @@ impl<'a> LuaStatements<'a> {
 /// Updates a single field in one of the resource tables.
 /// The type of value is not checked (TODO: do this either here or as a SQL
 /// constraint when creating the tables?).
-fn update(db: &impl DbInterface, (table, key, field, value): (String, String, String, mlua::Value<'_>))->Result<()> {
+fn update(db: &impl DbInterface, (table, key, field, value): (String, String, String, Value<'_>))->Result<()> {
 	scope_trace!("callback 'simod.update' invoked with: '{}' '{}' '{} '{:?}'",
 		table, key, field, LuaValueRef(&value));
 	let s = format!(
@@ -2449,10 +2465,10 @@ fn insert(db: &impl DbInterface, (table, vals, context): (String, mlua::Table<'_
 	let schema = RESOURCES.table_schema(&table)?;
 	let mut stmt = db.prepare(&schema.insert_statement("", ""))?;
 	let params = schema.params_from(|fname, ftype| {
-		if ftype == FieldType::Rowid { Ok(LuaToSql(mlua::Value::Nil)) }
+		if ftype == FieldType::Rowid { Ok(LuaToSql(Value::Nil)) }
 		else {
 			match vals.get::<_,LuaToSql<'_>>(fname)? {
-				LuaToSql(mlua::Value::Nil) => Ok(context.get(fname)?),
+				LuaToSql(Value::Nil) => Ok(context.get(fname)?),
 				x => Ok(x)
 			}
 		}
@@ -2467,7 +2483,7 @@ fn insert(db: &impl DbInterface, (table, vals, context): (String, mlua::Table<'_
 	Ok(())
 }
 /// Implementation of `simod.delete`.
-fn delete(db: &impl DbInterface, (table, key): (String, mlua::Value<'_>))->Result<()> {
+fn delete(db: &impl DbInterface, (table, key): (String, Value<'_>))->Result<()> {
 	let schema = RESOURCES.table_schema(&table)?;
 	let primary = schema.primary();
 	db.execute(format!(r#"delete from "{schema}" where "{primary}"=?"#),
@@ -2526,10 +2542,11 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		})?)?;
 		statements.list_keys.install_callback(&simod, scope)?;
 		statements.select_row.install_callback(&simod, scope)?;
+		statements.insert_row.install_callback(&simod, scope)?;
 		simod.set("update", scope.create_function(
 			|_lua, args| update(&db, args).to_lua_err())?)?;
-		simod.set("insert", scope.create_function(
-			|_lua, args| insert(&db, args).to_lua_err())?)?;
+// 		simod.set("insert", scope.create_function(
+// 			|_lua, args| insert(&db, args).to_lua_err())?)?;
 		simod.set("delete", scope.create_function(
 			|_lua, args| delete(&db, args).to_lua_err())?)?;
 		lua.globals().set("simod", simod)?;
