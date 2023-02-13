@@ -44,7 +44,7 @@ pub(crate) use std::fs::{self,File};
 pub(crate) use std::io::{self,Cursor,Read,Write,Seek,SeekFrom};
 pub(crate) use std::path::{Path, PathBuf};
 
-pub(crate) use macros::{Pack,Resource0,SqlRow,Newtype};
+pub(crate) use macros::{Pack,SqlRow,Newtype};
 pub(crate) use crate::gamefiles::{Resref,Strref};
 pub(crate) use crate::database::{GameDB,DbInterface};
 pub(crate) use crate::toolbox::{Progress,scope_trace,NullDisplay};
@@ -1558,42 +1558,6 @@ pub struct Schema0<'a> {
 	/// The restype identifier for this resource type (if top-level), or 0.
 	pub restype: Restype,
 }
-impl<'schema> Schema0<'schema> {
-	// Step 0: a few useful functions
-	/// Is this a subresource?
-	pub fn is_subresource(&self)->bool {
-		self.resref_key < self.fields.len() - 1
-	}
-	/// Returns the index before the id column (if present).
-	fn before_id(&self)->usize {
-		self.fields.len() - (self.is_subresource() as usize)
-	}
-	/// Columns of payload + context; no id.
-	///
-	/// In other words: these are the columns which can be inserted (id is
-	/// automatically computed by sqlite).
-	///
-	/// Returns an object implementing [`std::fmt::Display`] to write the
-	/// column headers for this schema in a SQL query.
-	pub fn columns(&'schema self)->Columns<'schema, NullDisplay> {
-		Columns(&self.fields[..self.before_id()], NullDisplay())
-	}
-	/// Context columns only.
-	pub fn context(&'schema self)->Columns<'schema, NullDisplay> {
-		Columns(&self.fields[self.resref_key..self.before_id()], NullDisplay())
-	}
-	/// The primary key for this schema (as a string).
-	///
-	/// Note that the [`Schema0`] structure imposes that this is always the
-	/// last field.
-	pub fn primary(&'schema self)->&str {
-		self.fields[self.fields.len()-1].fname
-	}
-} // impl Schema0
-/// Convenience implem.: prints schema name.
-impl Display for Schema0<'_> {
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { f.write_str(self.name) }
-}
 } // mod schemas
 pub(crate) mod gamestrings {
 //! Access to game strings in database.
@@ -2128,7 +2092,7 @@ use rusqlite::{ToSql, types::ToSqlOutput};
 use std::collections::HashMap;
 
 use crate::prelude::*;
-use crate::resources::{AllResources,all_schemas,RESOURCES};
+use crate::resources::{AllResources,all_schemas};
 use crate::schemas::Schema;
 use crate::sql_rows::{FieldType,AsParams};
 /// Small simplification for frequent use in callbacks.
@@ -2520,19 +2484,19 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 	lua.scope(|scope| {
 		let simod = lua.create_table()?;
 		let lua_schema = lua.create_table()?;
-		RESOURCES.map_mut(|schema, _| {
+		schemas.map_mut(|schema| {
 			let fields = lua.create_table()?;
-			let context = lua.create_table()?;
-			for col in schema.columns() {
-				fields.set(col.fname, col.ftype.to_lua())?;
+// 			let context = lua.create_table()?;
+			for f in schema.fields.iter() {
+				fields.set(f.fname, f.ftype.to_lua())?;
 			}
-			for col in schema.context() {
-				context.push(col.fname)?;
-			}
+// 			for col in schema.context() {
+// 				context.push(col.fname)?;
+// 			}
 			let res_schema = lua.create_table()?;
 			res_schema.set("fields", fields)?;
-			res_schema.set("context", context)?;
-			res_schema.set("primary", schema.primary())?;
+// 			res_schema.set("context", context)?;
+			res_schema.set("primary", schema.primary().fname)?;
 			lua_schema.set(schema.to_string(), res_schema)?;
 			Ok::<_,mlua::Error>(())
 		})?;

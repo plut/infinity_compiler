@@ -25,7 +25,7 @@
 //! namely, we want these to have a persistent identifier
 //! for joins with the edit tables.
 use crate::prelude::*;
-use macros::{produce_resource_list,all_resources,Resource};
+use macros::{all_resources,Resource};
 use crate::pack::{Pack,NotPacked};
 use crate::sql_rows::{SqlRow,NoSql,TypedStatement,AsParams,Rowid};
 use crate::schemas::{Schema};
@@ -53,11 +53,14 @@ pub trait Resource: SqlRow {
 
 /// When provided with a file extension, return the corresponding Restype.
 pub fn restype_from_extension(ext: &str)->Restype {
-	match RESOURCES.map(|schema, _| {
+	match all_schemas().map(|schema| {
+		match schema.resource {
 		// small trick: when we find the correct extension, we break the
 		// iteration by returning an `Err` variant.
-		if ext.eq_ignore_ascii_case(schema.extension) { Err(schema.restype) }
-		else { Ok(()) }
+			crate::schemas::SchemaResource::Top { extension, restype }
+			if ext.eq_ignore_ascii_case (extension) => Err(restype),
+			_ => Ok(())
+		}
 	}) {
 		Err(r) => r,
 		Ok(_) => Restype { value: 0 }
@@ -402,7 +405,6 @@ Attack type: {atype}",
 //  - the `AllResource<T>` type constructor,
 //  - its implementation of `map()`,
 //  - and the constant `RESOURCES`, which holds the parent resources.
-produce_resource_list!();
 all_resources!();
 
 impl AllResources<Schema> {
