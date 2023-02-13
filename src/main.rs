@@ -2099,30 +2099,6 @@ use crate::sql_rows::{FieldType,AsParams};
 macro_rules! fail {
 	($($a:tt)+) => { return Err(Error::$($a)+.into()) }
 }
-/// Runtime errors during interface between SQL and Lua.
-/// A simple wrapper allowing `Value` to be converted to SQL.
-#[derive(Debug)]
-struct LuaToSql<'a>(Value<'a>);
-impl ToSql for LuaToSql<'_> {
-	fn to_sql(&self)->rusqlite::Result<ToSqlOutput<'_>> {
-		use rusqlite::types::{ToSqlOutput::Owned,Value as SqlValue};
-		let LuaToSql(value,) = self;
-		match value {
-		Value::Nil => Ok(Owned(SqlValue::Null)),
-		Value::Boolean(b) => Ok(Owned(SqlValue::Integer(*b as i64))),
-		Value::Integer(n) => Ok(Owned(SqlValue::Integer(*n))),
-		Value::Number(x) => Ok(Owned(SqlValue::Real(*x))),
-		Value::String(ref s) =>
-			Ok(Owned(SqlValue::from(s.to_str().unwrap().to_owned()))),
-		e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
-		}
-	}
-}
-impl<'lua> FromLua<'lua> for LuaToSql<'lua> {
-	fn from_lua(v: Value<'lua>, _lua: &'lua Lua)->mlua::Result<Self> {
-		Ok(Self(v))
-	}
-}
 #[ext]
 impl<'lua> Value<'lua> {
 	/// Conversion to SQL.
