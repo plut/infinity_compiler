@@ -392,11 +392,11 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	let mut fieldtype = TS::new();
 	let mut fieldname_ctx = TS::new();
 	let mut field_create_text = TS::new();
-	let mut primary_index = quote!(None);
+	let mut primary_index: Option<usize> = None;
 	let mut offset = quote!(0usize);
 	let DeriveInput{ ident, data, .. } = parse_macro_input!(tokens);
 	let fields = Fields::from(data);
-	for FieldRef { name, attrs, ty, .. } in fields.iter() {
+	for (i, FieldRef { name, attrs, ty, .. }) in fields.iter().enumerate() {
 		// Read attributes for this field
 		let mut field_info = ColumnInfo::default();
 		for (name, mut args) in attrs.iter().map(parse_attr) {
@@ -424,8 +424,12 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 		}.to_tokens(&mut fieldtype);
 		// this will use the highest-numbered field labeled as "primary" as
 		// the primary key:
-		if field_info.extra.contains("primary") {
-			quote!{ .or(Some(#offset)) }.to_tokens(&mut primary_index);
+		if field_info.extra.contains("primary")
+			|| ty.toks_string().contains("Rowid") {
+			match primary_index {
+				None => primary_index = Some(i),
+				Some(j) => panic!("table {ident:?} has two primary indices at columns {i} and {j}"),
+			}
 		}
 		let create_text = field_info.extra;
 		quote!{
@@ -439,7 +443,9 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 		quote!{ + #ty::WIDTH }.to_tokens(&mut offset)
 	}
 	let from_row_at = fields.build_from(&from_row_at_v);
-	let code = quote! (impl crate::struct_io::SqlRow for #ident {
+	let primary_index = primary_index.unwrap_or_else(
+		|| panic!("no primary index defined for table {}", ident.toks_string()));
+	let code = quote! (impl crate::sql_rows::SqlRow for #ident {
 		const WIDTH: usize = #offset;
 		fn get_field(&self, i: usize)->rusqlite::types::ToSqlOutput {
 			#get_fields
@@ -448,7 +454,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 		fn from_row_at(r: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
 			Ok(#from_row_at)
 		}
-		fn fieldtype(i: usize)->crate::struct_io::FieldType {
+		fn fieldtype(i: usize)->crate::sql_rows::FieldType {
 			#fieldtype
 			panic!("invalid field {} for resource type {}", i, stringify!(ident))
 		}
@@ -460,7 +466,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 			#field_create_text
 			panic!("invalid field {} for resource type {}", i, stringify!(ident))
 		}
-		fn primary_index()->Option<usize> { #primary_index }
+		fn primary_index()->usize { #primary_index }
 	});
 	code.into()
 }
@@ -560,6 +566,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 					name: #table_name,
 					resource: #res_code,
 					fields: Self::fields(),
+					primary_index: Self::primary_index(),
 				}
 			}
 		}

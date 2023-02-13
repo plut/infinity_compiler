@@ -27,7 +27,7 @@
 use crate::prelude::*;
 use macros::{produce_resource_list,all_resources,Resource};
 use crate::pack::{Pack,NotPacked};
-use crate::struct_io::{SqlRow,NoSql,TypedStatement,AsParams};
+use crate::sql_rows::{SqlRow,NoSql,TypedStatement,AsParams,Rowid};
 use crate::schemas::{Schema};
 use crate::database::{DbTypeCheck,DbInterface,DbInserter};
 use crate::gamefiles::{Restype};
@@ -148,7 +148,7 @@ pub struct ItemAbility {
 	itemref: NotPacked::<Resref>,
 	index: NotPacked::<u16>,
 #[column(r#"primary key"#)]
-	id: NotPacked::<Option<i64>>,
+	id: Rowid,
 }
 /// An effect inside a .itm file (either global or in an ability).
 #[derive(Debug,Pack,SqlRow,Resource)]
@@ -177,7 +177,7 @@ pub struct ItemEffect {
 	ability: NotPacked::<i64>,
 	index: NotPacked::<u16>,
 #[column(r#"primary key"#)]
-	id: NotPacked::<Option<i64>>,
+	id: Rowid,
 }
 
 pub trait ToplevelResourceData: Resource {
@@ -363,7 +363,10 @@ impl ToplevelResource for Item {
 				if x.is_db_malformed() { continue }
 				let eff = x?;
 				let index = abilities.iter().position(|ab|
-					ab.id.unwrap().unwrap() == eff.ability.unwrap());
+				// we might throw an error here — but [`Iterator::position`]
+				// does not accept [`Result`] values.
+					ab.id.unwrap().expect("null rowid in item abilities")
+						== eff.ability.unwrap());
 				let ab_id = match index {
 					Some(i) => { abilities[i].effect_count+= 1; i+1 },
 					None => { item.equip_effect_count+= 1; 0 },
