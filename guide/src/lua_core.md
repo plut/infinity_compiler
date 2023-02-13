@@ -1,4 +1,4 @@
-# Basic functions
+# Core functions in the LUA API
 
 
 The `simod` library contains the lowest-level API exported to Lua mod
