@@ -2125,7 +2125,7 @@ pub(crate) mod lua_api {
 //!  - `simod.select(table, key)`: returns a table representing one
 //!    single row in the named table (string); the table keys are the
 //!    column headers.
-//!  - `simod.update(table, key, field, value)`: updates a single field
+//!  - `simod.update(table, field, primary, value)`: updates a single field
 //!    in the table.
 //!  - `simod.insert(table, row, context)`: inserts a full row in the
 //!    table. The columns are read from the merge of both tables `row`
@@ -2250,7 +2250,6 @@ impl<'lua> AsParams for mlua::MultiValue<'lua> {
 	}
 }
 trait Callback<'a>: Sized {
-	const NAME: &'static str;
 	/// Builds the data for the callback from the table schema.
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self>;
 	/// Runs the callback (from the selected table, etc.) and builds the
@@ -2271,7 +2270,6 @@ trait Callback<'a>: Sized {
 #[derive(Debug)]
 struct ListKeys<'a>(Statement<'a>);
 impl<'a> Callback<'a> for ListKeys<'a> {
-	const NAME: &'static str = "list";
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let mut s = format!(r#"select "{primary}" from "{schema}""#,
 			primary = schema.primary());
@@ -2305,7 +2303,6 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 #[derive(Debug)]
 struct SelectRow<'a>(Statement<'a>);
 impl<'a> Callback<'a> for SelectRow<'a> {
-	const NAME: &'static str = "select";
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		use crate::schemas::ColumnWriter;
 		let s = schema.fields.cols().select_sql(schema,
@@ -2341,7 +2338,6 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 #[derive(Debug)]
 struct InsertRow<'a>(&'a Connection, Statement<'a>,&'a Schema);
 impl<'a> Callback<'a> for InsertRow<'a> {
-	const NAME: &'static str = "insert";
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let s = schema.insert_sql(NullDisplay(), NullDisplay());
 		// TODO: use a restricted form of insertion where primary is not
@@ -2391,6 +2387,15 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		Ok(Value::Table(table))
 	}
 }
+struct UpdateRow<'a>(Vec<Statement<'a>>, &'a Schema);
+impl<'a> Callback<'a> for UpdateRow<'a> {
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+		todo!()
+	}
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
+		todo!()
+	}
+}
 
 /// This extension trait allows factoring the code for selecting the
 /// appropriate table for a Lua callback.
@@ -2404,16 +2409,14 @@ impl<'a, T: Callback<'a>> AllResources<T> {
 	/// Selects the appropriate individual callback from the first argument
 	/// (table name) and runs it.
 	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
-		let function = T::NAME;
 		let table = pop_arg_as::<String>(&mut args, lua)
-			.with_context(|| format!(
-				"first argument to '{function}' callback must be a string"))?;
+			.context("first argument must be a string")?;
 		self.by_name_mut(&table)?.execute(lua, args)
-			.with_context(|| format!(
-				"converting from SQL to Lua in '{function}' callback"))
+			.context("converting from SQL to Lua")
 	}
 	/// The wrapper installing the callback function in a table.
-	fn install_callback<'scope>(&'scope mut self, table: &mlua::Table<'scope>, scope: &mlua::Scope<'_,'scope>)->mlua::Result<()> {
+	fn install_callback<'scope>(&'scope mut self, scope: &mlua::Scope<'_,'scope>,
+		table: &mlua::Table<'scope>, name: &'scope str)->mlua::Result<()> {
 // **NOTE**:
 // The lifetime parameters were determined after **a lot** of trial
 // and error....
@@ -2422,8 +2425,9 @@ impl<'a, T: Callback<'a>> AllResources<T> {
 // 		scope.create_function_mut(|lua, args|
 // 			self.prepare(lua, args).to_lua_err())
 // 	}
-		table.set(T::NAME, scope.create_function_mut(|lua, args|
-			self.execute(lua, args).to_lua_err())?)
+		table.set(name, scope.create_function_mut(move |lua, args|
+			self.execute(lua, args)
+				.with_context(|| format!(r#"In callback "{name}":"#)).to_lua_err())?)
 	}
 }
 
@@ -2529,9 +2533,9 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 			}
 			Ok::<_,mlua::Error>(())
 		})?)?;
-		statements.list_keys.install_callback(&simod, scope)?;
-		statements.select_row.install_callback(&simod, scope)?;
-		statements.insert_row.install_callback(&simod, scope)?;
+		statements.list_keys.install_callback(scope, &simod, "list")?;
+		statements.select_row.install_callback(scope, &simod, "select")?;
+		statements.insert_row.install_callback(scope, &simod, "insert")?;
 		simod.set("update", scope.create_function(
 			|_lua, args| update(&db, args).to_lua_err())?)?;
 // 		simod.set("insert", scope.create_function(
