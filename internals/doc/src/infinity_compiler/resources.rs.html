@@ -442,6 +442,9 @@
 <a href="#442" id="442">442</a>
 <a href="#443" id="443">443</a>
 <a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Full definition of all structures representing game resources.
 //!
 //! This crate makes heavy use of the `Pack` and `Resource0` derive macros to
@@ -471,7 +474,7 @@
 </span><span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
 <span class="kw">use </span>macros::{produce_resource_list,all_resources,Resource};
 <span class="kw">use </span><span class="kw">crate</span>::pack::{Pack,NotPacked};
-<span class="kw">use </span><span class="kw">crate</span>::struct_io::{SqlRow,NoSql,TypedStatement,AsParams};
+<span class="kw">use </span><span class="kw">crate</span>::sql_rows::{SqlRow,NoSql,TypedStatement,AsParams,Rowid};
 <span class="kw">use </span><span class="kw">crate</span>::schemas::{Schema};
 <span class="kw">use </span><span class="kw">crate</span>::database::{DbTypeCheck,DbInterface,DbInserter};
 <span class="kw">use </span><span class="kw">crate</span>::gamefiles::{Restype};
@@ -592,7 +595,7 @@
 	</span>itemref: NotPacked::&lt;Resref&gt;,
 	index: NotPacked::&lt;u16&gt;,
 <span class="attr">#[column(<span class="string">r#&quot;primary key&quot;#</span>)]
-	</span>id: NotPacked::&lt;<span class="prelude-ty">Option</span>&lt;i64&gt;&gt;,
+	</span>id: Rowid,
 }
 <span class="doccomment">/// An effect inside a .itm file (either global or in an ability).
 </span><span class="attr">#[derive(Debug,Pack,SqlRow,Resource)]
@@ -621,7 +624,7 @@
 	</span>ability: NotPacked::&lt;i64&gt;,
 	index: NotPacked::&lt;u16&gt;,
 <span class="attr">#[column(<span class="string">r#&quot;primary key&quot;#</span>)]
-	</span>id: NotPacked::&lt;<span class="prelude-ty">Option</span>&lt;i64&gt;&gt;,
+	</span>id: Rowid,
 }
 
 <span class="kw">pub trait </span>ToplevelResourceData: Resource {
@@ -807,7 +810,10 @@
 				<span class="kw">if </span>x.is_db_malformed() { <span class="kw">continue </span>}
 				<span class="kw">let </span>eff = x<span class="question-mark">?</span>;
 				<span class="kw">let </span>index = abilities.iter().position(|ab|
-					ab.id.unwrap().unwrap() == eff.ability.unwrap());
+				<span class="comment">// we might throw an error here — but [`Iterator::position`]
+				// does not accept [`Result`] values.
+					</span>ab.id.unwrap().expect(<span class="string">&quot;null rowid in item abilities&quot;</span>)
+						== eff.ability.unwrap());
 				<span class="kw">let </span>ab_id = <span class="kw">match </span>index {
 					<span class="prelude-val">Some</span>(i) =&gt; { abilities[i].effect_count+= <span class="number">1</span>; i+<span class="number">1 </span>},
 					<span class="prelude-val">None </span>=&gt; { item.equip_effect_count+= <span class="number">1</span>; <span class="number">0 </span>},
