@@ -624,7 +624,7 @@ pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 		pub struct AllResources<T> {
 #[allow(clippy::missing_docs)]
 			_marker: std::marker::PhantomData::<T>, #fields }
-		pub fn all_schemas()->AllResources<Schema> {
+		pub fn all_schemas()->AllResources<crate::schemas::Schema> {
 			AllResources { #schema _marker: std::marker::PhantomData }
 		}
 /// An heterogeneous iterator over the constant list of all game resource types.

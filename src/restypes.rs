@@ -28,7 +28,6 @@ use crate::prelude::*;
 use macros::{all_resources,Resource};
 use crate::pack::{Pack,NotPacked};
 use crate::sql_rows::{SqlRow,NoSql,AsParams,Rowid};
-use crate::schemas::{Schema};
 use crate::database::{DbTypeCheck,DbInterface};
 use crate::resources::{Resource,ToplevelResourceData,ToplevelResource};
 

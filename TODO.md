@@ -32,13 +32,28 @@ corresponds to SQL tables:
     items_abilities: payload2 | parent(->items) | id | position
     items_abilities_effects: payload3 | parent(->abilities) | id | position
     items_effects: payload3 | parent(->items) | id | position
+
+and schema for item:
+    payload
+    sub-schemas: [ ("abilities", box<abilities>) ] etc.
+    
 Soooooo....
 
  top resources have resref
  sub resources have (parent, id, position)
  all resources have sub-tables
 
- leave it to lua to copy 
+ simpler to put primary key first...
+
+ leave it to lua to copy ability effect <-> global effect
+
+separate flags:
+  for an item, there are 12 bytes of flags (about 100 flags)
+  100 bytes x 1500 (base) items take 150 000 = 150k bytes only for flags
+  vs. 12 x 1500 = 18k when using compressed form
+
+=> probably better to use the view for this
+=> kill recursive schema
 
 
 # Resources

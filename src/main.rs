@@ -1523,54 +1523,6 @@ end"#))?;
 	}
 }
 
-/// The full database description of a game resource.
-///
-/// This contains all relevant information to fully define a resource
-/// on the SQL side.
-///
-/// In practice there exists exactly one [`Schema0`] instance per
-/// resource, and it is compiled by the [`Resource0`] derive macro.
-///
-/// The structure of the schema is always as follows:
-/// 1. **Payload fields.** These are the fields present in game files.
-/// 2. **Context fields.** These fields identify the position of the
-///    resource in game fields.
-/// In turn, the context fields are always:
-///  - for top-level resources: only the associated resref.
-///  - for sub-resources: resref is the first field and the last field is
-///    `rowid` alias. (In particular there are always several context
-///    fields).
-/// In all cases, the primary key is guaranteed to be the last field,
-/// while context starts at the resref fields.
-/// This structure allows handling context as a (contiguous) slice of fields;
-/// see [`Schema0::iter`], [`Schema0::columns`].
-///
-/// A few fields in this struct (`extension`, etc.)
-/// are used only for top-level resources.
-/// Doing this saves us a bit of code (separating top-level resources as
-/// their own type + writing ad-hoc macros etc.). The most harm it does
-/// is (a) storing a few bytes of useless memory in the executable,
-/// and (b) possibly inserting a few always-empty tables in the database
-/// (we try to avoid this however).
-#[derive(Debug)]
-pub struct Schema0<'a> {
-	/// Descriptions for all the fields of this struct.
-	pub fields: &'a[Field],
-	/// The stem for the SQL table name associated with this structure.
-	pub name: &'a str,
-	/// The index of the field pointing to top-level resource resref.
-	///
-	/// This is also (always) the first context column.
-	/// Top-level resources have this field as their primary key;
-	/// subresources have a dedicated "id" column at the end.
-	pub resref_key: usize,
-	/// The name of the table holding the top-level resource.
-	pub parent_table: &'a str,
-	/// The extension for this file type (if top-level), or "".
-	pub extension: &'a str,
-	/// The restype identifier for this resource type (if top-level), or 0.
-	pub restype: Restype,
-}
 } // mod schemas
 pub(crate) mod resources {
 use crate::prelude::*;
