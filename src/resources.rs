@@ -150,7 +150,6 @@ pub struct ItemAbility {
 #[column(r#"references "items"("itemref") on delete cascade"#)]
 	itemref: NotPacked::<Resref>,
 	index: NotPacked::<u16>,
-#[column(r#"primary key"#)]
 	id: Rowid,
 }
 /// An effect inside a .itm file (either global or in an ability).
@@ -179,7 +178,6 @@ pub struct ItemEffect {
 #[column(r#"references "item_abilities"("id") on delete cascade"#)]
 	ability: NotPacked::<i64>,
 	index: NotPacked::<u16>,
-#[column(r#"primary key"#)]
 	id: Rowid,
 }
 

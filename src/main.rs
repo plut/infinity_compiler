@@ -98,6 +98,19 @@ impl Display for NullDisplay {
 	fn fmt(&self, _: &mut Formatter<'_>)->fmt::Result { Ok(()) }
 }
 
+pub trait Merge {
+	fn merge(self, other: Self)->Self;
+}
+impl<T: Display> Merge for Option<T> {
+	fn merge(self, other: Self)->Self {
+		match (self, other) {
+			(None, y) => y,
+			(Some(x), None) => Some(x),
+			(Some(x), Some(y)) => panic!("Two different primary keys: {x} and {y}"),
+		}
+	}
+}
+
 thread_local! {
 	static COUNT: RefCell<usize> = RefCell::new(0);
 	static MULTI: RefCell<MultiProgress> = RefCell::new(MultiProgress::new());
