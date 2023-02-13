@@ -1237,34 +1237,6 @@ impl<W: ColumnWriter, T: Display> ColumnPrefixed<W,T> {
 	}
 }
 
-/// Description of several fields.
-///
-/// This convenience type does several things for us, all related to the
-/// fields of a schema:
-///  - it implements [`IntoIterator`] so that we may iterate over schema
-///  columns,
-///  - it implements [`Display`] (joined with commas) so that we may
-///  easily build SQL statements.
-///
-/// The methods from [`Schema0`] might return various distinct instances
-/// from this (e.g. payload, full columns, or context columns).
-#[derive(Debug)]
-pub struct Columns<'a,T>(pub &'a [Field], pub T);
-impl<'a,T> IntoIterator for Columns<'a,T> {
-	type Item = &'a Field;
-	type IntoIter = std::slice::Iter<'a,Field>;
-	fn into_iter(self)->Self::IntoIter { self.0.iter() }
-}
-impl<T: Display> Display for Columns<'_,T> {
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		let mut isfirst = true;
-		for Field { fname, .. } in self.0.iter() {
-			if isfirst { isfirst = false; } else { write!(f, ",")?; }
-			write!(f, r#" {prefix}"{fname}""#, prefix = self.1)?;
-		}
-		Ok(())
-	}
-}
 /// The identifier of the table for a schema.
 #[derive(Debug,Clone)]
 pub enum SchemaResource {
@@ -1282,7 +1254,7 @@ impl SchemaResource {
 /// This contains all relevant information to fully define a resource
 /// on the SQL side.
 ///
-/// In practice there exists exactly one [`Schema`] instance per
+/// In practice there exists exactly one [`Schema0`] instance per
 /// resource, and it is compiled by the [`Resource`] derive macro.
 ///
 /// The structure of the schema is always as follows:
@@ -1297,7 +1269,7 @@ impl SchemaResource {
 /// In all cases, the primary key is guaranteed to be the last field,
 /// while context starts at the resref fields.
 /// This structure allows handling context as a (contiguous) slice of fields;
-/// see [`Schema::iter`], [`Schema::columns`].
+/// see [`Schema0::iter`], [`Schema0::columns`].
 ///
 /// A few fields in this struct (`extension`, etc.)
 /// are used only for top-level resources.
@@ -1307,16 +1279,16 @@ impl SchemaResource {
 /// and (b) possibly inserting a few always-empty tables in the database
 /// (we try to avoid this however).
 #[derive(Debug,Clone)]
-pub struct Schema {
+pub struct Schema0 {
 	pub name: &'static str,
 	pub resource: SchemaResource,
 	pub fields: Vec<Field>,
 	pub primary_index: usize,
 }
-impl Display for Schema {
+impl Display for Schema0 {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { f.write_str(self.name) }
 }
-impl Schema {
+impl Schema0 {
 	/// Returns `true` iff this describes a sub-resource.
 	pub fn is_subresource(&self)->bool { self.resource.is_subresource() }
 	/// Returns the index of the resref field.
@@ -1355,7 +1327,7 @@ impl Schema {
 	}
 	/// Returns the SQL statement creating the main view for this schema.
 	fn create_main_view(&self)->String {
-		let Schema { name, .. } = self;
+		let Schema0 { name, .. } = self;
 		let primary = self.primary();
 		let mut view = format!(r#"create view "{name}" as
 	with "u" as (select {f} from "load_{name}" union select {f} from "add_{name}") select "#, f = self.fields.cols());
@@ -1527,7 +1499,7 @@ end"#))?;
 pub(crate) mod resources {
 use crate::prelude::*;
 use crate::sql_rows::{SqlRow,TypedStatement};
-use crate::schemas::Schema;
+use crate::schemas::Schema0;
 use crate::gamefiles::Restype;
 use crate::restypes::{all_schemas,AllResources};
 use crate::database::{DbInserter};
@@ -1539,11 +1511,11 @@ use crate::database::{DbInserter};
 ///  etc.).
 /// Methods depending only on the list of columns of the schema and the
 /// Rust struct go to [`SqlRow`].
-/// Methods depending only on the schema go to [`Schema`].
+/// Methods depending only on the schema go to [`Schema0`].
 /// Methods depending only on the list of columns from the schema (i.e.
 /// the intersection of both cases) go to [`ColumnWriter`]
 pub trait Resource: SqlRow {
-	fn schema()->Schema;
+	fn schema()->Schema0;
 	/// Particular case of SELECT statement used for saving to game files.
 	fn select_typed(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
 		Self::select_from_typed(db, lazy_format!("save_{name}", name=Self::schema().name), s)
@@ -1609,7 +1581,7 @@ pub trait ToplevelResource: ToplevelResourceData {
 		C: Display;
 	/// Saves all toplevel resources of this type.
 	fn save_all(db: &impl DbInterface)->Result<()> {
-		let Schema { name, .. } = Self::schema();
+		let Schema0 { name, .. } = Self::schema();
 		let extension = Self::EXTENSION;
 		scope_trace!("saving resources from '{}'", name);
 		let condition = format!(r#"where "key" in "dirty_{name}""#);
@@ -1637,7 +1609,7 @@ pub trait ToplevelResource: ToplevelResourceData {
 		Ok(())
 	}
 } // trait ToplevelResource
-impl AllResources<Schema> {
+impl AllResources<Schema0> {
 	/// Builds the SQL statement creating the `new_strings` view.
 	///
 	/// This also builds a few triggers which mark resources as dirty
@@ -2214,7 +2186,7 @@ use std::collections::HashMap;
 
 use crate::prelude::*;
 use crate::restypes::{AllResources,all_schemas};
-use crate::schemas::Schema;
+use crate::schemas::Schema0;
 use crate::sql_rows::{FieldType,AsParams};
 /// Small simplification for frequent use in callbacks.
 macro_rules! fail {
@@ -2305,7 +2277,7 @@ impl<'lua> AsParams for MultiValue<'lua> {
 }
 trait Callback<'a>: Sized {
 	/// Builds the data for the callback from the table schema.
-	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self>;
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema0)->Result<Self>;
 	/// Runs the callback (from the selected table, etc.) and builds the
 	/// resulting Lua value.
 	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>>;
@@ -2324,7 +2296,7 @@ trait Callback<'a>: Sized {
 #[derive(Debug)]
 struct ListKeys<'a>(Statement<'a>);
 impl<'a> Callback<'a> for ListKeys<'a> {
-	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema0)->Result<Self> {
 		let mut s = format!(r#"select {primary} from "{schema}""#,
 			primary = schema.primary());
 		if schema.is_subresource() {
@@ -2363,7 +2335,7 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 #[derive(Debug)]
 struct SelectRow<'a>(Statement<'a>);
 impl<'a> Callback<'a> for SelectRow<'a> {
-	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema0)->Result<Self> {
 		use crate::schemas::ColumnWriter;
 		let s = schema.fields.cols().select_sql(schema,
 			lazy_format!(r#"where {primary}=?"#, primary=schema.primary()));
@@ -2396,9 +2368,9 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 }
 /// Implementation of `simod.insert`.
 #[derive(Debug)]
-struct InsertRow<'a>(&'a Connection, Statement<'a>,&'a Schema);
+struct InsertRow<'a>(&'a Connection, Statement<'a>,&'a Schema0);
 impl<'a> Callback<'a> for InsertRow<'a> {
-	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema0)->Result<Self> {
 		let s = schema.insert_sql(NullDisplay(), NullDisplay());
 		// TODO: use a restricted form of insertion where primary is not
 		// inserted
@@ -2457,7 +2429,7 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 /// (Besides, the memory storage req for a prepared statement is small).
 struct UpdateRow<'a>(HashMap<&'a str, Statement<'a>>);
 impl<'a> Callback<'a> for UpdateRow<'a> {
-	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema0)->Result<Self> {
 		let mut h = HashMap::<&str, Statement<'_>>::
 			with_capacity(schema.fields.len());
 		let primary = schema.primary();
@@ -2489,7 +2461,7 @@ impl<'a> Callback<'a> for UpdateRow<'a> {
 /// Implementation of `simod.delete`.
 struct DeleteRow<'a>(Statement<'a>);
 impl<'a> Callback<'a> for DeleteRow<'a> {
-	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema0)->Result<Self> {
 		let primary = schema.primary();
 		db.prepare(&format!(r#"delete from "{schema}" where {primary}=?"#))
 			.map(Self)
@@ -2507,7 +2479,7 @@ impl<'a> Callback<'a> for DeleteRow<'a> {
 /// table is run.
 #[ext]
 impl<'a, T: Callback<'a>> AllResources<T> {
-	fn prepare(db: &'a impl DbInterface, schemas: &'a AllResources<Schema>)->Result<Self> where Self: Sized {
+	fn prepare(db: &'a impl DbInterface, schemas: &'a AllResources<Schema0>)->Result<Self> where Self: Sized {
 		schemas.map(|s| T::prepare(db, s))
 	}
 	/// Selects the appropriate individual callback from the first argument
@@ -2546,7 +2518,7 @@ impl<'a, T: Callback<'a>> AllResources<T> {
 #[derive(Debug)]
 struct LuaStatements<'a> {
 // 	/// We keep an owned copy of the original table schemas.
-// 	schemas: AllResources<Schema>,
+// 	schemas: AllResources<Schema0>,
 	/// Prepared statements for `simod.list`.
 	list_keys: AllResources<ListKeys<'a>>,
 // 	select_row: AllResources<SelectRow<'a>>,
@@ -2555,7 +2527,7 @@ struct LuaStatements<'a> {
 // 	delete_row: AllResources<InsertRow<'a>>,
 }
 impl<'a> LuaStatements<'a> {
-	pub fn new(db: &'a impl DbInterface, schemas: &'a AllResources<Schema>)->Result<Self> {
+	pub fn new(db: &'a impl DbInterface, schemas: &'a AllResources<Schema0>)->Result<Self> {
 		Ok(Self {
 // 			schemas,
 			list_keys: AllResources::<_>::prepare(db, schemas)?,

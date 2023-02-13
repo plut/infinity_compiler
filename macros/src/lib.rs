@@ -548,8 +548,8 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	} // match
 	let code = quote!{
 		impl Resource for #ident {
-			fn schema()->crate::schemas::Schema {
-				crate::schemas::Schema {
+			fn schema()->crate::schemas::Schema0 {
+				crate::schemas::Schema0 {
 					name: #table_name,
 					resource: #res_code,
 					fields: Self::fields(),
@@ -624,7 +624,7 @@ pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 		pub struct AllResources<T> {
 #[allow(clippy::missing_docs)]
 			_marker: std::marker::PhantomData::<T>, #fields }
-		pub fn all_schemas()->AllResources<crate::schemas::Schema> {
+		pub fn all_schemas()->AllResources<crate::schemas::Schema0> {
 			AllResources { #schema _marker: std::marker::PhantomData }
 		}
 /// An heterogeneous iterator over the constant list of all game resource types.
