@@ -1324,7 +1324,7 @@ impl Schema {
 	/// resource.
 	pub fn resref(&self)->&'static str { self.fields[self.resref_idx()].fname }
 	/// Returns the name of the primary key.
-	pub fn primary(&self)->&'static str { self.fields[self.primary_index].fname }
+	pub fn primary(&self)->&Field { &self.fields[self.primary_index] }
 	/// Returns the SQL statement creating a given table with this schema.
 	///
 	/// The parameters are the table name (not necessarily matching the
@@ -1347,9 +1347,9 @@ impl Schema {
 		let mut view = format!(r#"create view "{name}" as
 	with "u" as (select {f} from "load_{name}" union select {f} from "add_{name}") select "#, f = self.fields.cols());
 		for Field {fname, .. } in &self.fields[..self.fields.len()-1] {
-			uwrite!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"="{primary}" and "field"='{fname}' order by rowid desc limit 1), "{fname}") as "{fname}", "#);
+			uwrite!(&mut view, r#"ifnull((select "value" from "edit_{name}" where "resource"={primary} and "field"='{fname}' order by rowid desc limit 1), "{fname}") as "{fname}", "#);
 		}
-		uwrite!(&mut view, r#""{primary}" from "u""#);
+		uwrite!(&mut view, r#"{primary} from "u""#);
 		view
 	}
 	/// Returns the SQL for creating the output view of a resource.
@@ -1415,7 +1415,7 @@ left join "strref_dict" as {b} on {a} = {b}."native""#);
 			f(format!(r#"create table "orphan_{name}" ("name" text primary key on conflict ignore)"#))?;
 			f(format!(r#"create trigger "orphan_{name}" after delete on "add_{name}"
 begin
-	insert into "orphan_{name}" values (old."{primary}");
+	insert into "orphan_{name}" values (old.{primary});
 end"#))?;
 		}
 		// populate resref_dict or strref_dict as needed:
@@ -1440,7 +1440,7 @@ begin
 	{trans}
 	insert or ignore into "{dirtytable}" values (new."{parent_key}");
 	insert into "edit_{name}" ("source", "resource", "field", "value") values
-		((select "component" from "global"), new."{primary}", '{fname}',
+		((select "component" from "global"), new.{primary}, '{fname}',
 		new."{fname}");
 end"#))?;
 		}
@@ -1457,7 +1457,7 @@ r#"create trigger "delete_{name}"
 instead of delete on "{name}"
 begin
 	insert or ignore into "{dirtytable}" values (old."{parent_key}");
-	delete from "add_{name}" where "{primary}" = old."{primary}";
+	delete from "add_{name}" where {primary} = old.{primary};
 end"#))?;
 		f(format!(
 r#"create trigger "unedit_{name}"
@@ -2261,7 +2261,7 @@ trait Callback<'a>: Sized {
 struct ListKeys<'a>(Statement<'a>);
 impl<'a> Callback<'a> for ListKeys<'a> {
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		let mut s = format!(r#"select "{primary}" from "{schema}""#,
+		let mut s = format!(r#"select {primary} from "{schema}""#,
 			primary = schema.primary());
 		if schema.is_subresource() {
 			uwrite!(&mut s, r#" where "{resref}"=? order by "index""#,
@@ -2296,7 +2296,7 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		use crate::schemas::ColumnWriter;
 		let s = schema.fields.cols().select_sql(schema,
-			lazy_format!(r#"where "{primary}"=?"#, primary=schema.primary()));
+			lazy_format!(r#"where {primary}=?"#, primary=schema.primary()));
 		db.prepare(s).map(Self)
 	}
 	/// Implementation of `simod.list`.
@@ -2421,7 +2421,7 @@ struct DeleteRow<'a>(Statement<'a>);
 impl<'a> Callback<'a> for DeleteRow<'a> {
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let primary = schema.primary();
-		db.prepare(&format!(r#"delete from "{schema}" where "{primary}"=?"#))
+		db.prepare(&format!(r#"delete from "{schema}" where {primary}=?"#))
 			.map(Self)
 	}
 	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>> {
