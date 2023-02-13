@@ -2353,7 +2353,7 @@ impl<'a> Callback<'a> for UpdateRow<'a> {
 		// Return the number of changed rows:
 		let n = stmt.execute((LuaValueRef(args.get(0).unwrap()),
 			LuaValueRef(args.get(1).unwrap())))?;
-		Ok(n.to_lua(lua)?)
+		Ok((n > 0).to_lua(lua)?)
 	}
 }
 /// Implementation of `simod.delete`.
@@ -2367,7 +2367,7 @@ impl<'a> Callback<'a> for DeleteRow<'a> {
 	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>> {
 		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
 		let n = self.0.execute(args.as_params())?;
-		Ok(n.to_lua(lua)?)
+		Ok((n > 0).to_lua(lua)?)
 	}
 }
 

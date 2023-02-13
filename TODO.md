@@ -14,26 +14,10 @@ subresources have: sorting, parent key, parent resource
 
  - remove resref_orig (not needed with the "/name" convention)
 
-struct_io: SqlRow (fields only)
-schemas: Schema (no payload), Columns (fields, no payload)
-resources: Resource (full schema + payload)
-??: anything depending on all_schemas
-
-  - move TypedStatement, RowExt, DbTypeCheck to struct_io
-  - make Strref, Resref into newtypes
-  - kill RESOURCES
-  - kill Schema0
-  - then Columns
-  - move all_resources() to a field of GameDB (etc.)
-  - list_keys should return a Lua table, not a Vec
-  - decide if LuaStatements takes a Schema by value or by ref
-   (it probably owns a value)
-  - `simod.insert`: use previous algo. (iterating over schema)
-  - rename `new`/`run` to `prepare`/`execute`
-  - for MultiValue: replace vector by pop
-    i.e. LuaValueRef by LuaValue (owned)
-    this will fit better with tables (who cannot return references to
-    their fields)
+  - kill Columns
+  - move all_schemas() to a field of GameDB (etc.)
+  - rename as Resource::all()
+  - in `insert_sql`, replace n1, n2 by a lazy_format
 
 # Override
  - [x] improve backup procedure: a full backup as part of init
@@ -54,7 +38,7 @@ resources: Resource (full schema + payload)
  - [x] `select`
  - [x] `list`
  - [x] `insert`
- - [ ] `delete`
+ - [x] `delete`
 ## Argument checking
  - [ ] `current`, `namespace` handling
  - [ ] strref namespacing
