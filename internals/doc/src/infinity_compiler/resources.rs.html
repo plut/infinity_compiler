@@ -491,7 +491,7 @@
 	<span class="kw">fn </span>schema()-&gt;Schema;
 	<span class="doccomment">/// Particular case of SELECT statement used for saving to game files.
 	</span><span class="kw">fn </span>select_typed(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, s: <span class="kw">impl </span>Display)-&gt;<span class="prelude-ty">Result</span>&lt;TypedStatement&lt;<span class="lifetime">&#39;_</span>, <span class="self">Self</span>&gt;&gt; {
-		<span class="self">Self</span>::select_from_typed(db, <span class="string">&quot;save_&quot;</span>.cat(<span class="self">Self</span>::schema().name), s)
+		<span class="self">Self</span>::select_from_typed(db, <span class="macro">lazy_format!</span>(<span class="string">&quot;save_{name}&quot;</span>, name=<span class="self">Self</span>::schema().name), s)
 	}
 }
 
