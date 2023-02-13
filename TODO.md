@@ -1,3 +1,46 @@
+# Auto sub tables
+
+A struture with SqlRow has associated
+ * table name
+ * payload from data + `resref` primary key
+ * for a field e.g. `item_abilities: Vec<ItemAbility>` a sub-table
+   named `item_abilities`
+   with payload `ItemAbility`
+   parent = this table.primary key
+ * the `load_foobar` table only contains one degree of parent
+ * standardize `resref`, `id` as primary key names
+ * don't include these in the table; go back to `Key` (but simpler)
+
+A schema has
+ * sub-schemas (it is a recursive type)
+ 
+
+e.g.
+```
+#[table(items)]
+struct Item { payload,
+  abilities: Vec<ItemAbility>,
+  effects: Vec<ItemEffect>
+}
+struct ItemAbility { payload2,
+  effects: Vec<ItemEffect>
+}
+```
+
+corresponds to SQL tables:
+    items: payload1 | resref
+    items_abilities: payload2 | parent(->items) | id | position
+    items_abilities_effects: payload3 | parent(->abilities) | id | position
+    items_effects: payload3 | parent(->items) | id | position
+Soooooo....
+
+ top resources have resref
+ sub resources have (parent, id, position)
+ all resources have sub-tables
+
+ leave it to lua to copy 
+
+
 # Resources
                       payload index rowid resref ability_count
 stored in game files  x                          x

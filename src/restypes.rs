@@ -27,45 +27,10 @@
 use crate::prelude::*;
 use macros::{all_resources,Resource};
 use crate::pack::{Pack,NotPacked};
-use crate::sql_rows::{SqlRow,NoSql,TypedStatement,AsParams,Rowid};
+use crate::sql_rows::{SqlRow,NoSql,AsParams,Rowid};
 use crate::schemas::{Schema};
-use crate::database::{DbTypeCheck,DbInterface,DbInserter};
-use crate::gamefiles::{Restype};
-
-/// One of the resource tables stored in the database.
-///
-/// Methods attached to this trait are those which depend **both** on
-///  - having a full schema (with table name, etc.), and
-///  - having access to the attached (Rust) type (for typed inserts,
-///  etc.).
-/// Methods depending only on the list of columns of the schema and the
-/// Rust struct go to [`SqlRow`].
-/// Methods depending only on the schema go to [`Schema`].
-/// Methods depending only on the list of columns from the schema (i.e.
-/// the intersection of both cases) go to [`ColumnWriter`]
-pub trait Resource: SqlRow {
-	fn schema()->Schema;
-	/// Particular case of SELECT statement used for saving to game files.
-	fn select_typed(db: &impl DbInterface, s: impl Display)->Result<TypedStatement<'_, Self>> {
-		Self::select_from_typed(db, lazy_format!("save_{name}", name=Self::schema().name), s)
-	}
-}
-
-/// When provided with a file extension, return the corresponding Restype.
-pub fn restype_from_extension(ext: &str)->Restype {
-	match all_schemas().map(|schema| {
-		match schema.resource {
-		// small trick: when we find the correct extension, we break the
-		// iteration by returning an `Err` variant.
-			crate::schemas::SchemaResource::Top { extension, restype }
-			if ext.eq_ignore_ascii_case (extension) => Err(restype),
-			_ => Ok(())
-		}
-	}) {
-		Err(r) => r,
-		Ok(_) => Restype { value: 0 }
-	}
-}
+use crate::database::{DbTypeCheck,DbInterface};
+use crate::resources::{Resource,ToplevelResourceData,ToplevelResource};
 
 /// A game item, corresponding to a .itm file.
 #[derive(Debug,Pack,SqlRow,Resource)]
@@ -181,79 +146,6 @@ pub struct ItemEffect {
 	id: Rowid,
 }
 
-pub trait ToplevelResourceData: Resource {
-	// TODO:
-	// fn resref(&self)->Resref;
-	const EXTENSION: &'static str;
-	const RESTYPE: Restype;
-}
-/// A top-level resource (i.e. saved to its own file in the override
-/// directory).
-pub trait ToplevelResource: ToplevelResourceData {
-	/// Subresources for this resource (together with linking info.).
-	///
-	/// This should be a tuple of all subresources, each of them stored in
-	/// some `Vec` with elements (subresource, linking-info).
-	type Subresources<'a>;
-	/// Inserts a single resource in the database.
-	fn load(tables: &mut AllResources<Statement<'_>>, cursor: impl Read+Seek, resref: Resref)
-		->Result<()>;
-	fn load_from_handle(db: &mut DbInserter<'_>, resref: Resref,
-			mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
-		Self::load(&mut db.tables, handle.open()?, resref)?;
-		if handle.is_override() {
-			db.add_override.execute((resref, Self::EXTENSION))?;
-		}
-// // 		*(<T as NamedTable>::find_field_mut(&mut self.resource_count))+=1;
-// 		*count+= 1;
-		Ok(())
-	}
-	/// Saves a single resource (with its subresources) to game files.
-	fn save(&mut self, file: impl Write+Seek+Debug, subresources: Self::Subresources<'_>)
-		->Result<()>;
-	/// Applies a closure over all resources together with their subresources.
-	///
-	/// Iterates a closure over items in the database (with their
-	/// associated properties) matching the given condition.
-	///
-	/// This function links items with their sub-resources
-	/// (e.g. item abilities and effects)
-	/// and calls the passed closure on the resulting structure.
-	///
-	/// It returns the number of rows matched.
-	fn for_each<F,C>(db: &impl DbInterface, condition: C, f: F)->Result<i32>
-		where F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>,
-		C: Display;
-	/// Saves all toplevel resources of this type.
-	fn save_all(db: &impl DbInterface)->Result<()> {
-		let Schema { name, .. } = Self::schema();
-		let extension = Self::EXTENSION;
-		scope_trace!("saving resources from '{}'", name);
-		let condition = format!(r#"where "key" in "dirty_{name}""#);
-		let n = Self::for_each(db, condition,
-			|resref, resource, subresources| {
-				trace!("start compiling {name}: {resref}");
-				let filename = format!("{resref}.{extension}");
-				let mut file = File::create(&filename)
-					.with_context(|| format!("cannot open output file: {filename}"))?;
-				resource.save(&mut file, subresources)
-		})?;
-		info!("compiled {n} entries from {name} to override");
-		Ok(())
-	}
-	/// Shows a resource on stdout (grouped with its subresources) in a
-	/// nice user format.
-	fn show(&self, resref: impl Display, subresources: Self::Subresources<'_>);
-	/// Shows on stdout the resource with given resref, or returns an error.
-	fn show_all(db: &impl DbInterface, resref: impl Display)->Result<()> {
-		Self::for_each(db, format!(r#"where "id"='{resref}'"#),
-		|resref, resource, subresources| {
-			resource.show(resref, subresources);
-			Ok(())
-		}).unwrap();
-		Ok(())
-	}
-} // trait ToplevelResource
 impl ToplevelResource for Item {
 	type Subresources<'a> = (&'a mut [ItemAbility], &'a mut[(ItemEffect,usize)]);
 	/// load an item from cursor
@@ -405,43 +297,3 @@ Attack type: {atype}",
 //  - and the constant `RESOURCES`, which holds the parent resources.
 all_resources!();
 
-impl AllResources<Schema> {
-	/// Builds the SQL statement creating the `new_strings` view.
-	///
-	/// This also builds a few triggers which mark resources as dirty
-	/// whenever their strrefs are reassigned.
-	pub fn create_new_strings<T>(&mut self, f: impl Fn(&str)->Result<T>)->Result<()> {
-		let mut create = String::from(
-r#"create view "new_strings"("native","strref","flags") as
-select "a"."native", "strref", "flags" from ("#);
-		let mut is_first = true;
-		let mut trigger = String::from(r#"create trigger "update_strrefs"
-after insert on "strref_dict"
-begin"#);
-		self.map_mut(|schema| {
-			schema.append_new_strings_schema(&mut create, &mut is_first);
-			schema.append_new_strings_trigger(&mut trigger);
-			any_ok(())
-		})?;
-		write!(&mut create, r#") as "a"
-	left join "strref_dict" as "b" on "a"."native" = "b"."native"
-	where typeof("a"."native") = 'text'"#)?;
-		write!(&mut trigger, "end")?;
-		f(&create)?;
-		f(&trigger)?;
-		// This triggers makes any update of `strref` in `new_strings`
-		// (with any dummy value; we use -1) produce the lowest still-available
-		// strref; see
-		// https://stackoverflow.com/questions/24587799/returning-the-lowest-integer-not-in-a-list-in-sql
-		f(r#"create trigger "update_new_strings"
-	instead of update of "strref" on "new_strings"
-	begin
-		insert into "strref_dict"("native","strref")
-		values (new."native",
-			ifnull((select min("strref")+1 from "strref_dict"
-				where "strref"+1 not in (select "strref" from "strref_dict")),
-				(select "strref_count" from "global")));
-	end"#)?;
-		Ok(())
-	}
-}
