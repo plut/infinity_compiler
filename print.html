@@ -78,7 +78,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">4.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">4.2.</strong> Game strings</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">4.3.</strong> Translations</a></li></ol></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="lua_basic.html"><strong aria-hidden="true">2.1.</strong> Basic functions</a></li></ol></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">4.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">4.2.</strong> Game strings</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">4.3.</strong> Translations</a></li></ol></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -158,6 +158,48 @@ items.</p>
 </blockquote>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="api-for-modders"><a class="header" href="#api-for-modders">API for modders</a></h1>
 <p>TODO.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="basic-functions"><a class="header" href="#basic-functions">Basic functions</a></h1>
+<p>The <code>simod</code> library contains the lowest-level API exported to Lua mod
+scripts. The remainder of the API is built on top of these functions.</p>
+<p>Most of the functions in this library take, as their first parameter,
+a string <code>table</code> containing the name of one of the game's resource tables
+(<code>&quot;items&quot;</code>, <code>&quot;item_abilities&quot;</code> etc.).
+String matching is case-sensitive.</p>
+<h2 id="simodinsert-insertin-a-new-game-object"><a class="header" href="#simodinsert-insertin-a-new-game-object"><code>simod.insert</code>: insertin a new game object</a></h2>
+<p><code>simod.insert(table, row)</code></p>
+<p><code>row</code> is a table containing the row to be inserted, as key-value
+pairs; the keys are strings matching the column headers for this table
+(with the same case).</p>
+<h2 id="simodlisttable-parent-list-primary-keys-in-a-table"><a class="header" href="#simodlisttable-parent-list-primary-keys-in-a-table"><code>simod.list(table, [parent])</code>: list primary keys in a table</a></h2>
+<p>If <code>table</code> describes a top-level resource (e.g. <code>&quot;items&quot;</code>) then
+the <code>[parent]</code> value is not allowed.
+This will return an array containing the list of all primary keys
+appearing in this table.</p>
+<p>If <code>table</code> describes a sub-resource (e.g. <code>&quot;item_abilities&quot;</code>) then
+<code>[parent]</code> is a primary key for the table's parent;
+this will return a list of all sub-resources whose parent attribute
+matches this primary key.</p>
+<p>If no rows match the query, then an empty table is returned.</p>
+<h2 id="simodselecttable-primary-read-one-row-in-a-table"><a class="header" href="#simodselecttable-primary-read-one-row-in-a-table"><code>simod.select(table, primary)</code>: read one row in a table</a></h2>
+<p>This returns the content of the row with primary key <code>primary</code>
+in the table, as a Lua table whose keys are strings
+corresponding to the table's column names.</p>
+<p>If no row with the given primary key exists, then an error is thrown.</p>
+<h2 id="simodupdatetable-fieldname-primary-value-modify-an-entry-in-a-table"><a class="header" href="#simodupdatetable-fieldname-primary-value-modify-an-entry-in-a-table"><code>simod.update(table, fieldname, primary, value)</code>: modify an entry in a table.</a></h2>
+<p>This updates the row with primary key <code>primary</code> in the given table,
+setting the field with column name <code>fieldname</code> to the given <code>value</code>.
+The <code>fieldname</code> must be a string corresponding to one of the table's
+column names (otherwise an error is thrown).</p>
+<p>This returns a boolean value, which is <code>true</code> if a row was updated
+and <code>false</code> if no row with the given primary key was found.</p>
+<h2 id="simoddeletetable-primary-delete-an-entry-in-a-table"><a class="header" href="#simoddeletetable-primary-delete-an-entry-in-a-table"><code>simod.delete(table, primary)</code>: delete an entry in a table.</a></h2>
+<p>This deletes the row with the given primary key from the table.</p>
+<p>This returns a boolean value, which is <code>true</code> if a row was deleted,
+and <code>false</code> otherwise.</p>
+<p>Note that rows from the base game (those present in the <code>load_*</code> tables)
+currently cannot be deleted,
+since the data they represent is stored in the BIF files
+and not in the override directory.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="design-goals"><a class="header" href="#design-goals">Design goals</a></h1>
 <p>Obviously, there already exists a perfectly fine tool for IE modding.
 However, starting from scratch allows us to design
