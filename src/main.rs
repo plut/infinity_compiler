@@ -33,7 +33,7 @@ pub(crate) mod prelude {
 #![allow(unused_imports)]
 pub(crate) use anyhow::{Result,Context};
 pub(crate) use log::{trace,debug,info,warn,error};
-pub(crate) use rusqlite::{self,Connection,Statement,Rows};
+pub(crate) use rusqlite::{self,Connection,Statement,Row};
 pub(crate) use extend::ext;
 pub(crate) use lazy_format::prelude::*;
 
@@ -247,14 +247,13 @@ use crate::pack::{Pack,NotPacked};
 pub trait RowExt {
 	fn dump(&self);
 }
-impl RowExt for rusqlite::Row<'_> {
+impl RowExt for Row<'_> {
 	/// Dumps all values found in a single row to stdout.
 	fn dump(&self) {
 		for (i, c) in self.as_ref().column_names().iter().enumerate() {
-			use rusqlite::types::ValueRef::*;
 			match self.get_ref(i) {
-				Ok(Null) => println!("  [{i:3}] {c} = \x1b[31mNull\x1b[m"),
-				Ok(Text(s)) => println!("  [{i:3}] {c} = Text(\"{}\")",
+				Ok(ValueRef::Null) => println!("  [{i:3}] {c} = \x1b[31mNull\x1b[m"),
+				Ok(ValueRef::Text(s)) => println!("  [{i:3}] {c} = Text(\"{}\")",
 					std::str::from_utf8(s).unwrap()),
 				Ok(x) => println!("  [{i:3}] {c} = {x:?}"),
 				_ => break
@@ -368,18 +367,6 @@ pub trait AsParams {
 		rusqlite::params_from_iter(self.params_iter())
 	}
 }
-/// Converting an object to something implementing [`rusqlite::Params`].
-///
-/// Since we cannot implement the [`rusqlite::Params`] trait ourselves,
-/// this is the closest we can do.
-pub trait AsParams3 {
-	type Elt<'a>: ToSql where Self: 'a;
-	type Iter<'a>: Iterator<Item=Self::Elt<'a>> where Self: 'a;
-	fn params_iter(&self)->Self::Iter<'_>;
-	fn as_params(&self)->rusqlite::ParamsFromIter<Self::Iter<'_>> {
-		rusqlite::params_from_iter(self.params_iter())
-	}
-}
 /// A struct mapped to a SQL row.
 pub trait SqlRow: Sized {
 	/// The number of fields in the SQL row.
@@ -393,9 +380,9 @@ pub trait SqlRow: Sized {
 	/// Since we do so from a controlled struct, this should not panic;
 	/// however, it would be better to be able to propagate errors.
 	fn get_field(&self, i: usize)->ToSqlOutput<'_>;
-	/// Reads a whole [`rusqlite::Row`] into a struct,
+	/// Reads a whole [`Row`] into a struct,
 	/// or raises a conversion error.
-	fn from_row_at(row: &rusqlite::Row<'_>, offset: usize)->Result<Self>;
+	fn from_row_at(row: &Row<'_>, offset: usize)->Result<Self>;
 	/// Returns the type of the `i`-th field.
 	fn fieldtype(i: usize)->FieldType;
 	/// Builds the name of the `i`-th field from context.
@@ -404,8 +391,8 @@ pub trait SqlRow: Sized {
 	/// (constraints, etc.)
 	fn field_create_text(_i: usize)->&'static str { "" }
 	fn primary_index()->usize;
-	/// Reads a whole [`rusqlite::Row`] into a struct.
-	fn from_row(row: &rusqlite::Row<'_>,)->Result<Self> {
+	/// Reads a whole [`Row`] into a struct.
+	fn from_row(row: &Row<'_>,)->Result<Self> {
 		Self::from_row_at(row, 0)
 	}
 	/// Returns the name of the `i`-th field, as a string.
@@ -438,7 +425,7 @@ pub trait SqlRow: Sized {
 }
 impl<T: SqlLeaf> SqlRow for T {
 	const WIDTH: usize = 1;
-	fn from_row_at(row: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
+	fn from_row_at(row: &Row<'_>, offset: usize)->Result<Self> {
 		row.get::<_,T>(offset)
 			.with_context(|| format!("cannot read SQL value as {}",
 				std::any::type_name::<T>()))
@@ -477,7 +464,7 @@ impl<T: SqlRow> ExactSizeIterator for ContentIterator<'_,T> {
 
 impl<T: SqlRow> SqlRow for NotPacked<T> {
 	const WIDTH: usize = T::WIDTH;
-	fn from_row_at(row: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
+	fn from_row_at(row: &Row<'_>, offset: usize)->Result<Self> {
 		T::from_row_at(row, offset).map(Self::from)
 	}
 	fn get_field(&self, i: usize)->ToSqlOutput<'_> { self.as_ref().get_field(i) }
@@ -492,7 +479,7 @@ impl<T: SqlRow> SqlRow for NotPacked<T> {
 pub struct NoSql<T>(T);
 impl<T: Default> SqlRow for NoSql<T> {
 	const WIDTH: usize = 0;
-	fn from_row_at(_row: &rusqlite::Row<'_>, _offset: usize)->Result<Self> {
+	fn from_row_at(_row: &Row<'_>, _offset: usize)->Result<Self> {
 		Ok(Self(T::default()))
 	}
 	fn get_field(&self, _i: usize)->ToSqlOutput<'_> {
@@ -538,7 +525,7 @@ impl<'stmt,T: SqlRow> TypedStatement<'stmt, T> {
 /// `Row` iterator fails).
 #[allow(missing_debug_implementations)]
 pub struct TypedRows<'stmt,T: SqlRow> {
-	rows: Rows<'stmt>,
+	rows: rusqlite::Rows<'stmt>,
 	_marker: PhantomData<T>,
 	index: usize,
 }
@@ -1773,7 +1760,6 @@ pub(crate) mod database {
 //!  - [`Schema0`] type: description of a particular SQL table;
 //!  - [`Resource0`] trait: connect a Rust structure to a SQL row.
 use crate::prelude::*;
-use rusqlite::{Row};
 use crate::resources::*;
 use crate::gamefiles::GameIndex;
 
@@ -2136,7 +2122,7 @@ pub(crate) mod lua_api {
 //! Any error occurring during execution of one of those functions
 //! (including SQL errors) is passed back to Lua in the form of a
 //! callback error.
-use mlua::{Lua,ExternalResult,Value};
+use mlua::{Lua,FromLua,ToLua,ExternalResult,Value,MultiValue};
 use rusqlite::{ToSql, types::ToSqlOutput};
 
 use std::collections::HashMap;
@@ -2168,7 +2154,7 @@ impl ToSql for LuaToSql<'_> {
 		}
 	}
 }
-impl<'lua> mlua::FromLua<'lua> for LuaToSql<'lua> {
+impl<'lua> FromLua<'lua> for LuaToSql<'lua> {
 	fn from_lua(v: Value<'lua>, _lua: &'lua Lua)->mlua::Result<Self> {
 		Ok(Self(v))
 	}
@@ -2238,15 +2224,15 @@ fn sql_to_lua<'lua>(v: rusqlite::types::ValueRef<'_>, lua: &'lua Lua)->Result<Va
 ///
 /// Reads an argument as the given `FromLua` type and returns it,
 /// wrapped in a `Result`.
-fn pop_arg_as<'lua, T: mlua::FromLua<'lua>>(args: &mut mlua::MultiValue<'lua>, lua:&'lua Lua)->Result<T> {
+fn pop_arg_as<'lua, T: FromLua<'lua>>(args: &mut MultiValue<'lua>, lua:&'lua Lua)->Result<T> {
 	let arg0 = args.pop_front().ok_or(Error::CallbackMissingArgument)?;
 	let r = T::from_lua(arg0, lua).with_context(||
 		format!("cannot convert argument to type {}", std::any::type_name::<T>()))?;
 	Ok(r)
 }
-/// Small simplification for [`mlua::MultiValue`] impl of [`AsParams`].
+/// Small simplification for [`MultiValue`] impl of [`AsParams`].
 type MluaMultiIter<'a,'lua> = std::iter::Rev<std::slice::Iter<'a,Value<'lua>>>;
-impl<'lua> AsParams for mlua::MultiValue<'lua> {
+impl<'lua> AsParams for MultiValue<'lua> {
 	type Elt<'a> = LuaValueRef<'a> where Self: 'a;
 	type Iter<'a> = std::iter::Map<MluaMultiIter<'a,'lua>,fn(&'a Value<'lua>)->LuaValueRef<'a>> where Self: 'a;
 	fn params_iter(&self)->Self::Iter<'_> {
@@ -2258,9 +2244,9 @@ trait Callback<'a>: Sized {
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self>;
 	/// Runs the callback (from the selected table, etc.) and builds the
 	/// resulting Lua value.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<Value<'lua>>;
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>>;
 	/// Utility function to check that arguments match statement.
-	fn expect_arguments(args: &mlua::MultiValue<'_>, expected: usize)->Result<()> {
+	fn expect_arguments(args: &MultiValue<'_>, expected: usize)->Result<()> {
 		// We assume that one argument was discarded (table name).
 		let found = args.len() + 1;
 		if found != expected {
@@ -2291,7 +2277,7 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 	///    top-level resource,
 	/// and returns in a Lua table the list of all primary keys matching
 	/// this condition.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>> {
 		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
 		let mut rows = self.0.query(args.as_params())?;
 		let ret = lua.create_table()?;
@@ -2321,7 +2307,7 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 	///    top-level resource,
 	/// and returns in a Lua table the list of all primary keys matching
 	/// this condition.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>> {
 		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
 		let mut rows = self.0.query(args.as_params())?;
 		match rows.next()? {
@@ -2348,7 +2334,7 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		// inserted
 		Ok(Self(db.db(), db.prepare(s)?, schema))
 	}
-	fn execute<'lua>(&mut self, _lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
+	fn execute<'lua>(&mut self, _lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
 		Self::expect_arguments(&args, 2)?;
 		let table = match args.pop_front().unwrap() {
 			Value::Table(t) => t,
@@ -2392,22 +2378,27 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		Ok(Value::Table(table))
 	}
 }
+/// Implementation of `simod.update`.
+///
+/// We collect all the per-field update statements in a hash map.
+/// While this might lead to preparing useless statements in the case of
+/// a small mod, this should save time for large mods on average,
+/// and using prepared statements is safer anyway.
+/// (Besides, the memory storage req for a prepared statement is small).
 struct UpdateRow<'a>(HashMap<&'a str, Statement<'a>>, &'a Schema);
 impl<'a> Callback<'a> for UpdateRow<'a> {
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let mut h = HashMap::<&str, Statement<'_>>::
 			with_capacity(schema.fields.len());
 		let primary = schema.primary();
-		// TODO: use a hash map instead?
 		for (i, field) in schema.fields.iter().enumerate() {
 			if i == schema.primary_index { continue }
-			h.insert(field.fname,
-				db.prepare(&format!(
+			h.insert(field.fname, db.prepare(&format!(
 				r#"update "{schema}" set {field}=?2 where {primary}=?1"#))?);
 		}
 		Ok(Self(h, schema))
 	}
-	fn execute<'lua>(&mut self, _lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
 		Self::expect_arguments(&args, 3)?;
 		let arg0 = args.pop_front().unwrap(); // take ownership of first argument
 		let fieldname = match arg0 {
@@ -2422,7 +2413,7 @@ impl<'a> Callback<'a> for UpdateRow<'a> {
 		// Return the number of changed rows:
 		let n = stmt.execute((LuaValueRef(args.get(0).unwrap()),
 			LuaValueRef(args.get(1).unwrap())))?;
-		Ok(Value::Integer(n as i64))
+		Ok(n.to_lua(lua)?)
 	}
 }
 
@@ -2437,7 +2428,7 @@ impl<'a, T: Callback<'a>> AllResources<T> {
 	}
 	/// Selects the appropriate individual callback from the first argument
 	/// (table name) and runs it.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
 		let table = pop_arg_as::<String>(&mut args, lua)
 			.context("first argument must be a string")?;
 		self.by_name_mut(&table)?.execute(lua, args)
