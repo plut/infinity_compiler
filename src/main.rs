@@ -55,9 +55,10 @@ pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
 pub(crate) enum Error{
 	UnknownTable(String),
 	BadArgumentNumber { expected: usize, found: usize },
-	BadArgumentType { expected: &'static str },
+	BadArgumentType { position: usize, expected: &'static str, found: String },
 	BadParameterCount { expected: usize, found: usize },
 	CallbackMissingArgument,
+	UnknownField { field: String },
 }
 impl Display for Error {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
@@ -65,10 +66,11 @@ impl Display for Error {
 			Self::UnknownTable(s) => write!(f, "Unknown table: '{s}'"),
 			Self::BadArgumentNumber { expected, found } =>
 				write!(f, "Bad number of arguments: found {found}, expected {expected}"),
-			Self::BadArgumentType { expected } =>
-				write!(f, "Bad argument type: expected {expected}"),
+			Self::BadArgumentType { position, expected, found } =>
+				write!(f, "Bad argument type at position {position}: expected {expected}, found {found}"),
 			Self::BadParameterCount { expected, found } =>
 				write!(f, "Bad parameter count for SQL statement: found {found}, expected {expected}"),
+			Self::UnknownField { field } => write!(f, r#"Unknown field "{field}""#),
 			_ => write!(f, "Error: &{self:?}"),
 		}
 	}
@@ -1194,7 +1196,7 @@ pub trait ColumnWriter {
 	fn as_iter(&self)->Self::Iter;
 	fn prefixed<P: Display>(self, prefix: P)->ColumnPrefixed<Self, P>
 	where Self: Sized { ColumnPrefixed(self, prefix) }
-	fn cols(self)->ColumnPrefixed<Self, NullDisplay> where Self: Sized {
+	fn cols(self)->ColumnPrefixed<Self> where Self: Sized {
 		ColumnPrefixed(self, NullDisplay())
 	}
 	fn len(&self)->usize { self.as_iter().len() }
@@ -1206,7 +1208,7 @@ impl<'a> ColumnWriter for &'a[Field] {
 }
 /// An utility type to write column headers
 /// joined by commas and with a possible prefix (used for "new.").
-pub struct ColumnPrefixed<W,P>(W,P);
+pub struct ColumnPrefixed<W,P=NullDisplay>(W,P);
 impl<W: ColumnWriter, P: Display> Display for ColumnPrefixed<W, P> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		let mut isfirst = true;
@@ -2137,6 +2139,8 @@ pub(crate) mod lua_api {
 use mlua::{Lua,ExternalResult,Value};
 use rusqlite::{ToSql, types::ToSqlOutput};
 
+use std::collections::HashMap;
+
 use crate::prelude::*;
 use crate::resources::{AllResources,all_schemas,RESOURCES};
 use crate::schemas::Schema;
@@ -2348,7 +2352,8 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		Self::expect_arguments(&args, 2)?;
 		let table = match args.pop_front().unwrap() {
 			Value::Table(t) => t,
-			_ => fail!(BadArgumentType { expected: "table" }),
+			other => fail!(BadArgumentType { position: 2, expected: "table",
+				found: format!("{other:?}")}),
 		};
 		let Self(db, stmt, schema) = self;
 		// We could use two strategies here:
@@ -2387,13 +2392,37 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		Ok(Value::Table(table))
 	}
 }
-struct UpdateRow<'a>(Vec<Statement<'a>>, &'a Schema);
+struct UpdateRow<'a>(HashMap<&'a str, Statement<'a>>, &'a Schema);
 impl<'a> Callback<'a> for UpdateRow<'a> {
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		todo!()
+		let mut h = HashMap::<&str, Statement<'_>>::
+			with_capacity(schema.fields.len());
+		let primary = schema.primary();
+		// TODO: use a hash map instead?
+		for (i, field) in schema.fields.iter().enumerate() {
+			if i == schema.primary_index { continue }
+			h.insert(field.fname,
+				db.prepare(&format!(
+				r#"update "{schema}" set {field}=?2 where {primary}=?1"#))?);
+		}
+		Ok(Self(h, schema))
 	}
-	fn execute<'lua>(&mut self, lua: &'lua Lua, args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
-		todo!()
+	fn execute<'lua>(&mut self, _lua: &'lua Lua, mut args: mlua::MultiValue<'lua>)->Result<Value<'lua>> {
+		Self::expect_arguments(&args, 3)?;
+		let arg0 = args.pop_front().unwrap(); // take ownership of first argument
+		let fieldname = match arg0 {
+			Value::String(ref s) => s.to_str()?,
+			other => fail!(BadArgumentType { position: 2, expected: "string",
+				found: format!("{other:?}")}),
+		};
+		let stmt = match self.0.get_mut(fieldname) {
+			Some(s) => s,
+			_ => fail!(UnknownField { field: fieldname.into(), }),
+		};
+		// Return the number of changed rows:
+		let n = stmt.execute((LuaValueRef(args.get(0).unwrap()),
+			LuaValueRef(args.get(1).unwrap())))?;
+		Ok(Value::Integer(n as i64))
 	}
 }
 
@@ -2412,7 +2441,7 @@ impl<'a, T: Callback<'a>> AllResources<T> {
 		let table = pop_arg_as::<String>(&mut args, lua)
 			.context("first argument must be a string")?;
 		self.by_name_mut(&table)?.execute(lua, args)
-			.context("converting from SQL to Lua")
+			.with_context(|| format!(r#"executing callback on table "{table}""#))
 	}
 	/// The wrapper installing the callback function in a table.
 	fn install_callback<'scope>(&'scope mut self, scope: &mlua::Scope<'_,'scope>,
@@ -2447,6 +2476,7 @@ struct LuaStatements<'a> {
 	list_keys: AllResources<ListKeys<'a>>,
 	select_row: AllResources<SelectRow<'a>>,
 	insert_row: AllResources<InsertRow<'a>>,
+	update_row: AllResources<InsertRow<'a>>,
 	// Prepared statements for `simod.select`.
 }
 impl<'a> LuaStatements<'a> {
@@ -2455,26 +2485,12 @@ impl<'a> LuaStatements<'a> {
 			list_keys: AllResources::<_>::prepare(db, schemas)?,
 			select_row: AllResources::<_>::prepare(db, schemas)?,
 			insert_row: AllResources::<_>::prepare(db, schemas)?,
+			update_row: AllResources::<_>::prepare(db, schemas)?,
 // 			schemas,
 		})
 	}
 }
 
-/// Implementation of `simod.update`.
-///
-/// Updates a single field in one of the resource tables.
-/// The type of value is not checked (TODO: do this either here or as a SQL
-/// constraint when creating the tables?).
-fn update(db: &impl DbInterface, (table, key, field, value): (String, String, String, Value<'_>))->Result<()> {
-	scope_trace!("callback 'simod.update' invoked with: '{}' '{}' '{} '{:?}'",
-		table, key, field, LuaValueRef(&value));
-	let s = format!(
-		r#"update "{table}" set "{field}"=? where "{primary}"='{key}'"#,
-		primary = RESOURCES.table_schema(&table)?.primary());
-	trace!("executing sql: {s} {:?}", LuaValueRef(&value));
-	db.execute(&s, (LuaToSql(value),))?;
-	Ok(())
-}
 /// Implementation of `simod.delete`.
 fn delete(db: &impl DbInterface, (table, key): (String, Value<'_>))->Result<()> {
 	let schema = RESOURCES.table_schema(&table)?;
@@ -2536,8 +2552,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		statements.list_keys.install_callback(scope, &simod, "list")?;
 		statements.select_row.install_callback(scope, &simod, "select")?;
 		statements.insert_row.install_callback(scope, &simod, "insert")?;
-		simod.set("update", scope.create_function(
-			|_lua, args| update(&db, args).to_lua_err())?)?;
+		statements.update_row.install_callback(scope, &simod, "update")?;
 // 		simod.set("insert", scope.create_function(
 // 			|_lua, args| insert(&db, args).to_lua_err())?)?;
 		simod.set("delete", scope.create_function(
