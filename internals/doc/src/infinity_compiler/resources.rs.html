@@ -445,6 +445,8 @@
 <a href="#445" id="445">445</a>
 <a href="#446" id="446">446</a>
 <a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Full definition of all structures representing game resources.
 //!
 //! This crate makes heavy use of the `Pack` and `Resource0` derive macros to
@@ -472,7 +474,7 @@
 //! namely, we want these to have a persistent identifier
 //! for joins with the edit tables.
 </span><span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
-<span class="kw">use </span>macros::{produce_resource_list,all_resources,Resource};
+<span class="kw">use </span>macros::{all_resources,Resource};
 <span class="kw">use </span><span class="kw">crate</span>::pack::{Pack,NotPacked};
 <span class="kw">use </span><span class="kw">crate</span>::sql_rows::{SqlRow,NoSql,TypedStatement,AsParams,Rowid};
 <span class="kw">use </span><span class="kw">crate</span>::schemas::{Schema};
@@ -500,11 +502,14 @@
 
 <span class="doccomment">/// When provided with a file extension, return the corresponding Restype.
 </span><span class="kw">pub fn </span>restype_from_extension(ext: <span class="kw-2">&amp;</span>str)-&gt;Restype {
-	<span class="kw">match </span>RESOURCES.map(|schema, <span class="kw">_</span>| {
+	<span class="kw">match </span>all_schemas().map(|schema| {
+		<span class="kw">match </span>schema.resource {
 		<span class="comment">// small trick: when we find the correct extension, we break the
 		// iteration by returning an `Err` variant.
-		</span><span class="kw">if </span>ext.eq_ignore_ascii_case(schema.extension) { <span class="prelude-val">Err</span>(schema.restype) }
-		<span class="kw">else </span>{ <span class="prelude-val">Ok</span>(()) }
+			</span><span class="kw">crate</span>::schemas::SchemaResource::Top { extension, restype }
+			<span class="kw">if </span>ext.eq_ignore_ascii_case (extension) =&gt; <span class="prelude-val">Err</span>(restype),
+			<span class="kw">_ </span>=&gt; <span class="prelude-val">Ok</span>(())
+		}
 	}) {
 		<span class="prelude-val">Err</span>(r) =&gt; r,
 		<span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; Restype { value: <span class="number">0 </span>}
@@ -849,8 +854,7 @@ Attack type: {atype}&quot;</span>,
 //  - the `AllResource&lt;T&gt;` type constructor,
 //  - its implementation of `map()`,
 //  - and the constant `RESOURCES`, which holds the parent resources.
-</span><span class="macro">produce_resource_list!</span>();
-<span class="macro">all_resources!</span>();
+</span><span class="macro">all_resources!</span>();
 
 <span class="kw">impl </span>AllResources&lt;Schema&gt; {
 	<span class="doccomment">/// Builds the SQL statement creating the `new_strings` view.
