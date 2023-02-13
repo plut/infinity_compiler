@@ -18,6 +18,7 @@ subresources have: sorting, parent key, parent resource
   - move all_schemas() to a field of GameDB (etc.)
   - rename as Resource::all()
   - in `insert_sql`, replace n1, n2 by a lazy_format
+  - fix resref computation for SqlRow
 
 # Override
  - [x] improve backup procedure: a full backup as part of init

@@ -2124,6 +2124,7 @@ impl<'lua> Value<'lua> {
 	/// and strings need copying from Lua to ensure UTF-8 validity.
 	fn to_sql_owned(&self)->rusqlite::Result<ToSqlOutput<'static>> {
 		use rusqlite::types::{ToSqlOutput::Owned,Value as SqlValue};
+		let x =
 		match self {
 		Value::Nil => Ok(Owned(SqlValue::Null)),
 		Value::Boolean(b) => Ok(Owned((*b).into())),
@@ -2134,7 +2135,9 @@ impl<'lua> Value<'lua> {
 			Ok(Owned(s.to_str().unwrap().to_owned().into())),
 		// TODO: use proper error
 		e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
-		}
+		};
+		println!("to_sql_owned: {x:?}");
+		x
 	}
 }
 /// A newtype around [`&mlua::Value`], allowing us to implement various
@@ -2232,9 +2235,15 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 	/// this condition.
 	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>> {
 		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
+		println!("list: got {} arguments", args.len());
+		for a in args.iter() {
+			println!("arg: {:?}", LuaValueRef(a));
+		}
 		let mut rows = self.0.query(args.as_params())?;
 		let ret = lua.create_table()?;
 		while let Some(row) = rows.next()? {
+			use crate::sql_rows::RowExt;
+			row.dump();
 			let v_sql = row.get_ref(0)?;
 			let v_lua = sql_to_lua(v_sql, lua)?;
 			ret.push(v_lua)?;
@@ -2432,20 +2441,20 @@ struct LuaStatements<'a> {
 // 	schemas: AllResources<Schema>,
 	/// Prepared statements for `simod.list`.
 	list_keys: AllResources<ListKeys<'a>>,
-	select_row: AllResources<SelectRow<'a>>,
-	insert_row: AllResources<InsertRow<'a>>,
-	update_row: AllResources<InsertRow<'a>>,
-	delete_row: AllResources<InsertRow<'a>>,
+// 	select_row: AllResources<SelectRow<'a>>,
+// 	insert_row: AllResources<InsertRow<'a>>,
+// 	update_row: AllResources<InsertRow<'a>>,
+// 	delete_row: AllResources<InsertRow<'a>>,
 }
 impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface, schemas: &'a AllResources<Schema>)->Result<Self> {
 		Ok(Self {
-			list_keys: AllResources::<_>::prepare(db, schemas)?,
-			select_row: AllResources::<_>::prepare(db, schemas)?,
-			insert_row: AllResources::<_>::prepare(db, schemas)?,
-			update_row: AllResources::<_>::prepare(db, schemas)?,
-			delete_row: AllResources::<_>::prepare(db, schemas)?,
 // 			schemas,
+			list_keys: AllResources::<_>::prepare(db, schemas)?,
+// 			select_row: AllResources::<_>::prepare(db, schemas)?,
+// 			insert_row: AllResources::<_>::prepare(db, schemas)?,
+// 			update_row: AllResources::<_>::prepare(db, schemas)?,
+// 			delete_row: AllResources::<_>::prepare(db, schemas)?,
 		})
 	}
 }
@@ -2501,10 +2510,10 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 			Ok::<_,mlua::Error>(())
 		})?)?;
 		statements.list_keys.install_callback(scope, &simod, "list")?;
-		statements.select_row.install_callback(scope, &simod, "select")?;
-		statements.insert_row.install_callback(scope, &simod, "insert")?;
-		statements.update_row.install_callback(scope, &simod, "update")?;
-		statements.delete_row.install_callback(scope, &simod, "delete")?;
+// 		statements.select_row.install_callback(scope, &simod, "select")?;
+// 		statements.insert_row.install_callback(scope, &simod, "insert")?;
+// 		statements.update_row.install_callback(scope, &simod, "update")?;
+// 		statements.delete_row.install_callback(scope, &simod, "delete")?;
 		lua.globals().set("simod", simod)?;
 
 		info!("loading file {lua_file:?}");
@@ -2693,8 +2702,10 @@ fn main() -> Result<()> {
 			},
 			Some(s) => {
 				let schema = all_schemas().by_name(&s)?;
-				for crate::schemas::Field { fname, ftype, .. } in &schema.fields {
-					println!("{fname:30?}{}", ftype.to_lua());
+				println!("primary = {}", schema.primary_index);
+				println!("header = {:?}", schema.resource);
+				for (i, f) in schema.fields.iter().enumerate() {
+					println!("{i:2} {:<20} {}", f.fname, f.ftype.to_lua());
 				}
 			},
 			},

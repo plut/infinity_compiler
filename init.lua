@@ -484,8 +484,13 @@ end
 --««1 Test code
 function test_core()
 	local v = simod.list("items")
-	print(v[1], v[2], v[3])
+	print(v[1], v[2], v[3], v[4])
+-- 	local obj = simod.select("items", "sw1h34")
+-- 	dump(obj)
+	local v2 = simod.list("item_abilities", "sw1h34")
+	dump(v2)
 end
+test_core()
 function test_objects()
 	-- show schema
 	for k, v in pairs(simod.schema) do
