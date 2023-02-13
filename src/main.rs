@@ -2385,7 +2385,7 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 /// a small mod, this should save time for large mods on average,
 /// and using prepared statements is safer anyway.
 /// (Besides, the memory storage req for a prepared statement is small).
-struct UpdateRow<'a>(HashMap<&'a str, Statement<'a>>, &'a Schema);
+struct UpdateRow<'a>(HashMap<&'a str, Statement<'a>>);
 impl<'a> Callback<'a> for UpdateRow<'a> {
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let mut h = HashMap::<&str, Statement<'_>>::
@@ -2396,10 +2396,10 @@ impl<'a> Callback<'a> for UpdateRow<'a> {
 			h.insert(field.fname, db.prepare(&format!(
 				r#"update "{schema}" set {field}=?2 where {primary}=?1"#))?);
 		}
-		Ok(Self(h, schema))
+		Ok(Self(h))
 	}
 	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
-		Self::expect_arguments(&args, 3)?;
+		Self::expect_arguments(&args, 4)?;
 		let arg0 = args.pop_front().unwrap(); // take ownership of first argument
 		let fieldname = match arg0 {
 			Value::String(ref s) => s.to_str()?,
@@ -2413,6 +2413,20 @@ impl<'a> Callback<'a> for UpdateRow<'a> {
 		// Return the number of changed rows:
 		let n = stmt.execute((LuaValueRef(args.get(0).unwrap()),
 			LuaValueRef(args.get(1).unwrap())))?;
+		Ok(n.to_lua(lua)?)
+	}
+}
+/// Implementation of `simod.delete`.
+struct DeleteRow<'a>(Statement<'a>);
+impl<'a> Callback<'a> for DeleteRow<'a> {
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+		let primary = schema.primary();
+		db.prepare(&format!(r#"delete from "{schema}" where "{primary}"=?"#))
+			.map(Self)
+	}
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>> {
+		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
+		let n = self.0.execute(args.as_params())?;
 		Ok(n.to_lua(lua)?)
 	}
 }
@@ -2468,7 +2482,7 @@ struct LuaStatements<'a> {
 	select_row: AllResources<SelectRow<'a>>,
 	insert_row: AllResources<InsertRow<'a>>,
 	update_row: AllResources<InsertRow<'a>>,
-	// Prepared statements for `simod.select`.
+	delete_row: AllResources<InsertRow<'a>>,
 }
 impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface, schemas: &'a AllResources<Schema>)->Result<Self> {
@@ -2477,19 +2491,12 @@ impl<'a> LuaStatements<'a> {
 			select_row: AllResources::<_>::prepare(db, schemas)?,
 			insert_row: AllResources::<_>::prepare(db, schemas)?,
 			update_row: AllResources::<_>::prepare(db, schemas)?,
+			delete_row: AllResources::<_>::prepare(db, schemas)?,
 // 			schemas,
 		})
 	}
 }
 
-/// Implementation of `simod.delete`.
-fn delete(db: &impl DbInterface, (table, key): (String, Value<'_>))->Result<()> {
-	let schema = RESOURCES.table_schema(&table)?;
-	let primary = schema.primary();
-	db.execute(format!(r#"delete from "{schema}" where "{primary}"=?"#),
-		(LuaToSql(key),))?;
-	Ok(())
-}
 /// Runs the lua script for adding a mod component to the database.
 ///
 /// We provide the lua side with a minimal low-level interface:
@@ -2544,10 +2551,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		statements.select_row.install_callback(scope, &simod, "select")?;
 		statements.insert_row.install_callback(scope, &simod, "insert")?;
 		statements.update_row.install_callback(scope, &simod, "update")?;
-// 		simod.set("insert", scope.create_function(
-// 			|_lua, args| insert(&db, args).to_lua_err())?)?;
-		simod.set("delete", scope.create_function(
-			|_lua, args| delete(&db, args).to_lua_err())?)?;
+		statements.delete_row.install_callback(scope, &simod, "delete")?;
 		lua.globals().set("simod", simod)?;
 
 		info!("loading file {lua_file:?}");
