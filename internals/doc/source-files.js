@@ -1,4 +1,4 @@
 var sourcesIndex = JSON.parse('{\
-"infinity_compiler":["",[],["main.rs","resources.rs"]]\
+"infinity_compiler":["",[],["main.rs","restypes.rs"]]\
 }');
 createSourceSidebar();
