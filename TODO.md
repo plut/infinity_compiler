@@ -1,3 +1,31 @@
+# SqlRows, resources and schemas
+
+GameStrings has:
+  insert with strref
+  read all (with strref)
+
+Item has:
+  insert with resref
+  read all (with resref)
+
+ItemAbility:
+  insert with parent + position
+  read (given parent) -> id; sorted by position
+  keyin = (parent, position)
+  keyout = (id)
+
+is resref part of item?
+  pros: slightly simplifies sqlrow api (no extra `Key` type)
+  cons: we don't want to manually insert those fields in item
+
+ => **resref is not part of item**
+ (nor is strref part of string)
+
+top resources implement SqlRow with ctx = resref
+sub resoruces implement SqlRow with ctx = 
+ 
+  
+
 # Auto sub tables
 
 A struture with SqlRow has associated

@@ -24,17 +24,18 @@
 //! The `integer primary key` is needed even for subresources:
 //! namely, we want these to have a persistent identifier
 //! for joins with the edit tables.
+#![feature(trace_macros)]
 use crate::prelude::*;
-use macros::{all_resources,Resource};
+use macros::{all_resources,Resource0};
 use crate::pack::{Pack,NotPacked};
-use crate::sql_rows::{SqlRow,NoSql,AsParams,Rowid};
+use crate::sql_rows::{SqlRow,SqlRow0,NoSql,Rowid};
 use crate::database::{DbTypeCheck,DbInterface};
-use crate::resources::{Resource,ToplevelResourceData,ToplevelResource};
+use crate::resources::{Resource0,ToplevelResourceData,ToplevelResource};
 
 /// A game item, corresponding to a .itm file.
-#[derive(Debug,Pack,SqlRow,Resource)]
+#[derive(Debug,Pack,SqlRow0,Resource0)]
 #[topresource("items", "itm", 0x03ed)]
-pub struct Item {
+pub struct Item0 {
 #[header("ITM V1  ")]
 	unidentified_name: Strref,
 	name: Strref,
@@ -75,11 +76,11 @@ pub struct Item {
 	itemref: NotPacked::<Resref>,
 }
 /// An ability inside a .itm file.
-#[derive(Debug,Pack,SqlRow,Resource)]
+#[derive(Debug,Pack,SqlRow0,Resource0)]
 #[subresource(item_abilities,itemref,items)]
 #[allow(missing_copy_implementations)]
 // #[resource(item_abilities)]
-pub struct ItemAbility {
+pub struct ItemAbility0 {
 	attack_type: u8, // AttackType,
 	must_identify: u8,
 	location: u8,
@@ -117,11 +118,11 @@ pub struct ItemAbility {
 	id: Rowid,
 }
 /// An effect inside a .itm file (either global or in an ability).
-#[derive(Debug,Pack,SqlRow,Resource)]
+#[derive(Debug,Pack,SqlRow0,Resource0)]
 #[subresource(item_effects,itemref,items)]
 #[allow(missing_copy_implementations)]
 // #[resource(item_effects)]
-pub struct ItemEffect {
+pub struct ItemEffect0 {
 	opcode: u16, //opcode,
 	target: u8, // EffectTarget,
 	power: u8,
@@ -144,51 +145,157 @@ pub struct ItemEffect {
 	index: NotPacked::<u16>,
 	id: Rowid,
 }
+/// An effect inside a .itm file (either global or in an ability).
+#[derive(Debug,Pack,SqlRow)]
+// #[subresource(item_effects,itemref,items)]
+#[allow(missing_copy_implementations)]
+// #[resource(item_effects)]
+pub struct ItemEffect {
+	opcode: u16, //opcode,
+	target: u8, // EffectTarget,
+	power: u8,
+	parameter1: u32,
+	parameter2: u32,
+	timing_mode: u8, // TimingMode,
+	dispel_mode: u8, // DispelMode,
+	duration: u32,
+	proba1: u8,
+	proba2: u8,
+	resource: Resref,
+	dice_thrown: i32,
+	dice_sides: i32,
+	saving_throw_type: u32,
+	saving_throw_bonus: i32,
+	stacking_id: u32,
+}
+/// An ability inside a .itm file.
+#[derive(Debug,Pack,SqlRow)]
+#[allow(missing_copy_implementations)]
+// #[resource(item_abilities)]
+pub struct ItemAbility {
+	attack_type: u8, // AttackType,
+	must_identify: u8,
+	location: u8,
+	alternative_dice_sides: u8,
+	use_icon: Resref,
+	target_type: u8, // TargetType,
+	target_count: u8,
+	range: u16,
+	launcher_required: u8,
+	alternative_dice_thrown: u8,
+	speed_factor: u8,
+	alternative_damage_bonus: u8,
+	thac0_bonus: u16,
+	dice_sides: u8,
+	primary_type: u8,
+	dice_thrown: u8,
+	secondary_type: u8,
+	damage_bonus: u16,
+	damage_type: u16, // DamageType,
+#[sql(false)]
+	effect_count: u16,
+#[sql(false)]
+	effect_index: u16,
+	max_charges: u16,
+	depletion: u16,
+	flags: u32,
+	projectile_animation: u16,
+	overhand_chance: u16,
+	backhand_chance: u16,
+	thrust_chance: u16,
+	is_arrow: u16,
+	is_bolt: u16,
+	is_bullet: u16,
+// 	itemref: NotPacked::<Resref>,
+// 	index: NotPacked::<u16>,
+// 	id: Rowid,
+}
+/// A game item, corresponding to a .itm file.
+#[derive(Debug,Pack,SqlRow)]
+// #[topresource("items", "itm", 0x03ed)]
+pub struct Item {
+#[header("ITM V1  ")]
+	unidentified_name: Strref,
+	name: Strref,
+	replacement: Resref,
+	flags: u32, // ItemFlags,
+	itemtype: u16, // ItemType,
+	usability: u32, // UsabilityFlags,
+	animation: u16, // StaticString<2>,
+	min_level: u16,
+	min_strength: u16,
+	min_strengthbonus: u8,
+	kit1: u8,
+	min_intelligence: u8,
+	kit2: u8,
+	min_dexterity: u8,
+	kit3: u8,
+	min_wisdom: u8,
+	kit4: u8,
+	min_constitution: u8,
+	proficiency: u8, // WProf,
+	min_charisma: u16,
+	price: u32,
+	stack_amount: u16,
+	inventory_icon: Resref,
+	lore: u16,
+	ground_icon: Resref,
+	weight: i32,
+	unidentified_description: Strref,
+	description: Strref,
+	description_icon: Resref,
+	enchantment: i32,
+#[sql(false)] abilities_offset: u32,
+#[sql(false)] abilities_count: u16,
+#[sql(false)] effect_offset: u32,
+#[sql(false)] effect_index: u16,
+#[sql(false)] equip_effect_count: u16,
+	abilities: Vec::<ItemAbility>,
+	global_effects: Vec::<ItemEffect>,
+// #[column("primary key")]
+// 	itemref: NotPacked::<Resref>,
+}
 
-impl ToplevelResource for Item {
-	type Subresources<'a> = (&'a mut [ItemAbility], &'a mut[(ItemEffect,usize)]);
+impl ToplevelResource for Item0 {
+	type Subresources<'a> = (&'a mut [ItemAbility0], &'a mut[(ItemEffect0,usize)]);
 	/// load an item from cursor
-	fn load(tables: &mut AllResources<Statement<'_>>, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
-		let mut item = Item::unpack(&mut cursor)
-			.context("cannot unpack Item0 main struct")?;
-		item.itemref = resref.into();
-		tables.items.execute(item.as_params())
+	fn load(tables: &mut AllTables<Statement<'_>>, db: &impl DbInterface, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
+		let item = Item::unpack(&mut cursor)
+			.context("cannot unpack Item main struct")?;
+		let n = item.bind_execute1(&mut tables.items, &resref)
 			.context("inserting into 'items'")?;
-		cursor.seek(SeekFrom::Start(item.abilities_offset.unwrap() as u64))?;
+		if n == 0 {
+			warn!("skipped inserting item {resref}");
+			return Ok(())
+		}
+		cursor.seek(SeekFrom::Start(item.abilities_offset as u64))?;
 
-		let mut ab_n = Vec::<u16>::
-			with_capacity(item.abilities_count.unwrap() as usize);
-		for ab_index in 1..1+item.abilities_count.unwrap() {
-			let mut ab = ItemAbility::unpack(&mut cursor)
+		let mut ab_info = Vec::<(u16,i64)>::
+			with_capacity(item.abilities_count as usize);
+		for ab_index in 1..1+item.abilities_count {
+			let ability = ItemAbility::unpack(&mut cursor)
 				.with_context(|| format!("cannot unpack item ability {}/{}",
 					ab_index, item.abilities_count))?;
-			ab.itemref = resref.into();
-			ab.index = ab_index.into();
-			tables.item_abilities.execute(ab.as_params())
+
+			ability.bind_execute2(&mut tables.item_abilities, &resref, &ab_index)
 				.context("inserting into 'item_abilities'")?;
-			ab_n.push(ab.effect_count.unwrap());
+			ab_info.push((ability.effect_count, db.last_insert_rowid()));
 		}
-		trace!("inserting item {resref}; abilities have {ab_n:?} effects");
-		cursor.seek(SeekFrom::Start(item.effect_offset.unwrap() as u64))?;
-		for j in 1..1+item.equip_effect_count.unwrap() { // on-equip effects
-			let mut eff = ItemEffect::unpack(&mut cursor)
+		trace!("inserting item {resref}; abilities have {ab_info:?} effects");
+		cursor.seek(SeekFrom::Start(item.effect_offset as u64))?;
+		for j in 1..1+item.equip_effect_count { // on-equip effects
+			let effect = ItemEffect::unpack(&mut cursor)
 				.with_context(|| format!("cannot unpack global item effect {}/{}",
-					j+1, item.equip_effect_count.unwrap()))?;
-			eff.itemref = resref.into();
-			eff.ability = 0.into();
-			eff.index = j.into();
-			tables.item_effects.execute(eff.as_params())
+					j+1, item.equip_effect_count))?;
+			effect.bind_execute2(&mut tables.item_effects, &resref, &j)
 				.context("inserting into 'item_effects'")?;
 		}
-		for (i, n) in ab_n.iter().enumerate() {
+		for (n, ab_id) in ab_info.iter() {
 			for j in 1..(1+*n) {
-				let mut eff = ItemEffect::unpack(&mut cursor)
-					.with_context(|| format!("cannot unpack item effect {}/{} for ability {}", j+1, n, i+1))?;
-				eff.itemref = resref.into();
-				eff.ability = (1+i as i64).into();
-				eff.index = j.into();
-				tables.item_effects.execute(eff.as_params())
-					.context("inserting into 'item_effects'")?;
+				let effect = ItemEffect::unpack(&mut cursor)
+					.with_context(|| format!("cannot unpack item effect {}/{} for ability {}", j+1, n, ab_id))?;
+				effect.bind_execute2(&mut tables.item_ability_effects, &ab_id, &j)
+					.context("inserting into 'item_ability_effects'")?;
 			}
 		}
 	Ok(())
@@ -232,9 +339,9 @@ impl ToplevelResource for Item {
 	fn for_each<F,C>(db: &impl DbInterface, condition: C, f:F)->Result<i32>
 		where F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>,
 			C: Display {
-		let mut sel_item = Item::select_typed(db, &condition)?;
-		let mut sel_item_ab = ItemAbility::select_typed(db, r#"where "key"=?"#)?;
-		let mut sel_item_eff = ItemEffect::select_typed(db, r#"where "key"=?"#)?;
+		let mut sel_item = Item0::select_typed(db, &condition)?;
+		let mut sel_item_ab = ItemAbility0::select_typed(db, r#"where "key"=?"#)?;
+		let mut sel_item_eff = ItemEffect0::select_typed(db, r#"where "key"=?"#)?;
 		let mut n_items = 0;
 		debug!("processing items under condition: {condition}");
 		for x in sel_item.iter(())? {
@@ -244,8 +351,8 @@ impl ToplevelResource for Item {
 			// we store item effects & abilities in two vectors:
 			//  - abilities = (ability, abref)
 			//  - effect = (effect, ability index)
-			let mut abilities = Vec::<ItemAbility>::new();
-			let mut effects = Vec::<(ItemEffect, usize)>::new();
+			let mut abilities = Vec::<ItemAbility0>::new();
+			let mut effects = Vec::<(ItemEffect0, usize)>::new();
 			for x in sel_item_ab.iter((&item.itemref,))? {
 				if x.is_db_malformed() { continue }
 				abilities.push(x?);
@@ -296,3 +403,42 @@ Attack type: {atype}",
 //  - and the constant `RESOURCES`, which holds the parent resources.
 all_resources!();
 
+macro_rules! list_tables {
+	($($tablename:ident: $ty:ty $(,$more:ident)*);*$(;)?) => {
+		#[derive(Debug)]
+		pub struct AllTables<X: Debug> {
+			$(pub $tablename: X,)*
+		}
+		impl<X: Debug> AllTables<X> {
+			pub fn map<Y,E,F>(&self, f: F)->Result<AllTables<Y>,E>
+			where Y: Debug, F: Fn(&X)->Result<Y,E> {
+				Ok(AllTables::<Y> {
+					$($tablename: f(&self.$tablename)?,)*
+				})
+			}
+		}
+		use crate::schemas::Schema;
+		pub const SCHEMAS: AllTables<Schema> = AllTables {
+			$($tablename: Schema {
+				name: stringify!($tablename),
+				parent: table_parent!($($more),*),
+				fields: <$ty as crate::sql_rows::SqlRow>::FIELDS,
+			}),*
+		};
+	}
+}
+macro_rules! table_parent {
+	($parent:ident) => { table_parent!($parent, $parent) };
+	($parent:ident,$root:ident) => {
+		Some((stringify!($parent), stringify!($root)))
+	};
+	() => { None }
+}
+// trace_macros!(true);
+list_tables! {
+	items: Item;
+	item_abilities: ItemAbility, items;
+	item_ability_effects: ItemEffect, item_abilities, items;
+	item_effects: ItemEffect, items;
+}
+// trace_macros!(false);

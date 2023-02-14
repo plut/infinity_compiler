@@ -12,6 +12,7 @@
 )]
 use proc_macro::TokenStream;
 use proc_macro2 as pm2;
+use pm2::Span;
 type TS = pm2::TokenStream;
 use regex::Regex;
 use quote::{quote, ToTokens};
@@ -20,15 +21,16 @@ use syn::{Data::Struct, DataStruct};
 use syn::{Expr, ExprLit, ExprPath};
 use syn::{Field, Fields::Named, Fields::Unnamed};
 use syn::{punctuated::Punctuated, token::Comma};
+use std::cell::RefCell;
 use extend::ext;
 
-#[derive(Debug)] struct ResourceDef(String, String);
+#[derive(Debug)] struct ResourceDef0(String, String);
 thread_local! {
-	static RESOURCES: std::cell::RefCell<Vec<ResourceDef>> =
-		std::cell::RefCell::new(Vec::<ResourceDef>::new());
+	static RESOURCES0: RefCell<Vec<ResourceDef0>> =
+		RefCell::new(Vec::<ResourceDef0>::new());
 }
-fn push_resource1(rdef: ResourceDef) {
-	RESOURCES.with(|v| { v.borrow_mut().push(rdef); })
+fn push_resource1(rdef: ResourceDef0) {
+	RESOURCES0.with(|v| { v.borrow_mut().push(rdef); })
 }
 // use std::any::type_name;
 // fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
@@ -42,6 +44,26 @@ fn push_resource1(rdef: ResourceDef) {
 #[ext]
 impl<T: quote::ToTokens> T {
 	fn toks_string(&self)->String { self.to_token_stream().to_string() }
+}
+
+fn vec_eltype(ty: &syn::Type)->Option<&syn::Type> {
+	let segments = match ty {
+		syn::Type::Path(syn::TypePath { path: syn::Path { segments, .. }, .. })
+			=> segments,
+		_ => return None
+	};
+	let syn::PathSegment { ident, arguments } = segments.first()?;
+	if &ident.to_string() != "Vec" {
+		return None
+	}
+	let args: &syn::punctuated::Punctuated<_,_> = match arguments {
+		syn::PathArguments::AngleBracketed(ref g) => &g.args,
+		_ => return None
+	};
+	match args.first()? {
+		syn::GenericArgument::Type(ty) => Some(ty),
+		_ => return None
+	}
 }
 
 #[derive(Debug)]
@@ -228,7 +250,7 @@ pub fn derive_pack(tokens: TokenStream) -> TokenStream {
 	}
 
 	for (i, FieldRef { name, attrs, ty }) in fields.iter().enumerate() {
-		let tmp = syn::Ident::new(&format!("tmp{i}"), pm2::Span::call_site());
+		let tmp = syn::Ident::new(&format!("tmp{i}"), Span::call_site());
 		for (name, mut args) in attrs.iter().map(parse_attr) {
 			match name.as_str() {
 				"header" => {
@@ -358,22 +380,23 @@ pub fn derive_newtype(tokens: TokenStream)->TokenStream {
 
 /// Information attached to the `column` attribute.
 #[derive(Default,Debug)]
-struct ColumnInfo {
-	extra: String,
+struct FieldInfo {
+	create: String,
+	/// is this field hidden from sql?
+	hidden: bool,
 }
-impl ColumnInfo {
+impl FieldInfo {
 	fn update(&mut self, parser: &mut AttrParser) {
 		match parser.get::<syn::Expr>() {
 			None => (),
-			Some(AttrArg::Str(s)) => self.extra = s,
-// 			Some(AttrArg::Ident(i)) if i.as_str() == "false" =>
-// 				field_info.no_column = true,
+			Some(AttrArg::Str(s)) => self.create = s,
+			Some(AttrArg::Ident(i)) if i.as_str() == "false" => self.hidden = true,
 			Some(a) => panic!("unknown argument for 'column' attribute: {a:?}"),
 		}
 	}
 }
-#[proc_macro_derive(SqlRow, attributes(column))]
-pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
+#[proc_macro_derive(SqlRow0, attributes(column))]
+pub fn derive_sql_row0(tokens: TokenStream)->TokenStream {
 	let mut get_fields = TS::new();
 	let mut from_row_at_v = Vec::<TS>::new();
 	let mut fieldtype = TS::new();
@@ -387,7 +410,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	let fields = Fields::from(data);
 	for FieldRef { name, attrs, ty, .. } in fields.iter() {
 		// Read attributes for this field
-		let mut field_info = ColumnInfo::default();
+		let mut field_info = FieldInfo::default();
 		for (name, mut args) in attrs.iter().map(parse_attr) {
 			match name.as_str() {
 				"column" => field_info.update(&mut args),
@@ -412,11 +435,11 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 			}
 		}.to_tokens(&mut fieldtype);
 		// this statically computes the unique index for the primary key:
-		if field_info.extra.contains("primary")
+		if field_info.create.contains("primary")
 			|| ty.toks_string().contains("Rowid") {
 				quote!{ .merge(Some(#offset)) }.to_tokens(&mut primary_index);
 		}
-		let create_text = field_info.extra;
+		let create_text = field_info.create;
 		quote!{
 			if i < #offset + #ty::WIDTH {
 				return #create_text
@@ -429,7 +452,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	}
 	let from_row_at = fields.build_from(&from_row_at_v);
 	let ident_str = ident.toks_string();
-	let code = quote! (impl crate::sql_rows::SqlRow for #ident {
+	let code = quote! (impl crate::sql_rows::SqlRow0 for #ident {
 		const WIDTH: usize = #offset;
 		fn get_field(&self, i: usize)->rusqlite::types::ToSqlOutput {
 			#get_fields
@@ -455,6 +478,61 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 			.expect(concat!("no primary index defined for table ", #ident_str))
 		}
 	});
+	code.into()
+}
+#[proc_macro_derive(SqlRow, attributes(sql))]
+pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
+	let mut fields_def = quote!{};
+	let mut bind_at = quote!{};
+	let mut collect_at = quote!{};
+	let DeriveInput{ ident, data, .. } = parse_macro_input!(tokens);
+	let fields = Fields::from(data);
+	let mut field_index = 0usize;
+	for FieldRef { name, attrs, ty, .. } in fields.iter() {
+		// Read attributes for this field
+		let mut field_info = FieldInfo::default();
+		for (name, mut args) in attrs.iter().map(parse_attr) {
+			match name.as_str() {
+				"sql" => field_info.update(&mut args),
+				_ => ()
+			} // match
+		} // for
+		let fname = name.toks_string();
+		// FIXME: this is bugware, we should parse the actual `Type` struct
+		if vec_eltype(&ty).is_some() {
+			field_info.hidden = true;
+		}
+		if field_info.hidden {
+			quote!{ #name: #ty::default(), }.to_tokens(&mut collect_at);
+			continue
+		}
+		let create = field_info.create;
+		quote!{
+			crate::schemas::Field { fname: #fname,
+				ftype: <#ty as crate::sql_rows::SqlLeaf>::FIELD_TYPE,
+				create: #create },
+		}.to_tokens(&mut fields_def);
+		quote!{
+			s.raw_bind_parameter(#field_index + offset + 1, &self.#name)?;
+		}.to_tokens(&mut bind_at);
+		quote!{
+			#name: row.get::<_,#ty>(#field_index + offset)?,
+		}.to_tokens(&mut collect_at);
+		field_index+= 1;
+	}
+	let code = quote! {
+		impl crate::sql_rows::SqlRow for #ident {
+			const FIELDS: crate::schemas::Fields =
+				crate::schemas::Fields(&[ #fields_def ]);
+			fn bind_at(&self, s: &mut Statement<'_>, offset: usize)->Result<()> {
+				#bind_at
+				Ok(())
+			}
+			fn collect_at(row: &Row<'_>, offset: usize)->Result<Self> {
+				Ok(Self { #collect_at })
+			}
+		}
+	};
 	code.into()
 }
 #[derive(Debug,PartialEq)]
@@ -495,8 +573,8 @@ impl ResourceInfo {
 ///
 /// Attributes:
 /// resource(items, "itm", 0x03ed)
-#[proc_macro_derive(Resource, attributes(topresource,subresource))]
-pub fn derive_resource(tokens: TokenStream)->TokenStream {
+#[proc_macro_derive(Resource0, attributes(topresource,subresource))]
+pub fn derive_resource0(tokens: TokenStream)->TokenStream {
 	let DeriveInput{ ident, attrs, data, .. } = parse_macro_input!(tokens);
 	let mut resource_info = ResourceInfo::default();
 	for (name, mut args) in attrs.iter().map(parse_attr) {
@@ -547,7 +625,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	_ => panic!("bad programming"),
 	} // match
 	let code = quote!{
-		impl Resource for #ident {
+		impl Resource0 for #ident {
 			fn schema()->crate::schemas::Schema0 {
 				crate::schemas::Schema0 {
 					name: #table_name,
@@ -560,7 +638,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 		#extra_code
 	};
 	// we need this after the code generation since this moves `table_name`:
-	push_resource1(ResourceDef(ident.toks_string(), table_name));
+	push_resource1(ResourceDef0(ident.toks_string(), table_name));
 	code.into()
 }
 
@@ -584,7 +662,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 ///  		_ => None
 ///  		}
 ///  	}
-///  	pub fn<R: Resource> by_resource(&self)->T { R::find(self) }
+///  	pub fn<R: Resource0> by_resource(&self)->T { R::find(self) }
 /// }
 /// ```
 #[proc_macro]
@@ -596,11 +674,11 @@ pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 	let mut by_name_ref = TS::new();
 	let mut by_name_mut = TS::new();
 	let mut n = 0usize;
-	RESOURCES.with(|v| {
+	RESOURCES0.with(|v| {
 		n = v.borrow().len();
-		for ResourceDef (type_name, table_name) in v.borrow().iter() {
-			let ty = syn::Ident::new(type_name, pm2::Span::call_site());
-			let field = syn::Ident::new(table_name, pm2::Span::call_site());
+		for ResourceDef0 (type_name, table_name) in v.borrow().iter() {
+			let ty = syn::Ident::new(type_name, Span::call_site());
+			let field = syn::Ident::new(table_name, Span::call_site());
 			quote!{ #[allow(missing_docs)] pub #field: T, }
 				.to_tokens(&mut fields);
 			quote!{ #field: f(&self.#field)?, }
@@ -668,7 +746,7 @@ pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
 				_ => Err(Error::UnknownTable(table_name.to_owned()).into())
 				}
 			}
-// 			pub fn by_resource<R: Resource>(&self)->&T { R::find(self) }
+// 			pub fn by_resource<R: Resource0>(&self)->&T { R::find(self) }
 		}
 		impl<T: Debug> Debug for AllResources<T> {
 			// TODO: make this a bit more explicit
