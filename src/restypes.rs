@@ -29,7 +29,7 @@ use crate::prelude::*;
 use crate::pack::{Pack,PackAll};
 use crate::gamefiles::{Restype};
 use crate::sql_rows::{SqlRow};
-use crate::database::{DbTypeCheck,DbInterface};
+use crate::database::{DbInterface};
 use crate::resources::{TopResource,SubResource};
 
 /// An effect inside a .itm file (either global or in an ability).
@@ -142,7 +142,7 @@ pub struct Item {
 impl TopResource for Item {
 	const EXTENSION: &'static str = "itm";
 	const RESTYPE: Restype = Restype(0x03ed);
-	type Subresources<'a> = (&'a mut [(ItemAbility,Vec<ItemEffect>)], &'a [ItemEffect]);
+	type Subresources = (Vec<(ItemAbility,Vec<ItemEffect>)>, Vec<ItemEffect>);
 	/// load an item from cursor
 	fn load(tables: &mut AllTables<Statement<'_>>, db: &impl DbInterface, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
 		let item = Item::unpack(&mut cursor)
@@ -185,7 +185,7 @@ impl TopResource for Item {
 		}
 	Ok(())
 	}
-	fn save(&mut self, mut file: impl Write+Seek+Debug, (abilities, effects): Self::Subresources<'_>) ->Result<()> {
+	fn save(&mut self, mut file: impl Write+Seek+Debug, (abilities, effects): &Self::Subresources) ->Result<()> {
 		trace!("saving item with {} abilities and {} effects",
 			abilities.len(), effects.len());
 		self.pack(&mut file)?;
@@ -200,43 +200,34 @@ impl TopResource for Item {
 		Ok(())
 	}
 	fn for_each_dirty<F>(db: &impl DbInterface, f: F)->Result<i32>
-		where F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()> {
+		where F: Fn(Resref, &mut Self, &Self::Subresources)->Result<()> {
 		// TODO: find something intelligent to have
 		// all of this encoded in the `AllTables` structure
 		let mut sel_item = Self::select_dirty(db, "save_items")?;
-		let mut sel_ab = ItemAbility::select_where(db, "save_item_abilities")?;
-		let mut sel_eff = ItemEffect::select_where(db, "save_item_effects")?;
-		let mut sel_ab_eff = ItemEffect::select_where(db, "save_item_ability_effects")?;
+		let mut sel_ab = Self::select_where(db, "save_item_abilities")?;
+		let mut sel_eff = Self::select_where(db, "save_item_effects")?;
+		let mut sel_ab_eff = Self::select_where(db, "save_item_ability_effects")?;
 		let mut n_items = 0;
 		for x in sel_item.iter(())? {
 			// TODO: move this inside TypedRows itself!
 			let (itemref, mut item) = x?;
 			debug!("reading item: {}", itemref);
 			let mut abilities = Vec::<(ItemAbility,Vec<ItemEffect>)>::new();
-			let mut item_effects = Vec::<ItemEffect>::new();
-			for x in sel_eff.iter((&itemref,))? {
-				let (_, effect) = x?;
-				item_effects.push(effect);
-			}
+			let item_effects = ItemEffect::read_rows_vec(&mut sel_eff, (itemref,))?;
 			item.equip_effect_count = item_effects.len() as u16;
 			let mut current_effect_idx = item.equip_effect_count;
-			for x in sel_ab.iter((&itemref,))? {
+			for x in ItemAbility::read_rows(&mut sel_ab, (itemref,))? {
 				let (ab_id, mut ability) = x?;
-				let mut ab_effects = Vec::<ItemEffect>::new();
-				for x in sel_ab_eff.iter((&ab_id,))? {
-					let (_, effect) = x?;
-					ab_effects.push(effect);
-				}
+				let ab_effects = ItemEffect::read_rows_vec(&mut sel_ab_eff, (ab_id,))?;
 				ability.effect_count = ab_effects.len() as u16;
 				ability.effect_index = current_effect_idx;
-
 				current_effect_idx+= ability.effect_count;
 				abilities.push((ability, ab_effects));
 			}
 			item.abilities_count = abilities.len() as u16;
 			item.abilities_offset = 114;
 			item.effect_offset = 114 + 56*(item.abilities_count as u32);
-			f(itemref, &mut item, (&mut abilities, &mut item_effects))?;
+			f(itemref, &mut item, &(abilities, item_effects))?;
 			n_items+= 1;
 		}
 		debug!("processed {n_items} items");

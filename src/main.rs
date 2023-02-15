@@ -542,6 +542,11 @@ pub struct TypedRows<'stmt, T:FromSqlRow> {
 	index: usize,
 	_marker: PhantomData<T>,
 }
+impl<'a, T:FromSqlRow> From<rusqlite::Rows<'a>> for TypedRows<'a,T> {
+	fn from(rows: rusqlite::Rows<'a>)->Self {
+		Self { rows, index: 0, _marker: PhantomData }
+	}
+}
 impl<T: FromSqlRow> Iterator for TypedRows<'_,T> {
 	type Item = Result<T>;
 	fn next(&mut self)->Option<Self::Item> {
@@ -549,7 +554,6 @@ impl<T: FromSqlRow> Iterator for TypedRows<'_,T> {
 			let row = match self.rows.next() {
 				Ok(Some(row)) => row,
 				Ok(None) => break,
-				Err(e)
 				Err(e) => return Some(Err(e.into()))
 			};
 			self.index+= 1;
@@ -1334,9 +1338,8 @@ end"#))?;
 
 } // mod schemas
 pub(crate) mod resources {
-use rusqlite::types::FromSql;
 use crate::prelude::*;
-use crate::sql_rows::{SqlRow,TypedStatement};
+use crate::sql_rows::{SqlRow,TypedStatement,TypedRows};
 use crate::schemas::{Schema};
 use crate::gamefiles::Restype;
 use crate::restypes::{AllTables};
@@ -1355,14 +1358,14 @@ use crate::database::{DbInserter};
 pub trait TopResource: SqlRow {
 	const EXTENSION: &'static str;
 	const RESTYPE: Restype;
-	type Subresources<'a>;
+	type Subresources;
 
 	fn load(tables: &mut AllTables<Statement<'_>>, db: &impl DbInterface, cursor: impl Read+Seek, resref: Resref) -> Result<()>;
-	fn save(&mut self, file: impl Write+Seek+Debug, subresources: Self::Subresources<'_>) ->Result<()>;
+	fn save(&mut self, file: impl Write+Seek+Debug, subresources: &Self::Subresources) ->Result<()>;
 	/// Iterates a closure over all dirty resources.
 	/// Used for saving.
 	fn for_each_dirty<F>(db: &impl DbInterface, f: F)->Result<i32>
-		where F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>;
+		where F: Fn(Resref, &mut Self, &Self::Subresources)->Result<()>;
 	// Provided functions:
 	fn load_from_handle<T: DbInterface>(db: &mut DbInserter<'_,T>, resref: Resref,
 			mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
@@ -1394,12 +1397,18 @@ pub trait TopResource: SqlRow {
 		info!("compiled {n} entries from {name} to override");
 		Ok(())
 	}
-}
-pub trait SubResource: SqlRow {
-	fn select_where(db: &impl DbInterface, name: impl Display)->Result<TypedStatement<'_,(i64,Self)>> {
-		TypedStatement::<'_,_>::new(db, format!(
+	fn select_where(db: &impl DbInterface, name: impl Display)->Result<Statement<'_>> {
+		db.prepare(format!(
 		r#"select "id", {cols} from "{name}" where "parent"=? sort by "position""#,
 		cols=Self::FIELDS))
+	}
+}
+pub trait SubResource: SqlRow {
+	fn read_rows<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(i64,Self)>> {
+		Ok(s.query(params)?.into())
+	}
+	fn read_rows_vec(s: &mut Statement<'_>, params: impl rusqlite::Params)->Result<Vec<Self>> {
+		Self::read_rows(s, params)?.map(|x| Ok(x?.1)).collect()
 	}
 }
 impl AllTables<Schema> {
@@ -1450,7 +1459,7 @@ pub(crate) mod gamestrings {
 //! This is the only mod knowing the internals of [`GameString`] struct.
 use crate::prelude::*;
 use crate::toolbox::{Progress};
-use crate::database::{self,DbInterface};
+use crate::database::{DbInterface};
 use crate::gamefiles::{GameIndex};
 use crate::pack::{Pack,PackAll};
 use crate::sql_rows::{SqlRow,FromSqlRow};
@@ -1575,7 +1584,6 @@ fn save_language(vec: &[GameString], path: &impl AsRef<Path>)->Result<()> {
 /// This also backups those files if needed (i.e. if no backup exists
 /// yet).
 pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
-	use database::DbTypeCheck;
 	let pb = Progress::new(game.languages.len(), "save translations");
 	for (lang, _) in &game.languages {
 		pb.inc(1);
@@ -1585,7 +1593,6 @@ pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 		let mut delta = 0;
 		let mut stmt = db.prepare(format!(r#"select "strref",{fields} from "strings_{lang}""#, fields = GameString::FIELDS))?;
 		for row in <(Strref,GameString)>::iter(&mut stmt, ())? {
-			if row.is_db_malformed() { continue }
 			let (strref, mut gamestring) = row?;
 	// first string in en.tlk has: (flags: u16=5, offset=0, strlen=9)
 	// second string has (flags: u16=1, offset=9, strlen=63) etc.
