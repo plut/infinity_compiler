@@ -202,6 +202,17 @@ pub trait Pack: Sized {
 		Ok(())
 	}
 }
+pub trait PackAll {
+	fn pack_all(self, f: &mut impl Write)->io::Result<()>;
+}
+impl<'a, T: Pack+'a, I: IntoIterator<Item=&'a T>> PackAll for I {
+	fn pack_all(self, mut f: &mut impl Write)->io::Result<()> {
+		for x in self {
+			x.pack(&mut f)?;
+		}
+		Ok(())
+	}
+}
 macro_rules! pack_tuple {
 	( )=> { };
 	($A:ident$(,$B:ident)*$(,)?) => {
@@ -257,7 +268,7 @@ pub(crate) mod sql_rows {
 use crate::prelude::*;
 use rusqlite::{ToSql};
 use rusqlite::types::{ToSqlOutput,FromSql,FromSqlResult,FromSqlError,ValueRef};
-use crate::schemas::{Field,ColumnWriter};
+use crate::schemas::{Field};
 use crate::pack::{Pack,NotPacked};
 
 pub trait RowExt {
@@ -294,9 +305,6 @@ impl Display for Rowid {
 }
 impl From<i64> for Rowid {
 	fn from(source: i64)->Self { Self(Some(source)) }
-}
-impl Rowid {
-	pub fn unwrap(&self)->Option<i64> { self.0 }
 }
 impl ToSql for Rowid {
 	fn to_sql(&self)->rusqlite::Result<ToSqlOutput<'_>> { self.0.to_sql() }
@@ -422,22 +430,6 @@ pub trait SqlRow0: Sized {
 	fn fields()->Vec<Field> {
 		(0..Self::WIDTH).map(Self::field).collect()
 	}
-	/// The select Statement Allfor an object.
-	///
-	/// The ID field (if present) is not selected. (This is used only for
-	/// building game files, where this field is not used anyway).
-	///
-	/// The name of the table is `{n1}{n2}`; since many tables are built in
-	/// two parts (e.g. `load_{name}`, `strings_{lang}`),
-	/// this avoids calling `format!` on the
-	/// caller side and slightly simplifies the API.
-	///
-	/// This returns a [`Result<TypedStatement>`]: it is possible to iterate
-	/// over the result and recover structures of the original type.
-	fn select_from_typed(db: &impl DbInterface, n: impl Display, cond: impl Display)->Result<TypedStatement0<'_,Self>> {
-		let t = Self::fields().cols().select_sql(n, cond);
-		Ok(TypedStatement0::new(db.prepare(&t)?))
-	}
 }
 impl<T: SqlLeaf> SqlRow0 for T {
 	const WIDTH: usize = 1;
@@ -523,15 +515,6 @@ impl<T,I> std::ops::AddAssign<I> for NoSql<T>
 ///  - `TypedRows`: the iterator producing Resource0 objects from the query.
 #[derive(Debug)]
 pub struct TypedStatement0<'s, T: SqlRow0> (Statement<'s>, PhantomData<T>);
-impl<'stmt,T: SqlRow0> TypedStatement0<'stmt, T> {
-	pub fn new(stmt: Statement<'stmt>)->Self { Self(stmt, PhantomData) }
-	/// Iterates over this statement, returning (possibly) Rust structs of
-	/// the type associated with this table.
-	pub fn iter<P: rusqlite::Params>(&mut self, params: P) ->rusqlite::Result<TypedRows0<'_,T>> {
-		let rows = self.0.query(params)?;
-		Ok(TypedRows0 { rows, _marker: PhantomData, index: 0 })
-	}
-}
 /// An enriched version of `rusqlite::Rows`.
 ///
 /// This struct retains information about the output type,
@@ -566,6 +549,19 @@ impl<T: FromSqlRow> Iterator for TypedRows<'_,T> {
 			}
 		}
 		None
+	}
+}
+pub struct TypedStatement<'s, T: FromSqlRow> (Statement<'s>, PhantomData<T>);
+impl<'stmt,T: FromSqlRow> TypedStatement<'stmt, T> {
+	pub fn new(db: &'stmt impl DbInterface, sql: impl AsRef<str>)->Result<Self> {
+		Ok(Self(db.prepare(sql)?, PhantomData))
+	}
+// 	pub fn new(stmt: Statement<'stmt>)->Self { Self(stmt, PhantomData) }
+	/// Iterates over this statement, returning (possibly) Rust structs of
+	/// the type associated with this table.
+	pub fn iter<P: rusqlite::Params>(&mut self, params: P) ->rusqlite::Result<TypedRows<'_,T>> {
+		let rows = self.0.query(params)?;
+		Ok(TypedRows { rows, _marker: PhantomData, index: 0 })
 	}
 }
 #[allow(missing_debug_implementations)]
@@ -640,6 +636,11 @@ pub trait FromSqlRow: Sized {
 	fn from_row(row: &Row<'_>)->Result<Self>;
 	fn iter<'a>(stmt: &'a mut Statement<'_>, params: impl rusqlite::Params)->rusqlite::Result<TypedRows<'a,Self>> {
 		Ok(TypedRows { rows: stmt.query(params)?, index: 0, _marker: PhantomData })
+	}
+}
+impl<P: FromSql, T: SqlRow> FromSqlRow for (P, T) {
+	fn from_row(row: &Row<'_>)->Result<Self> {
+		Ok((row.get(1)?, T::collect_at(row, 1)?))
 	}
 }
 } // mod sql_rows
@@ -886,7 +887,7 @@ impl FromSql for Strref {
 		i32::column_result(v).map(|x| Strref { value: x })
 	}
 }
-#[derive(Debug,Pack,Clone,Copy,PartialEq,Eq)] pub struct Restype { pub value: u16, }
+#[derive(Debug,Pack,Clone,Copy,PartialEq,Eq)] pub struct Restype (pub u16);
 #[derive(Debug,Pack,Clone,Copy)] pub struct BifIndex { data: u32, }
 /// A reference to a resource inside a BIF file as encoded in
 /// `chitin.key`.
@@ -1116,7 +1117,7 @@ impl GameIndex {
 				if pos > 8 { continue }
 				let resref = Resref { name: StaticString::<8>::from(&name[..pos]), };
 				let ext = &name[pos+1..];
-				let restype = crate::resources::restype_from_extension(ext);
+				let restype = Restype::from(ext);
 				trace!("reading override file: {name}; restype={restype:?}");
 				f(restype, resref, ResHandle::Override(&entry.path()))?
 			}
@@ -1363,6 +1364,12 @@ impl SchemaResource {
 	pub fn is_subresource(&self)->bool { matches!(self, Self::Sub { .. }) }
 }
 
+/// Identifies whether this is a top resource or a sub-resource.
+#[derive(Debug)]
+pub enum TableType {
+	Top { extension: &'static str, },
+	Sub { parent: &'static str, root: &'static str, },
+}
 /// The full database description of a game resource.
 ///
 /// This contains all relevant information to fully define a resource
@@ -1396,7 +1403,7 @@ impl SchemaResource {
 pub struct Schema {
 	pub name: &'static str,
 	/// parent table, as (immediate parent, root); only for subresources.
-	pub parent: Option<(&'static str, &'static str)>,
+	pub tabletype: TableType,
 	pub fields: Fields,
 }
 impl Display for Schema {
@@ -1406,7 +1413,7 @@ impl Schema {
 	/// Creates a table with this schema and an arbitrary name.
 	pub fn create_table(&self, name: impl Display, more: impl Display)->String {
 		let mut sql = format!("create table \"{name}\" (");
-		if let Some((parent, _)) = self.parent {
+		if let TableType::Sub { parent, .. } = self.tabletype {
 			uwrite!(&mut sql, r#"
 	"id" integer primary key,
 	"position" integer,
@@ -1428,7 +1435,7 @@ impl Schema {
 		let mut sql = format!(r#"create view "{self}" as
 	select "source"."id""#);
 		let source_position: &'static str;
-		if let Some((parent, _)) = self.parent {
+		if let TableType::Sub { parent, .. } = self.tabletype {
 			source_position = r#""parent", "position", "#;
 			uwrite!(&mut sql, r#",
 	"{parent}"."root" as "root",
@@ -1447,7 +1454,7 @@ impl Schema {
 from
 	(select "id", {source_position}{fields} from "load_{self}" union select "id", {source_position}{fields} from "add_{self}")
 as "source""#, fields = self.fields);
-		if let Some((parent, _)) = self.parent {
+		if let TableType::Sub{ parent, .. } = self.tabletype {
 			uwrite!(&mut sql, r#"
 	inner join "{parent}" on "source"."parent" = "{parent}"."id""#);
 		}
@@ -1504,9 +1511,9 @@ left join "strref_dict" as {b} on {a} = {b}."native""#);
 		f(format!(r#"create table "edit_{self}" ("source" text, "line", "field" text, "value")"#))?;
 		f(self.create_main_view())?;
 		f(self.create_save_view())?;
-		let root = match self.parent {
-			Some((_, root)) => root,
-			None => {
+		let root = match self.tabletype {
+			TableType::Sub { root, .. } => root,
+			_ => {
 			// only for top-level resource: create the dirty and orphan tables
 			f(format!(r#"create table "dirty_{self}" ("name" text primary key on conflict ignore)"#))?;
 			f(format!(r#"create table "orphan_{self}" ("name" text primary key on conflict ignore)"#))?;
@@ -1575,11 +1582,43 @@ end"#))?;
 	/// this is used when initializing the database to ignore resources
 	/// which are superseded by override files.
 	pub fn insert_sql(&self, prefix: impl Display)->String {
-		let (more, more_n) = match self.parent {
-			None => (r#""id", "#, 1),
-			Some(_) => (r#""parent", "position", "#, 2),
+		let (more, more_n) = match self.tabletype {
+			TableType::Top { .. } => (r#""id", "#, 1),
+			TableType::Sub { .. } => (r#""parent", "position", "#, 2),
 		};
 		self.fields.insert_sql(lazy_format!("{prefix}{self}"), more, more_n)
+	}
+	/// Helper function for generating `new_strings` view.
+	pub fn append_new_strings_schema(&self, w: &mut impl fmt::Write, is_first: &mut bool) {
+		for Field { fname, ftype, .. } in self.fields.iter() {
+			if *ftype != FieldType::Strref { continue }
+			if *is_first { *is_first = false; }
+			else { uwrite!(w, "\n\tunion "); }
+			// the '1' column is a placeholder for flags:
+			uwriteln!(w, r#"select "{fname}" as "native", 1 as "flags" from "add_{self}"
+	union select "value" as "native", 1 as "flags" from "edit_{self}" where "field"='{fname}'"#);
+		}
+	}
+	/// Helper function for generating `new_strings` triggers.
+	pub fn append_new_strings_trigger(&self, w: &mut impl fmt::Write) {
+		let mut is_first_field = true;
+		for Field { fname, ftype, .. } in self.fields.iter() {
+			let root = match self.tabletype {
+				TableType::Sub { root, .. }=> root,
+				TableType::Top { .. }  => self.name
+			};
+			if *ftype != FieldType::Strref { continue }
+			if is_first_field {
+				uwrite!(w, r#"
+	insert into "dirty_{root}" select "root" from "{self}" where "#);
+				is_first_field = false;
+			}
+			else { uwrite!(w, " or "); }
+			uwrite!(w, r#""{fname}"=new."native""#);
+		}
+		if !is_first_field {
+			uwriteln!(w, ";");
+		}
 	}
 }
 #[derive(Debug,Clone)]
@@ -1602,13 +1641,6 @@ impl Schema0 {
 			SchemaResource::Sub { resref_index, .. } => resref_index,
 		}
 	}
-	/// Returns the name of the table containing the parent resref.
-	pub fn parent_table(&self)->&'static str {
-		match self.resource {
-			SchemaResource::Top { .. } => self.name,
-			SchemaResource::Sub { parent, .. } => parent,
-		}
-	}
 	/// Returns the name of the field containing the resref for this
 	/// resource.
 	pub fn resref(&self)->&'static str { self.fields[self.resref_idx()].fname }
@@ -1625,46 +1657,17 @@ impl Schema0 {
 	pub fn insert_sql(&self, or: impl Display, prefix: impl Display)->String {
 		self.fields.cols().insert_sql(or, prefix, self.name)
 	}
-	/// Helper function for generating `new_strings` view.
-	pub fn append_new_strings_schema(&self, w: &mut impl fmt::Write, is_first: &mut bool) {
-		for Field { fname, ftype, .. } in &self.fields {
-			if *ftype != FieldType::Strref { continue }
-			if *is_first { *is_first = false; }
-			else { uwrite!(w, "\n\tunion "); }
-			// the '1' column is a placeholder for flags:
-			uwriteln!(w, r#"select "{fname}" as "native", 1 as "flags" from "add_{self}"
-	union select "value" as "native", 1 as "flags" from "edit_{self}" where "field"='{fname}'"#);
-		}
-	}
-	/// Helper function for generating `new_strings` triggers.
-	pub fn append_new_strings_trigger(&self, w: &mut impl fmt::Write) {
-		let resref = self.resref();
-		let parent = self.parent_table();
-		let mut is_first_field = true;
-		for Field { fname, ftype, .. } in &self.fields {
-			if *ftype != FieldType::Strref { continue }
-			if is_first_field {
-				uwrite!(w, r#"
-	insert into "dirty_{parent}" select "{resref}" from "{self}" where "#);
-				is_first_field = false;
-			}
-			else { uwrite!(w, " or "); }
-			uwrite!(w, r#""{fname}"=new."native""#);
-		}
-		if !is_first_field {
-			uwriteln!(w, ";");
-		}
-	}
 }
 
 
 } // mod schemas
 pub(crate) mod resources {
+use rusqlite::types::FromSql;
 use crate::prelude::*;
-use crate::sql_rows::{SqlRow0,TypedStatement0};
-use crate::schemas::Schema0;
+use crate::sql_rows::{SqlRow,TypedStatement,SqlRow0};
+use crate::schemas::{Schema,Schema0};
 use crate::gamefiles::Restype;
-use crate::restypes::{AllTables,all_schemas,AllResources};
+use crate::restypes::{AllTables};
 use crate::database::{DbInserter};
 /// One of the resource tables stored in the database.
 ///
@@ -1677,49 +1680,18 @@ use crate::database::{DbInserter};
 /// Methods depending only on the schema go to [`Schema0`].
 /// Methods depending only on the list of columns from the schema (i.e.
 /// the intersection of both cases) go to [`ColumnWriter`]
-pub trait Resource: crate::sql_rows::SqlRow {
-	type Schema;
-	const SCHEMA: Self::Schema;
-}
-pub trait Resource0: SqlRow0 {
-	fn schema()->Schema0;
-	/// Particular case of SELECT statement used for saving to game files.
-	fn select_typed(db: &impl DbInterface, s: impl Display)->Result<TypedStatement0<'_, Self>> {
-		Self::select_from_typed(db, lazy_format!("save_{name}", name=Self::schema().name), s)
-	}
-}
-/// When provided with a file extension, return the corresponding Restype.
-pub fn restype_from_extension(ext: &str)->Restype {
-	match all_schemas().map(|schema| {
-		match schema.resource {
-		// small trick: when we find the correct extension, we break the
-		// iteration by returning an `Err` variant.
-			crate::schemas::SchemaResource::Top { extension, restype }
-			if ext.eq_ignore_ascii_case (extension) => Err(restype),
-			_ => Ok(())
-		}
-	}) {
-		Err(r) => r,
-		Ok(_) => Restype { value: 0 }
-	}
-}
-pub trait ToplevelResourceData: Resource0 {
-	// TODO:
-	// fn resref(&self)->Resref;
+pub trait TopResource: SqlRow {
 	const EXTENSION: &'static str;
 	const RESTYPE: Restype;
-}
-/// A top-level resource (i.e. saved to its own file in the override
-/// directory).
-pub trait ToplevelResource: ToplevelResourceData {
-	/// Subresources for this resource (together with linking info.).
-	///
-	/// This should be a tuple of all subresources, each of them stored in
-	/// some `Vec` with elements (subresource, linking-info).
 	type Subresources<'a>;
-	/// Inserts a single resource in the database.
-	fn load(tables: &mut AllTables<Statement<'_>>, db: &impl DbInterface, cursor: impl Read+Seek, resref: Resref)
-		->Result<()>;
+
+	fn load(tables: &mut AllTables<Statement<'_>>, db: &impl DbInterface, cursor: impl Read+Seek, resref: Resref) -> Result<()>;
+	fn save(&mut self, file: impl Write+Seek+Debug, subresources: Self::Subresources<'_>) ->Result<()>;
+	/// Iterates a closure over all dirty resources.
+	/// Used for saving.
+	fn for_each_dirty<F>(db: &impl DbInterface, f: F)->Result<i32>
+		where F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>;
+	// Provided functions:
 	fn load_from_handle<T: DbInterface>(db: &mut DbInserter<'_,T>, resref: Resref,
 			mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
 		Self::load(&mut db.tables, db.db, handle.open()?, resref)?;
@@ -1730,29 +1702,16 @@ pub trait ToplevelResource: ToplevelResourceData {
 // 		*count+= 1;
 		Ok(())
 	}
-	/// Saves a single resource (with its subresources) to game files.
-	fn save(&mut self, file: impl Write+Seek+Debug, subresources: Self::Subresources<'_>)
-		->Result<()>;
-	/// Applies a closure over all resources together with their subresources.
-	///
-	/// Iterates a closure over items in the database (with their
-	/// associated properties) matching the given condition.
-	///
-	/// This function links items with their sub-resources
-	/// (e.g. item abilities and effects)
-	/// and calls the passed closure on the resulting structure.
-	///
-	/// It returns the number of rows matched.
-	fn for_each<F,C>(db: &impl DbInterface, condition: C, f: F)->Result<i32>
-		where F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>,
-		C: Display;
-	/// Saves all toplevel resources of this type.
-	fn save_all(db: &impl DbInterface)->Result<()> {
-		let Schema0 { name, .. } = Self::schema();
+	fn select_dirty(db: &impl DbInterface, name: impl Display)->Result<TypedStatement<'_,(Resref,Self)>> {
+		TypedStatement::<'_,_>::new(db, format!(
+			r#"select "id", {cols} from "{name}" where "id" in "dirty_{name}""#,
+			cols=Self::FIELDS))
+	}
+	/// Saves all dirty resources of this type.
+	fn save_dirty(db: &impl DbInterface, name: impl Display)->Result<()> {
 		let extension = Self::EXTENSION;
 		scope_trace!("saving resources from '{}'", name);
-		let condition = format!(r#"where "key" in "dirty_{name}""#);
-		let n = Self::for_each(db, condition,
+		let n = Self::for_each_dirty(db,
 			|resref, resource, subresources| {
 				trace!("start compiling {name}: {resref}");
 				let filename = format!("{resref}.{extension}");
@@ -1763,25 +1722,23 @@ pub trait ToplevelResource: ToplevelResourceData {
 		info!("compiled {n} entries from {name} to override");
 		Ok(())
 	}
-	/// Shows a resource on stdout (grouped with its subresources) in a
-	/// nice user format.
-	fn show(&self, resref: impl Display, subresources: Self::Subresources<'_>);
-	/// Shows on stdout the resource with given resref, or returns an error.
-	fn show_all(db: &impl DbInterface, resref: impl Display)->Result<()> {
-		Self::for_each(db, format!(r#"where "id"='{resref}'"#),
-		|resref, resource, subresources| {
-			resource.show(resref, subresources);
-			Ok(())
-		}).unwrap();
-		Ok(())
+}
+pub trait SubResource: SqlRow {
+	fn select_where<T: FromSql>(db: &impl DbInterface, name: impl Display)->Result<TypedStatement<'_,(T,Self)>> {
+		TypedStatement::<'_,_>::new(db, format!(
+		r#"select "id", {cols} from "{name}" where "parent"=? sort by "position""#,
+		cols=Self::FIELDS))
 	}
-} // trait ToplevelResource
-impl AllResources<Schema0> {
+}
+pub trait Resource0: SqlRow0 {
+	fn schema()->Schema0;
+}
+impl AllTables<Schema> {
 	/// Builds the SQL statement creating the `new_strings` view.
 	///
 	/// This also builds a few triggers which mark resources as dirty
 	/// whenever their strrefs are reassigned.
-	pub fn create_new_strings<T>(&mut self, f: impl Fn(&str)->Result<T>)->Result<()> {
+	pub fn create_new_strings<T>(&self, f: impl Fn(&str)->Result<T>)->Result<()> {
 		let mut create = String::from(
 r#"create view "new_strings"("native","strref","flags") as
 select "a"."native", "strref", "flags" from ("#);
@@ -1851,11 +1808,6 @@ pub struct GameString {
 #[sql(false)]
 	strlen: i32,
 	string: String,
-}
-impl FromSqlRow for (Strref, GameString) {
-	fn from_row(row: &Row<'_>)->Result<Self> {
-		Ok((row.get(1)?, GameString::collect_at(row, 1)?))
-	}
 }
 /// The iterator used for accessing game strings.
 #[derive(Debug)]
@@ -1991,7 +1943,7 @@ pub(crate) mod database {
 use crate::prelude::*;
 use crate::restypes::*;
 use crate::gamefiles::GameIndex;
-use crate::resources::{ToplevelResourceData,ToplevelResource};
+use crate::resources::{TopResource};
 
 // I. Low-level stuff: basic types and extensions for `rusqlite` traits.
 /// Detecting recoverable errors due to incorrect SQL typing.
@@ -2230,7 +2182,7 @@ create index "strref_dict_reverse" on "strref_dict" ("strref");
 // 				debug!("  creating tables for resource '{schema}'");
 // 				schema.create_tables_and_views(|s| db.exec(s))
 // 			}).context("cannot create main tables and views")?;
-			all_schemas().create_new_strings(|s| db.exec(s))?;
+			SCHEMAS.create_new_strings(|s| db.exec(s))?;
 			Ok(())
 		}).context("creating global tables")?;
 		db.create_language_tables(game).context("cannot create language tables")?;
@@ -2276,12 +2228,12 @@ from "new_strings"
 		self.transaction(|db| {
 			let mut base = DbInserter::new(db)?;
 			game.for_each(|restype, resref, handle| {
-				trace!("found resource {}.{:#04x}", resref, restype.value);
+				trace!("found resource {}.{:#04x}", resref, restype.0);
 				base.register(&resref)
 					.with_context(|| format!("could not register resref:{resref}"))?;
 				#[allow(clippy::single_match)]
 				match restype {
-				Item0::RESTYPE => Item0::load_from_handle(&mut base, resref, handle)?,
+				Item::RESTYPE => Item::load_from_handle(&mut base, resref, handle)?,
 				_ => (),
 				};
 				Ok(())
@@ -2792,7 +2744,7 @@ use clap::Parser;
 use gamefiles::{GameIndex};
 use toolbox::{Progress};
 use crate::restypes::*;
-use crate::resources::ToplevelResource;
+use crate::resources::{TopResource};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
@@ -2806,7 +2758,7 @@ fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
 	gamestrings::save(db, game)?;
 	pb.inc(1);
-	Item0::save_all(db)?;
+	Item::save_dirty(db, "items")?;
 	pb.inc(1);
 	Ok(())
 }
@@ -2853,6 +2805,7 @@ fn command_save_diff(game: &GameIndex, mut db: GameDB)->Result<()> {
 		Ok(())
 	})
 }
+#[allow(unused_variables)]
 fn command_show(db: &GameDB, target: impl AsRef<str>)->Result<()> {
 	let target = target.as_ref();
 	let (resref, resext) = match target.rfind('.') {
@@ -2860,7 +2813,7 @@ fn command_show(db: &GameDB, target: impl AsRef<str>)->Result<()> {
 		Some(i) => (&target[..i], &target[i+1..]),
 	};
 	match resext.to_lowercase().as_ref() {
-		"itm" => Item0::show_all(db, resref),
+		"itm" => todo!(), 
 		x => { warn!("unknown resource type: {x}"); Ok(()) },
 	}
 }

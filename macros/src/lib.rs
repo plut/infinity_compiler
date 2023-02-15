@@ -597,15 +597,10 @@ pub fn derive_resource0(tokens: TokenStream)->TokenStream {
 		res_code = quote!{
 			crate::schemas::SchemaResource::Top {
 				extension: #extension,
-				restype: crate::gamefiles::Restype{ value: #restype },
+				restype: crate::gamefiles::Restype(#restype),
 			}
 		};
 		extra_code = quote!{
-			impl ToplevelResourceData for #ident {
-				const EXTENSION: &'static str = #extension;
-				const RESTYPE: crate::gamefiles::Restype =
-					crate::gamefiles::Restype{ value: #restype };
-			}
 		};
 	},
 	SchemaResource::Sub { parent, link } => {

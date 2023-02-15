@@ -27,10 +27,11 @@
 #![feature(trace_macros)]
 use crate::prelude::*;
 use macros::{all_resources,Resource0};
-use crate::pack::{Pack,NotPacked};
+use crate::pack::{Pack,PackAll,NotPacked};
+use crate::gamefiles::{Restype};
 use crate::sql_rows::{SqlRow,SqlRow0,NoSql,Rowid};
 use crate::database::{DbTypeCheck,DbInterface};
-use crate::resources::{Resource0,ToplevelResourceData,ToplevelResource};
+use crate::resources::{TopResource,SubResource,Resource0};
 
 /// A game item, corresponding to a .itm file.
 #[derive(Debug,Pack,SqlRow0,Resource0)]
@@ -256,8 +257,10 @@ pub struct Item {
 // 	itemref: NotPacked::<Resref>,
 }
 
-impl ToplevelResource for Item0 {
-	type Subresources<'a> = (&'a mut [ItemAbility0], &'a mut[(ItemEffect0,usize)]);
+impl TopResource for Item {
+	const EXTENSION: &'static str = "itm";
+	const RESTYPE: Restype = Restype(0x03ed);
+	type Subresources<'a> = (&'a mut [(ItemAbility,Vec<ItemEffect>)], &'a [ItemEffect]);
 	/// load an item from cursor
 	fn load(tables: &mut AllTables<Statement<'_>>, db: &impl DbInterface, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
 		let item = Item::unpack(&mut cursor)
@@ -300,102 +303,73 @@ impl ToplevelResource for Item0 {
 		}
 	Ok(())
 	}
-	/// saves an item (with its sub-resources) to a file
 	fn save(&mut self, mut file: impl Write+Seek+Debug, (abilities, effects): Self::Subresources<'_>) ->Result<()> {
 		trace!("saving item with {} abilities and {} effects",
 			abilities.len(), effects.len());
-		let mut current_effect_idx = self.equip_effect_count.unwrap();
-		for a in abilities.iter_mut() {
-			a.effect_index = current_effect_idx.into();
-			current_effect_idx+= a.effect_count.unwrap();
-		}
-		self.abilities_offset = 114.into();
-		self.effect_offset = (114 + 56*(self.abilities_count.unwrap() as u32)).into();
-		println!("\x1b[34mitem is: {self:?}\x1b[m");
-
-		self.pack(&mut file)
-			.with_context(|| format!("cannot pack item to {file:?}"))?;
+		self.pack(&mut file)?;
 		// pack abilities:
-		for a in abilities.iter() {
-			a.pack(&mut file)
-			.with_context(|| format!("cannot pack item ability to {file:?}"))?;
-		}
-		// pack effects: first on-equip, then grouped by ability
-		for (e, j) in effects.iter() {
-			if *j == 0 {
-				e.pack(&mut file)?;
-			}
-		}
-		for i in 0..self.abilities_count.unwrap() {
-			for (e, j) in effects.iter() {
-				if *j == (i+1).into() {
-					e.pack(&mut file)?;
-				}
-			}
+		abilities.iter().map(|(a,_)| a).pack_all(&mut file)?;
+		// pack global effects:
+		effects.pack_all(&mut file)?;
+		// pack per-ability effects:
+		for (_, effects) in abilities.iter() {
+			effects.pack_all(&mut file)?;
 		}
 		Ok(())
 	}
-	/// Selects a number of items from the database.
-	fn for_each<F,C>(db: &impl DbInterface, condition: C, f:F)->Result<i32>
-		where F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()>,
-			C: Display {
-		let mut sel_item = Item0::select_typed(db, &condition)?;
-		let mut sel_item_ab = ItemAbility0::select_typed(db, r#"where "key"=?"#)?;
-		let mut sel_item_eff = ItemEffect0::select_typed(db, r#"where "key"=?"#)?;
+	fn for_each_dirty<F>(db: &impl DbInterface, f: F)->Result<i32>
+		where F: Fn(Resref, &mut Self, Self::Subresources<'_>)->Result<()> {
+		// TODO: find something intelligent to have
+		// all of this encoded in the `AllTables` structure
+		let mut sel_item = Self::select_dirty(db, "save_items")?;
+		let mut sel_ab = ItemAbility::select_where::<Resref>(db,
+			"save_item_abilities")?;
+		let mut sel_eff = ItemEffect::select_where::<Resref>(db,
+			"save_item_effects")?;
+		let mut sel_ab_eff = ItemEffect::select_where::<i64>(db,
+			"save_item_ability_effects")?;
 		let mut n_items = 0;
-		debug!("processing items under condition: {condition}");
 		for x in sel_item.iter(())? {
+			// TODO: move this inside TypedRows itself!
 			if x.is_db_malformed() { continue }
-			let mut item = x?;
-			debug!("reading item: {}", item.itemref);
-			// we store item effects & abilities in two vectors:
-			//  - abilities = (ability, abref)
-			//  - effect = (effect, ability index)
-			let mut abilities = Vec::<ItemAbility0>::new();
-			let mut effects = Vec::<(ItemEffect0, usize)>::new();
-			for x in sel_item_ab.iter((&item.itemref,))? {
+			let (itemref, mut item) = x?;
+			debug!("reading item: {}", itemref);
+			let mut abilities = Vec::<(ItemAbility,Vec<ItemEffect>)>::new();
+			let mut item_effects = Vec::<ItemEffect>::new();
+			for x in sel_eff.iter((&itemref,))? {
 				if x.is_db_malformed() { continue }
-				abilities.push(x?);
-				item.abilities_count+= 1;
+				let (_, effect) = x?;
+				item_effects.push(effect);
 			}
-			for x in sel_item_eff.iter((&item.itemref,))? {
+			item.equip_effect_count = item_effects.len() as u16;
+			let mut current_effect_idx = item.equip_effect_count;
+			for x in sel_ab.iter((&itemref,))? {
 				if x.is_db_malformed() { continue }
-				let eff = x?;
-				let index = abilities.iter().position(|ab|
-				// we might throw an error here — but [`Iterator::position`]
-				// does not accept [`Result`] values.
-					ab.id.unwrap().expect("null rowid in item abilities")
-						== eff.ability.unwrap());
-				let ab_id = match index {
-					Some(i) => { abilities[i].effect_count+= 1; i+1 },
-					None => { item.equip_effect_count+= 1; 0 },
-				};
-				effects.push((eff, ab_id));
+				let (ab_id, mut ability) = x?;
+				let mut ab_effects = Vec::<ItemEffect>::new();
+				for x in sel_ab_eff.iter((&ab_id,))? {
+					if x.is_db_malformed() { continue }
+					let (_, effect) = x?;
+					ab_effects.push(effect);
+				}
+				ability.effect_count = ab_effects.len() as u16;
+				ability.effect_index = current_effect_idx;
+
+				current_effect_idx+= ability.effect_count;
+				abilities.push((ability, ab_effects));
 			}
-			f(item.itemref.unwrap(), &mut item, (&mut abilities, &mut effects))?;
+			item.abilities_count = abilities.len() as u16;
+			item.abilities_offset = 114;
+			item.effect_offset = 114 + 56*(item.abilities_count as u32);
+			f(itemref, &mut item, (&mut abilities, &mut item_effects))?;
 			n_items+= 1;
 		}
 		debug!("processed {n_items} items");
 		Ok(n_items)
 	}
-	fn show(&self, itemref: impl Display, (abilities, _effects): Self::Subresources<'_>) {
-		println!("\
-[{itemref}] {name}/{unidentified_name} ${price} ⚖{weight} ?{lore}
-Requires: {st}/{ste} St, {dx} Dx, {co} Co, {wi} Wi, {in} In, {ch} Cha
-Proficiency: {prof}
-", name=self.name, unidentified_name = self.unidentified_name,
-	price=self.price, weight=self.weight, lore=self.lore,
-	st=self.min_strength, ste=self.min_strengthbonus,
-	dx=self.min_dexterity, co=self.min_constitution,
-	wi=self.min_wisdom, in=self.min_intelligence, ch=self.min_charisma,
-	prof=self.proficiency);
-		for ability in abilities {
-			println!("
-Attack type: {atype}",
-			atype=ability.attack_type);
-		}
-	}
 }
+impl SubResource for ItemAbility { }
+impl SubResource for ItemEffect { }
 
 // This last invocation closes the list of resources above, generating:
 //  - the `AllResource<T>` type constructor,
@@ -404,7 +378,7 @@ Attack type: {atype}",
 all_resources!();
 
 macro_rules! list_tables {
-	($($tablename:ident: $ty:ty $(,$more:ident)*);*$(;)?) => {
+	($($tablename:ident: $ty:ty = $which:ident ($($arg:tt)*));*$(;)?) => {
 		#[derive(Debug)]
 		pub struct AllTables<X: Debug> {
 			$(pub $tablename: X,)*
@@ -412,33 +386,52 @@ macro_rules! list_tables {
 		impl<X: Debug> AllTables<X> {
 			pub fn map<Y,E,F>(&self, f: F)->Result<AllTables<Y>,E>
 			where Y: Debug, F: Fn(&X)->Result<Y,E> {
-				Ok(AllTables::<Y> {
-					$($tablename: f(&self.$tablename)?,)*
-				})
+				Ok(AllTables::<Y> { $($tablename: f(&self.$tablename)?,)* })
+			}
+			pub fn map_mut<Y,E,F>(&self, mut f: F)->Result<AllTables<Y>,E>
+			where Y: Debug, F: FnMut(&X)->Result<Y,E> {
+				Ok(AllTables::<Y> { $($tablename: f(&self.$tablename)?,)* })
 			}
 		}
 		use crate::schemas::Schema;
 		pub const SCHEMAS: AllTables<Schema> = AllTables {
 			$($tablename: Schema {
 				name: stringify!($tablename),
-				parent: table_parent!($($more),*),
+				tabletype: table_parent!($which($($arg)*)),
 				fields: <$ty as crate::sql_rows::SqlRow>::FIELDS,
 			}),*
 		};
+		impl Restype {
+			pub fn from(e: &str)->Self {
+				$(table_restype!(e,$which($($arg)*)));*;
+				panic!("extension has no associated restype: {e}")
+			}
+		}
 	}
 }
 macro_rules! table_parent {
-	($parent:ident) => { table_parent!($parent, $parent) };
-	($parent:ident,$root:ident) => {
-		Some((stringify!($parent), stringify!($root)))
+	{Top($ext:literal, $rt:literal)} => {
+		crate::schemas::TableType::Top { extension: $ext, }
 	};
-	() => { None }
+	{Sub($parent:ident)} => { table_parent!(Sub($parent, $parent)) };
+	{Sub($parent:ident,$root:ident)} => {
+		crate::schemas::TableType::Sub {
+			parent: stringify!($parent),
+			root: stringify!($root),
+		}
+	};
+}
+macro_rules! table_restype {
+	{$e:ident, Sub($($arg:tt)*)} => { };
+	{$e:ident, Top($ext:literal, $restype: literal)} => {
+		if $e.eq_ignore_ascii_case($ext) { return Self($restype) }
+	}
 }
 // trace_macros!(true);
 list_tables! {
-	items: Item;
-	item_abilities: ItemAbility, items;
-	item_ability_effects: ItemEffect, item_abilities, items;
-	item_effects: ItemEffect, items;
+	items: Item = Top ("itm", 0x03ed);
+	item_abilities: ItemAbility = Sub (items);
+	item_ability_effects: ItemEffect = Sub(item_abilities, items);
+	item_effects: ItemEffect = Sub (items);
 }
 // trace_macros!(false);
