@@ -199,39 +199,24 @@ impl TopResource for Item {
 		}
 		Ok(())
 	}
-	fn for_each_dirty<F>(db: &impl DbInterface, f: F)->Result<i32>
-		where F: Fn(Resref, &mut Self, &Self::Subresources)->Result<()> {
-		// TODO: find something intelligent to have
-		// all of this encoded in the `AllTables` structure
-		let mut sel_item = Self::select_dirty(db, "save_items")?;
-		let mut sel_ab = Self::select_where(db, "save_item_abilities")?;
-		let mut sel_eff = Self::select_where(db, "save_item_effects")?;
-		let mut sel_ab_eff = Self::select_where(db, "save_item_ability_effects")?;
-		let mut n_items = 0;
-		for x in sel_item.iter(())? {
-			// TODO: move this inside TypedRows itself!
-			let (itemref, mut item) = x?;
-			debug!("reading item: {}", itemref);
-			let mut abilities = Vec::<(ItemAbility,Vec<ItemEffect>)>::new();
-			let item_effects = ItemEffect::read_rows_vec(&mut sel_eff, (itemref,))?;
-			item.equip_effect_count = item_effects.len() as u16;
-			let mut current_effect_idx = item.equip_effect_count;
-			for x in ItemAbility::read_rows(&mut sel_ab, (itemref,))? {
-				let (ab_id, mut ability) = x?;
-				let ab_effects = ItemEffect::read_rows_vec(&mut sel_ab_eff, (ab_id,))?;
-				ability.effect_count = ab_effects.len() as u16;
-				ability.effect_index = current_effect_idx;
-				current_effect_idx+= ability.effect_count;
-				abilities.push((ability, ab_effects));
-			}
-			item.abilities_count = abilities.len() as u16;
-			item.abilities_offset = 114;
-			item.effect_offset = 114 + 56*(item.abilities_count as u32);
-			f(itemref, &mut item, &(abilities, item_effects))?;
-			n_items+= 1;
+	fn select_subresources(&mut self, tables: &mut AllTables<Statement<'_>>, itemref: Resref)->Result<Self::Subresources> {
+		debug!("reading item: {}", itemref);
+		let mut abilities = Vec::<(ItemAbility,Vec<ItemEffect>)>::new();
+		let item_effects = ItemEffect::read_rows_vec(&mut tables.item_effects, (itemref,))?;
+		self.equip_effect_count = item_effects.len() as u16;
+		let mut current_effect_idx = self.equip_effect_count;
+		for x in ItemAbility::read_rows(&mut tables.item_abilities, (itemref,))? {
+			let (ab_id, mut ability) = x?;
+			let ab_effects = ItemEffect::read_rows_vec(&mut tables.item_ability_effects, (ab_id,))?;
+			ability.effect_count = ab_effects.len() as u16;
+			ability.effect_index = current_effect_idx;
+			current_effect_idx+= ability.effect_count;
+			abilities.push((ability, ab_effects));
 		}
-		debug!("processed {n_items} items");
-		Ok(n_items)
+		self.abilities_count = abilities.len() as u16;
+		self.abilities_offset = 114;
+		self.effect_offset = 114 + 56*(self.abilities_count as u32);
+		Ok((abilities, item_effects))
 	}
 }
 impl SubResource for ItemAbility { }

@@ -571,20 +571,6 @@ impl<T: FromSqlRow> Iterator for TypedRows<'_,T> {
 	}
 }
 
-/// A statement returning typed values.
-pub struct TypedStatement<'s, T: FromSqlRow> (Statement<'s>, PhantomData<T>);
-impl<'stmt,T: FromSqlRow> TypedStatement<'stmt, T> {
-	pub fn new(db: &'stmt impl DbInterface, sql: impl AsRef<str>)->Result<Self> {
-		Ok(Self(db.prepare(sql)?, PhantomData))
-	}
-// 	pub fn new(stmt: Statement<'stmt>)->Self { Self(stmt, PhantomData) }
-	/// Iterates over this statement, returning (possibly) Rust structs of
-	/// the type associated with this table.
-	pub fn iter<P: rusqlite::Params>(&mut self, params: P) ->rusqlite::Result<TypedRows<'_,T>> {
-		let rows = self.0.query(params)?;
-		Ok(TypedRows { rows, _marker: PhantomData, index: 0 })
-	}
-}
 } // mod sql_rows
 pub(crate) mod gamefiles {
 //! Access to the KEY/BIF side of the database.
@@ -1339,7 +1325,7 @@ end"#))?;
 } // mod schemas
 pub(crate) mod resources {
 use crate::prelude::*;
-use crate::sql_rows::{SqlRow,TypedStatement,TypedRows};
+use crate::sql_rows::{SqlRow,TypedRows};
 use crate::schemas::{Schema};
 use crate::gamefiles::Restype;
 use crate::restypes::{AllTables};
@@ -1362,10 +1348,7 @@ pub trait TopResource: SqlRow {
 
 	fn load(tables: &mut AllTables<Statement<'_>>, db: &impl DbInterface, cursor: impl Read+Seek, resref: Resref) -> Result<()>;
 	fn save(&mut self, file: impl Write+Seek+Debug, subresources: &Self::Subresources) ->Result<()>;
-	/// Iterates a closure over all dirty resources.
-	/// Used for saving.
-	fn for_each_dirty<F>(db: &impl DbInterface, f: F)->Result<i32>
-		where F: Fn(Resref, &mut Self, &Self::Subresources)->Result<()>;
+	fn select_subresources(&mut self, tables: &mut AllTables<Statement<'_>>, resref: Resref)->Result<Self::Subresources>;
 	// Provided functions:
 	fn load_from_handle<T: DbInterface>(db: &mut DbInserter<'_,T>, resref: Resref,
 			mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
@@ -1377,30 +1360,25 @@ pub trait TopResource: SqlRow {
 // 		*count+= 1;
 		Ok(())
 	}
-	fn select_dirty(db: &impl DbInterface, name: impl Display)->Result<TypedStatement<'_,(Resref,Self)>> {
-		TypedStatement::<'_,_>::new(db, format!(
-			r#"select "id", {cols} from "{name}" where "id" in "dirty_{name}""#,
-			cols=Self::FIELDS))
-	}
-	/// Saves all dirty resources of this type.
-	fn save_dirty(db: &impl DbInterface, name: impl Display)->Result<()> {
+	fn save_all_dirty(db: &impl DbInterface, tables: &mut AllTables<Statement<'_>>, name: impl Display)->Result<usize> {
 		let extension = Self::EXTENSION;
-		scope_trace!("saving resources from '{}'", name);
-		let n = Self::for_each_dirty(db,
-			|resref, resource, subresources| {
-				trace!("start compiling {name}: {resref}");
-				let filename = format!("{resref}.{extension}");
-				let mut file = File::create(&filename)
-					.with_context(|| format!("cannot open output file: {filename}"))?;
-				resource.save(&mut file, subresources)
-		})?;
-		info!("compiled {n} entries from {name} to override");
-		Ok(())
+		let mut sel = db.prepare(format!(
+			r#"select "id", {cols} from "{name}" where "id" in "dirty_{name}""#,
+			cols=Self::FIELDS))?;
+		let mut n_saved = 0;
+		for row in Self::read_rows(&mut sel, ())? {
+			let (resref, mut resource) = row?;
+			let subresources = resource.select_subresources(tables, resref)?;
+			let filename = format!("{resref}.{extension}");
+			let mut file = File::create(&filename)
+				.with_context(|| format!("cannot open output file: {filename}"))?;
+			resource.save(&mut file, &subresources)?;
+			n_saved+= 1;
+		}
+		Ok(n_saved)
 	}
-	fn select_where(db: &impl DbInterface, name: impl Display)->Result<Statement<'_>> {
-		db.prepare(format!(
-		r#"select "id", {cols} from "{name}" where "parent"=? sort by "position""#,
-		cols=Self::FIELDS))
+	fn read_rows<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(Resref,Self)>> {
+		Ok(s.query(params)?.into())
 	}
 }
 pub trait SubResource: SqlRow {
@@ -2388,7 +2366,10 @@ fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
 	gamestrings::save(db, game)?;
 	pb.inc(1);
-	Item::save_dirty(db, "items")?;
+	let mut tables = SCHEMAS.map(|schema| db.prepare(format!(
+	r#"select "id", {cols} from "save_{schema}" where "parent"=? sort by "position""#,
+		cols=schema.fields)))?;
+	Item::save_all_dirty(db, &mut tables, "save_items")?;
 	pb.inc(1);
 	Ok(())
 }
