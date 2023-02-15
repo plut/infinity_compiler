@@ -24,14 +24,6 @@ use syn::{punctuated::Punctuated, token::Comma};
 use std::cell::RefCell;
 use extend::ext;
 
-#[derive(Debug)] struct ResourceDef0(String, String);
-thread_local! {
-	static RESOURCES0: RefCell<Vec<ResourceDef0>> =
-		RefCell::new(Vec::<ResourceDef0>::new());
-}
-fn push_resource1(rdef: ResourceDef0) {
-	RESOURCES0.with(|v| { v.borrow_mut().push(rdef); })
-}
 // use std::any::type_name;
 // fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
 
@@ -62,7 +54,7 @@ fn vec_eltype(ty: &syn::Type)->Option<&syn::Type> {
 	};
 	match args.first()? {
 		syn::GenericArgument::Type(ty) => Some(ty),
-		_ => return None
+		_ => None
 	}
 }
 
@@ -208,6 +200,7 @@ impl AttrParser {
 // 	let b: T = syn::parse2(a).expect("cannot parse!");
 // 	Some(b.into())
 	}
+#[allow(dead_code)]
 	fn get_ident(&mut self)->Option<String> {
 		match self.get::<syn::Expr>() {
 			Some(AttrArg::Ident(i)) => Some(i),
@@ -215,9 +208,10 @@ impl AttrParser {
 			_ => None,
 		}
 	}
+#[allow(dead_code)]
 	fn get_int(&mut self)->Option<isize> {
 		match self.get::<syn::Expr>() {
-			Some(AttrArg::Int(n)) => Some(n.into()),
+			Some(AttrArg::Int(n)) => Some(n),
 			_ => None
 		}
 	}
@@ -395,91 +389,7 @@ impl FieldInfo {
 		}
 	}
 }
-#[proc_macro_derive(SqlRow0, attributes(column))]
-pub fn derive_sql_row0(tokens: TokenStream)->TokenStream {
-	let mut get_fields = TS::new();
-	let mut from_row_at_v = Vec::<TS>::new();
-	let mut fieldtype = TS::new();
-	let mut fieldname_ctx = TS::new();
-	let mut field_create_text = TS::new();
-	let mut primary_index = quote!{
-		use crate::toolbox::Merge;
-		let r: Option::<usize> = None; r };
-	let mut offset = quote!(0usize);
-	let DeriveInput{ ident, data, .. } = parse_macro_input!(tokens);
-	let fields = Fields::from(data);
-	for FieldRef { name, attrs, ty, .. } in fields.iter() {
-		// Read attributes for this field
-		let mut field_info = FieldInfo::default();
-		for (name, mut args) in attrs.iter().map(parse_attr) {
-			match name.as_str() {
-				"column" => field_info.update(&mut args),
-				_ => ()
-			} // match
-		} // for
-		// before generating the code, `offset` contains the offset at the
-		// start of this field:
-		quote!{
-			if i < #offset + #ty::WIDTH {
-				return self.#name.get_field(i - (#offset))
-			}
-		}.to_tokens(&mut get_fields);
-		quote!{
-			if i < #offset + #ty::WIDTH {
-				return #ty::fieldname_ctx(stringify!(#name), i - (#offset))
-			}
-		}.to_tokens(&mut fieldname_ctx);
-		quote!{
-			if i < #offset + #ty::WIDTH {
-				return #ty::fieldtype(i - (#offset))
-			}
-		}.to_tokens(&mut fieldtype);
-		// this statically computes the unique index for the primary key:
-		if field_info.create.contains("primary")
-			|| ty.toks_string().contains("Rowid") {
-				quote!{ .merge(Some(#offset)) }.to_tokens(&mut primary_index);
-		}
-		let create_text = field_info.create;
-		quote!{
-			if i < #offset + #ty::WIDTH {
-				return #create_text
-			}
-		}.to_tokens(&mut field_create_text);
-		from_row_at_v.push(quote!{ #ty::from_row_at(r, offset + (#offset))? });
-		// we now update `offset` so that it points to the offset at the start
-		// of next field:
-		quote!{ + #ty::WIDTH }.to_tokens(&mut offset)
-	}
-	let from_row_at = fields.build_from(&from_row_at_v);
-	let ident_str = ident.toks_string();
-	let code = quote! (impl crate::sql_rows::SqlRow0 for #ident {
-		const WIDTH: usize = #offset;
-		fn get_field(&self, i: usize)->rusqlite::types::ToSqlOutput {
-			#get_fields
-			panic!("invalid field {} for resource type {}", i, #ident_str)
-		} // get_field
-		fn from_row_at(r: &rusqlite::Row<'_>, offset: usize)->Result<Self> {
-			Ok(#from_row_at)
-		}
-		fn fieldtype(i: usize)->crate::sql_rows::FieldType {
-			#fieldtype
-			panic!("invalid field {} for resource type {}", i, #ident_str)
-		}
-		fn fieldname_ctx(_ctx: &'static str, i: usize)->&'static str {
-			#fieldname_ctx
-			panic!("invalid field {} for resource type {}", i, #ident_str)
-		}
-		fn field_create_text(i: usize)->&'static str {
-			#field_create_text
-			panic!("invalid field {} for resource type {}", i, #ident_str)
-		}
-		fn primary_index()->usize {
-			#primary_index
-			.expect(concat!("no primary index defined for table ", #ident_str))
-		}
-	});
-	code.into()
-}
+/// The macro deriving `SqlRow`.
 #[proc_macro_derive(SqlRow, attributes(sql))]
 pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	let mut fields_def = quote!{};
@@ -499,7 +409,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 		} // for
 		let fname = name.toks_string();
 		// FIXME: this is bugware, we should parse the actual `Type` struct
-		if vec_eltype(&ty).is_some() {
+		if vec_eltype(ty).is_some() {
 			field_info.hidden = true;
 		}
 		if field_info.hidden {
@@ -530,223 +440,6 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 			}
 			fn collect_at(row: &Row<'_>, offset: usize)->Result<Self> {
 				Ok(Self { #collect_at })
-			}
-		}
-	};
-	code.into()
-}
-#[derive(Debug,PartialEq)]
-enum SchemaResource {
-	Top { extension: String, restype: u16, },
-	Sub { parent: String, link: String, },
-	Invalid,
-}
-impl Default for SchemaResource { fn default()->Self { Self::Invalid } }
-/// Information for a top-level resource.
-#[derive(Default,Debug)]
-struct ResourceInfo {
-	name: String,
-	resource: SchemaResource,
-}
-impl ResourceInfo {
-	/// Parses a `#[resource(...)]` attribute as:
-	/// `#[topresource(items, "itm", 0x03ed)]` => top resource,
-	fn update_top(&mut self, parser: &mut AttrParser)->Option<()> {
-		self.name = parser.get_ident()?;
-		self.resource = SchemaResource::Top {
-			extension: parser.get_ident()?,
-			restype: parser.get_int()? as u16,
-		};
-		Some(())
-	}
-	/// Parses a `#[subresource(item_abilities,itemref,items)]` attribute.
-	fn update_sub(&mut self, parser: &mut AttrParser)->Option<()> {
-		self.name = parser.get_ident()?;
-		self.resource = SchemaResource::Sub {
-			link: parser.get_ident()?,
-			parent: parser.get_ident()?,
-		};
-		Some(())
-	}
-}
-/// Top resource
-///
-/// Attributes:
-/// resource(items, "itm", 0x03ed)
-#[proc_macro_derive(Resource0, attributes(topresource,subresource))]
-pub fn derive_resource0(tokens: TokenStream)->TokenStream {
-	let DeriveInput{ ident, attrs, data, .. } = parse_macro_input!(tokens);
-	let mut resource_info = ResourceInfo::default();
-	for (name, mut args) in attrs.iter().map(parse_attr) {
-		match name.as_str() {
-			"topresource" => { resource_info.update_top(&mut args); },
-			"subresource" => { resource_info.update_sub(&mut args); },
-			_ => ()
-		} // match
-	}
-	if resource_info.name.is_empty()
-		|| resource_info.resource == SchemaResource::Invalid {
-		panic!("{}", "top-level resource must have a full `resource` attribute; we got {resource_info:?}")
-	}
-	let ResourceInfo { name: table_name, resource } = resource_info;
-	let res_code: TS;
-	let extra_code: TS;
-	let fields = Fields::from(data);
-	match resource {
-	SchemaResource::Top { extension, restype } => {
-		res_code = quote!{
-			crate::schemas::SchemaResource::Top {
-				extension: #extension,
-				restype: crate::gamefiles::Restype(#restype),
-			}
-		};
-		extra_code = quote!{
-		};
-	},
-	SchemaResource::Sub { parent, link } => {
-		let resref = match fields.iter().position(|f|
-			matches!(f.name, FieldNameRef::Named(s) if s.to_string() == link)) {
-			Some(i) => i,
-			None => panic!("resref {link} not found in fields"),
-		};
-		res_code = quote! {
-			crate::schemas::SchemaResource::Sub {
-				parent: #parent,
-				resref_index: #resref,
-			}
-		};
-		extra_code = quote! { }
-	},
-	_ => panic!("bad programming"),
-	} // match
-	let code = quote!{
-		impl Resource0 for #ident {
-			fn schema()->crate::schemas::Schema0 {
-				crate::schemas::Schema0 {
-					name: #table_name,
-					resource: #res_code,
-					fields: Self::fields(),
-					primary_index: Self::primary_index(),
-				}
-			}
-		}
-		#extra_code
-	};
-	// we need this after the code generation since this moves `table_name`:
-	push_resource1(ResourceDef0(ident.toks_string(), table_name));
-	code.into()
-}
-
-/// This expands to a definition for the `AllResources` type
-/// as well as the associated base table.
-///
-/// This expands to:
-/// ```ignore
-/// struct AllResources<T> {
-///   items: T, // ...
-///   _marker: PhantomData::<T>,
-/// }
-/// const ALL_RESOURCES: AllResources<()> {
-/// 	items: (), // ...
-/// 	_marker: PhantomData,
-/// }
-/// impl<T> AllResources<T> {
-///   pub fn by_name(&self, table:name: &str)->Option<T> {
-///   	match str {
-///  		"items" => Some(self.items),
-///  		_ => None
-///  		}
-///  	}
-///  	pub fn<R: Resource0> by_resource(&self)->T { R::find(self) }
-/// }
-/// ```
-#[proc_macro]
-pub fn all_resources(_: proc_macro::TokenStream)->proc_macro::TokenStream {
-	let mut fields = TS::new();
-	let mut map = TS::new();
-	let mut schema = TS::new();
-	let mut by_name = TS::new();
-	let mut by_name_ref = TS::new();
-	let mut by_name_mut = TS::new();
-	let mut n = 0usize;
-	RESOURCES0.with(|v| {
-		n = v.borrow().len();
-		for ResourceDef0 (type_name, table_name) in v.borrow().iter() {
-			let ty = syn::Ident::new(type_name, Span::call_site());
-			let field = syn::Ident::new(table_name, Span::call_site());
-			quote!{ #[allow(missing_docs)] pub #field: T, }
-				.to_tokens(&mut fields);
-			quote!{ #field: f(&self.#field)?, }
-				.to_tokens(&mut map);
-			quote!{ #field: #ty::schema(), }
-				.to_tokens(&mut schema);
-			quote!{ #table_name => Ok(self.#field), }
-				.to_tokens(&mut by_name);
-			quote!{ #table_name => Ok(&self.#field), }
-				.to_tokens(&mut by_name_ref);
-			quote!{ #table_name => Ok(&mut self.#field), }
-				.to_tokens(&mut by_name_mut);
-		}
-	}); // closure
-
-	let code = quote!{
-/// A struct holding one field for each game resource type.
-///
-/// This is used for iterating similar code for each resources.
-		#[allow(clippy::missing_docs)]
-		pub struct AllResources<T> {
-#[allow(clippy::missing_docs)]
-			_marker: std::marker::PhantomData::<T>, #fields }
-		pub fn all_schemas()->AllResources<crate::schemas::Schema0> {
-			AllResources { #schema _marker: std::marker::PhantomData }
-		}
-/// An heterogeneous iterator over the constant list of all game resource types.
-// 		pub const SCHEMAS: AllResources<> = AllResources0 {
-// 			_marker: std::marker::PhantomData, #data };
-		#[allow(clippy::len_without_is_empty)]
-		impl<T> AllResources<T> {
-			/// Number of resources in this table.
-			pub fn len(&self)->usize { #n }
-			/// Calls a closure for each resource type in the game.
-			pub fn map<'a,U,E,F>(&'a self, f:F)->Result<AllResources<U>,E>
-			where F: Fn(&'a T)->Result<U,E> {
-				Ok(AllResources { _marker: std::marker::PhantomData, #map })
-			}
-			/// Calls a closure for each resource type in the game.
-			pub fn map_mut<U,E,F>(&self, mut f:F)->Result<AllResources<U>,E>
-			where F: FnMut(&T)->Result<U,E> {
-				Ok(AllResources { _marker: std::marker::PhantomData, #map })
-			}
-			/// Given a SQL table name, returns the schema for this table,
-			/// or throws an appropriate error.
-			pub fn by_name(self, table_name: &str)->Result<T> {
-				match table_name {
-					#by_name
-					_ => Err(Error::UnknownTable(table_name.to_owned()).into())
-				}
-			}
-			/// Given a SQL table name, returns the schema for this table,
-			/// or throws an appropriate error.
-			pub fn by_name_ref(&self, table_name: &str)->Result<&T> {
-				match table_name {
-					#by_name_ref
-				_ => Err(Error::UnknownTable(table_name.to_owned()).into())
-				}
-			}
-			/// Given a SQL table name, returns the schema for this table,
-			/// or throws an appropriate error.
-			pub fn by_name_mut(&mut self, table_name: &str)->Result<&mut T> {
-				match table_name {
-					#by_name_mut
-				_ => Err(Error::UnknownTable(table_name.to_owned()).into())
-				}
-			}
-// 			pub fn by_resource<R: Resource0>(&self)->&T { R::find(self) }
-		}
-		impl<T: Debug> Debug for AllResources<T> {
-			// TODO: make this a bit more explicit
-			fn fmt(&self, f: &mut Formatter<'_>)->std::fmt::Result {
-				self.map_mut(|x| write!(f, "{:?}", x))?; Ok(())
 			}
 		}
 	};

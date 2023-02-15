@@ -1,6 +1,6 @@
 //! Full definition of all structures representing game resources.
 //!
-//! This crate makes heavy use of the `Pack` and `Resource0` derive macros to
+//! This crate makes heavy use of the `Pack` and `SqlRow` derive macros to
 //! automatically interface with game files and the SQL database.
 //!
 //! **Most** of the Lua-side definition of resource schemas is also
@@ -26,126 +26,12 @@
 //! for joins with the edit tables.
 #![feature(trace_macros)]
 use crate::prelude::*;
-use macros::{all_resources,Resource0};
-use crate::pack::{Pack,PackAll,NotPacked};
+use crate::pack::{Pack,PackAll};
 use crate::gamefiles::{Restype};
-use crate::sql_rows::{SqlRow,SqlRow0,NoSql,Rowid};
+use crate::sql_rows::{SqlRow};
 use crate::database::{DbTypeCheck,DbInterface};
-use crate::resources::{TopResource,SubResource,Resource0};
+use crate::resources::{TopResource,SubResource};
 
-/// A game item, corresponding to a .itm file.
-#[derive(Debug,Pack,SqlRow0,Resource0)]
-#[topresource("items", "itm", 0x03ed)]
-pub struct Item0 {
-#[header("ITM V1  ")]
-	unidentified_name: Strref,
-	name: Strref,
-	replacement: Resref,
-	flags: u32, // ItemFlags,
-	itemtype: u16, // ItemType,
-	usability: u32, // UsabilityFlags,
-	animation: u16, // StaticString<2>,
-	min_level: u16,
-	min_strength: u16,
-	min_strengthbonus: u8,
-	kit1: u8,
-	min_intelligence: u8,
-	kit2: u8,
-	min_dexterity: u8,
-	kit3: u8,
-	min_wisdom: u8,
-	kit4: u8,
-	min_constitution: u8,
-	proficiency: u8, // WProf,
-	min_charisma: u16,
-	price: u32,
-	stack_amount: u16,
-	inventory_icon: Resref,
-	lore: u16,
-	ground_icon: Resref,
-	weight: i32,
-	unidentified_description: Strref,
-	description: Strref,
-	description_icon: Resref,
-	enchantment: i32,
-	abilities_offset: NoSql::<u32>,
-	abilities_count: NoSql::<u16>,
-	effect_offset: NoSql::<u32>,
-	effect_index: NoSql::<u16>,
-	equip_effect_count: NoSql::<u16>,
-#[column("primary key")]
-	itemref: NotPacked::<Resref>,
-}
-/// An ability inside a .itm file.
-#[derive(Debug,Pack,SqlRow0,Resource0)]
-#[subresource(item_abilities,itemref,items)]
-#[allow(missing_copy_implementations)]
-// #[resource(item_abilities)]
-pub struct ItemAbility0 {
-	attack_type: u8, // AttackType,
-	must_identify: u8,
-	location: u8,
-	alternative_dice_sides: u8,
-	use_icon: Resref,
-	target_type: u8, // TargetType,
-	target_count: u8,
-	range: u16,
-	launcher_required: u8,
-	alternative_dice_thrown: u8,
-	speed_factor: u8,
-	alternative_damage_bonus: u8,
-	thac0_bonus: u16,
-	dice_sides: u8,
-	primary_type: u8,
-	dice_thrown: u8,
-	secondary_type: u8,
-	damage_bonus: u16,
-	damage_type: u16, // DamageType,
-	effect_count: NoSql::<u16>, // = 0,
-	effect_index: NoSql::<u16>, // = 0,
-	max_charges: u16,
-	depletion: u16,
-	flags: u32,
-	projectile_animation: u16,
-	overhand_chance: u16,
-	backhand_chance: u16,
-	thrust_chance: u16,
-	is_arrow: u16,
-	is_bolt: u16,
-	is_bullet: u16,
-#[column(r#"references "items"("itemref") on delete cascade"#)]
-	itemref: NotPacked::<Resref>,
-	index: NotPacked::<u16>,
-	id: Rowid,
-}
-/// An effect inside a .itm file (either global or in an ability).
-#[derive(Debug,Pack,SqlRow0,Resource0)]
-#[subresource(item_effects,itemref,items)]
-#[allow(missing_copy_implementations)]
-// #[resource(item_effects)]
-pub struct ItemEffect0 {
-	opcode: u16, //opcode,
-	target: u8, // EffectTarget,
-	power: u8,
-	parameter1: u32,
-	parameter2: u32,
-	timing_mode: u8, // TimingMode,
-	dispel_mode: u8, // DispelMode,
-	duration: u32,
-	proba1: u8,
-	proba2: u8,
-	resource: Resref,
-	dice_thrown: i32,
-	dice_sides: i32,
-	saving_throw_type: u32,
-	saving_throw_bonus: i32,
-	stacking_id: u32,
-	itemref: NotPacked::<Resref>,
-#[column(r#"references "item_abilities"("id") on delete cascade"#)]
-	ability: NotPacked::<i64>,
-	index: NotPacked::<u16>,
-	id: Rowid,
-}
 /// An effect inside a .itm file (either global or in an ability).
 #[derive(Debug,Pack,SqlRow)]
 // #[subresource(item_effects,itemref,items)]
@@ -251,10 +137,6 @@ pub struct Item {
 #[sql(false)] effect_offset: u32,
 #[sql(false)] effect_index: u16,
 #[sql(false)] equip_effect_count: u16,
-	abilities: Vec::<ItemAbility>,
-	global_effects: Vec::<ItemEffect>,
-// #[column("primary key")]
-// 	itemref: NotPacked::<Resref>,
 }
 
 impl TopResource for Item {
@@ -371,12 +253,6 @@ impl TopResource for Item {
 impl SubResource for ItemAbility { }
 impl SubResource for ItemEffect { }
 
-// This last invocation closes the list of resources above, generating:
-//  - the `AllResource<T>` type constructor,
-//  - its implementation of `map()`,
-//  - and the constant `RESOURCES`, which holds the parent resources.
-all_resources!();
-
 macro_rules! list_tables {
 	($($tablename:ident: $ty:ty = $which:ident ($($arg:tt)*));*$(;)?) => {
 		#[derive(Debug)]
@@ -384,20 +260,32 @@ macro_rules! list_tables {
 			$(pub $tablename: X,)*
 		}
 		impl<X: Debug> AllTables<X> {
-			pub fn map<Y,E,F>(&self, f: F)->Result<AllTables<Y>,E>
-			where Y: Debug, F: Fn(&X)->Result<Y,E> {
+			pub fn map<'a,Y,E,F>(&'a self, f: F)->Result<AllTables<Y>,E>
+			where Y: Debug+'a, F: Fn(&'a X)->Result<Y,E> {
 				Ok(AllTables::<Y> { $($tablename: f(&self.$tablename)?,)* })
 			}
 			pub fn map_mut<Y,E,F>(&self, mut f: F)->Result<AllTables<Y>,E>
 			where Y: Debug, F: FnMut(&X)->Result<Y,E> {
 				Ok(AllTables::<Y> { $($tablename: f(&self.$tablename)?,)* })
 			}
+			pub fn by_name(&self, table_name: &str)->Result<&X> {
+				match table_name {
+					$(stringify!($tablename) => Ok(&self.$tablename)),*,
+				_ => Err(Error::UnknownTable(table_name.to_owned()).into())
+				}
+			}
+			pub fn by_name_mut(&mut self, table_name: &str)->Result<&mut X> {
+				match table_name {
+					$(stringify!($tablename) => Ok(&mut self.$tablename)),*,
+				_ => Err(Error::UnknownTable(table_name.to_owned()).into())
+				}
+			}
 		}
 		use crate::schemas::Schema;
 		pub const SCHEMAS: AllTables<Schema> = AllTables {
 			$($tablename: Schema {
 				name: stringify!($tablename),
-				tabletype: table_parent!($which($($arg)*)),
+				table_type: table_type!($which($($arg)*)),
 				fields: <$ty as crate::sql_rows::SqlRow>::FIELDS,
 			}),*
 		};
@@ -409,11 +297,11 @@ macro_rules! list_tables {
 		}
 	}
 }
-macro_rules! table_parent {
+macro_rules! table_type {
 	{Top($ext:literal, $rt:literal)} => {
 		crate::schemas::TableType::Top { extension: $ext, }
 	};
-	{Sub($parent:ident)} => { table_parent!(Sub($parent, $parent)) };
+	{Sub($parent:ident)} => { table_type!(Sub($parent, $parent)) };
 	{Sub($parent:ident,$root:ident)} => {
 		crate::schemas::TableType::Sub {
 			parent: stringify!($parent),
