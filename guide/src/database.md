@@ -33,6 +33,19 @@ For each resource `X`:
 > In general, mods should only interact with the main view `X`.
 > The structure of all other views listed here is **unstable**.
 
+The columns of the table `X` are the following:
+ - the primary key is always called `"id"`; for the top-level resources,
+   it is the resource identifier, while for sub-resources this is a
+   numeric key;
+ - for sub-resources only, a column called `"parent"`, which refers to
+   the primary key of the parent resource, followed by a column called
+   `"position"`, which is used as a sort key for collecting
+   sub-resources;
+ - then all “payload” fields as described in e.g. IESDP. All the fields
+   describing sub-resources (offset, count etc.) are removed from this
+   list, since sub-resources are described in their own tables.
+
+
 For top-level resources, a few additional tables are used to mark their
 status in the database with respect to the override directory:
  - `dirty_X` is the table listing all resources which have been modified

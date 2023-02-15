@@ -483,12 +483,22 @@ end
 
 --««1 Test code
 function test_core()
+	print(red(bold("testing simod.list")))
+	print(blue("listing a few item IDs:"))
 	local v = simod.list("items")
 	print(v[1], v[2], v[3], v[4])
 -- 	local obj = simod.select("items", "sw1h34")
 -- 	dump(obj)
+	print(blue("listing abilities from sw1h34:"))
 	local v2 = simod.list("item_abilities", "sw1h34")
 	dump(v2)
+	print(blue("listing effects of ability ", v2[2]))
+	local v3 = simod.list("item_ability_effects", v2[2])
+	dump(v3)
+	print(red(bold("testing simod.select")))
+	print(blue("selecting item sw1h34:"))
+	local x = simod.select("items", "sw1h34")
+	dump(x)
 end
 test_core()
 function test_objects()

@@ -40,6 +40,7 @@ x:
 	-echo "delete from edit_item_abilities" | sqlite3 game.sqlite
 	-echo "delete from edit_item_effects" | sqlite3 game.sqlite
 	$(RUN) -O init.log init -B
+#  	$(RUN) -O add.log add t
 	-echo "select * from add_items" | sqlite3 game.sqlite
 	-echo "select itemref,abref from item_abilities where itemref in (select itemref from add_items)" |sqlite3 game.sqlite
 	-echo "select itemref,abref,effectref,opcode from item_effects where itemref in (select itemref from add_items)" |sqlite3 game.sqlite

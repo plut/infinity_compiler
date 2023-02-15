@@ -147,7 +147,7 @@ impl TopResource for Item {
 	fn load(tables: &mut AllTables<Statement<'_>>, db: &impl DbInterface, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
 		let item = Item::unpack(&mut cursor)
 			.context("cannot unpack Item main struct")?;
-		let n = item.bind_execute1(&mut tables.items, &resref)
+		let n = item.bind_execute1(&mut tables.items, resref)
 			.context("inserting into 'items'")?;
 		if n == 0 {
 			warn!("skipped inserting item {resref}");
@@ -162,7 +162,7 @@ impl TopResource for Item {
 				.with_context(|| format!("cannot unpack item ability {}/{}",
 					ab_index, item.abilities_count))?;
 
-			ability.bind_execute2(&mut tables.item_abilities, &resref, &ab_index)
+			ability.bind_execute2(&mut tables.item_abilities, resref, ab_index)
 				.context("inserting into 'item_abilities'")?;
 			ab_info.push((ability.effect_count, db.last_insert_rowid()));
 		}
@@ -172,14 +172,14 @@ impl TopResource for Item {
 			let effect = ItemEffect::unpack(&mut cursor)
 				.with_context(|| format!("cannot unpack global item effect {}/{}",
 					j+1, item.equip_effect_count))?;
-			effect.bind_execute2(&mut tables.item_effects, &resref, &j)
+			effect.bind_execute2(&mut tables.item_effects, resref, j)
 				.context("inserting into 'item_effects'")?;
 		}
 		for (n, ab_id) in ab_info.iter() {
 			for j in 1..(1+*n) {
 				let effect = ItemEffect::unpack(&mut cursor)
 					.with_context(|| format!("cannot unpack item effect {}/{} for ability {}", j+1, n, ab_id))?;
-				effect.bind_execute2(&mut tables.item_ability_effects, &ab_id, &j)
+				effect.bind_execute2(&mut tables.item_ability_effects, ab_id, j)
 					.context("inserting into 'item_ability_effects'")?;
 			}
 		}
@@ -292,7 +292,7 @@ macro_rules! list_tables {
 		impl Restype {
 			pub fn from(e: &str)->Self {
 				$(table_restype!(e,$which($($arg)*)));*;
-				panic!("extension has no associated restype: {e}")
+				Self(0)
 			}
 		}
 	}
