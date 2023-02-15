@@ -26,7 +26,7 @@ t: test
 test:
 	rm -rf $(BG)/simod_out
 	$(RUN) -O init.log init -B
-	echo "update \"items\" set price=5,name='A new name for Albruin' where itemref='sw1h34';" | sqlite3 $(DB)
+	echo "update \"items\" set price=5,name='A new name for Albruin' where id='sw1h34';" | sqlite3 $(DB)
 	$(RUN) -O show.log show sw1h34.itm
 	$(RUN) -O add.log add target
 	$(RUN) -O save.log save
@@ -39,11 +39,11 @@ x:
 	-echo "delete from edit_items" | sqlite3 game.sqlite
 	-echo "delete from edit_item_abilities" | sqlite3 game.sqlite
 	-echo "delete from edit_item_effects" | sqlite3 game.sqlite
-	$(RUN) -O init.log init -B
-#  	$(RUN) -O add.log add t
+#  	$(RUN) -O init.log init -B
+	$(RUN) -O add.log add t
 	-echo "select * from add_items" | sqlite3 game.sqlite
-	-echo "select itemref,abref from item_abilities where itemref in (select itemref from add_items)" |sqlite3 game.sqlite
-	-echo "select itemref,abref,effectref,opcode from item_effects where itemref in (select itemref from add_items)" |sqlite3 game.sqlite
+	-echo "select parent,id from item_abilities where parent in (select id from add_items)" |sqlite3 game.sqlite
+	-echo "select parent,root,id,opcode from item_effects where root in (select id from add_items)" |sqlite3 game.sqlite
 
 save:
 	$(RUN) -O save.log save

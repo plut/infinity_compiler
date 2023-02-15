@@ -2,28 +2,6 @@
 //!
 //! This crate makes heavy use of the `Pack` and `SqlRow` derive macros to
 //! automatically interface with game files and the SQL database.
-//!
-//! **Most** of the Lua-side definition of resource schemas is also
-//! derived from here. The exception is the relation between resources
-//! and their subresources. For now, this is inserted by hand by the
-//! `init.lua` file.
-//!
-//! The tables share the following common structure:
-//! 1. Payload fields: these carry actual game information and
-//!    and are defined in game resources. These always come as the first
-//!    columns so that `select` statements can load resource fields from
-//!    predictible column indices.
-//! 2. Context fields: these identify in which game resource, and where,
-//!    this information is located. The first context field is always
-//!    the resref for the main resource.
-//!    These fields also carry a `unique` constraint.
-//! 3. For subresources: a `rowid` alias (`integer primary key`).
-//!    (Top-level resources don't need this:
-//!    they have the resref as their primary key).
-//!
-//! The `integer primary key` is needed even for subresources:
-//! namely, we want these to have a persistent identifier
-//! for joins with the edit tables.
 #![feature(trace_macros)]
 use crate::prelude::*;
 use crate::pack::{Pack,PackAll};
@@ -202,12 +180,12 @@ impl TopResource for Item {
 	fn select_subresources(&mut self, tables: &mut AllTables<Statement<'_>>, itemref: Resref)->Result<Self::Subresources> {
 		debug!("reading item: {}", itemref);
 		let mut abilities = Vec::<(ItemAbility,Vec<ItemEffect>)>::new();
-		let item_effects = ItemEffect::read_rows_vec(&mut tables.item_effects, (itemref,))?;
+		let item_effects = ItemEffect::collect_rows(&mut tables.item_effects, (itemref,))?;
 		self.equip_effect_count = item_effects.len() as u16;
 		let mut current_effect_idx = self.equip_effect_count;
-		for x in ItemAbility::read_rows(&mut tables.item_abilities, (itemref,))? {
+		for x in ItemAbility::iter_rows(&mut tables.item_abilities, (itemref,))? {
 			let (ab_id, mut ability) = x?;
-			let ab_effects = ItemEffect::read_rows_vec(&mut tables.item_ability_effects, (ab_id,))?;
+			let ab_effects = ItemEffect::collect_rows(&mut tables.item_ability_effects, (ab_id,))?;
 			ability.effect_count = ab_effects.len() as u16;
 			ability.effect_index = current_effect_idx;
 			current_effect_idx+= ability.effect_count;
@@ -222,7 +200,7 @@ impl TopResource for Item {
 impl SubResource for ItemAbility { }
 impl SubResource for ItemEffect { }
 
-macro_rules! list_tables {
+macro_rules! tables {
 	($($tablename:ident: $ty:ty = $which:ident ($($arg:tt)*));*$(;)?) => {
 		#[derive(Debug)]
 		pub struct AllTables<X: Debug> {
@@ -285,7 +263,22 @@ macro_rules! table_restype {
 	}
 }
 // trace_macros!(true);
-list_tables! {
+/// Builds the full list of schemas for all resource tables.
+///
+/// The syntax is as follows:
+/// `table_name: StructType = header`,
+/// where `header` is either:
+///  - `Top("extension", resource_type)`,
+///  - `Sub(parent [, root])`
+///
+/// In these:
+///  - `extension` is the file extension for this resource (e.g. `"itm"`),
+///  - `resource_type` is the numeric identifier (e.g. 0x03ed),
+///  - `parent` is the identifier for the parent table,
+///  - `root` is the identifier for the highest resource table (strictly
+///  put, this could be derived from the parent relations, but
+///  `macro_rules!` is not too practical for walking in trees).
+tables! {
 	items: Item = Top ("itm", 0x03ed);
 	item_abilities: ItemAbility = Sub (items);
 	item_ability_effects: ItemEffect = Sub(item_abilities, items);

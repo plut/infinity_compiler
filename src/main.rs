@@ -607,31 +607,31 @@ use crate::staticstrings::{StaticString};
 /// (Note that, since `Pack` does not know how to work with
 /// unnamed structs, we use a named struct here).
 #[derive(Clone,Copy,Default)]
-pub struct Resref { pub name: StaticString::<8>, }
+pub struct Resref(StaticString<8>);
 impl Debug for Resref {
-	fn fmt(&self, f:&mut Formatter<'_>)->fmt::Result { Debug::fmt(&self.name, f) }
+	fn fmt(&self, f:&mut Formatter<'_>)->fmt::Result { Debug::fmt(&self.0, f) }
 }
 impl Display for Resref {
-	fn fmt(&self, f:&mut Formatter<'_>)->fmt::Result {Display::fmt(&self.name, f)}
+	fn fmt(&self, f:&mut Formatter<'_>)->fmt::Result {Display::fmt(&self.0, f)}
 }
 impl Pack for Resref {
 	fn unpack(f: &mut impl Read)->io::Result<Self> {
 		let mut name = StaticString::<8>::unpack(f)?;
 		name.make_ascii_lowercase();
-		Ok(Self { name, })
+		Ok(Self(name))
 	}
-	fn pack(&self, f: &mut impl Write)->io::Result<()> { self.name.pack(f) }
+	fn pack(&self, f: &mut impl Write)->io::Result<()> { self.0.pack(f) }
 }
 impl ToSql for Resref {
 	fn to_sql(&self)->rusqlite::Result<ToSqlOutput<'_>> {
-		self.name.as_ref().to_sql()
+		self.0.as_ref().to_sql()
 	}
 }
 impl FromSql for Resref {
 	fn column_result(v: ValueRef<'_>)->FromSqlResult<Self> {
 		match v {
-			ValueRef::Text(s) => Ok(Resref { name: s.into() }),
-			ValueRef::Null => Ok(Resref { name: "".into() }),
+			ValueRef::Text(s) => Ok(Self(s.into())),
+			ValueRef::Null => Ok(Self("".into())),
 			_ => Err(FromSqlError::InvalidType)
 		}
 	}
@@ -641,10 +641,8 @@ impl Resref {
 	pub fn fresh(source: &str, mut is_used: impl FnMut(&Resref)->rusqlite::Result<bool> )->rusqlite::Result<Self> {
 		let mut gen = crate::staticstrings::Generator::<8>::new(source);
 		loop {
-			let resref = Resref { name: *gen.next() };
-			if !is_used(&resref)? {
-				return Ok(resref)
-			}
+			let resref = Resref(*gen.next());
+			if !is_used(&resref)? { return Ok(resref) }
 		}
 	}
 }
@@ -892,7 +890,7 @@ impl GameIndex {
 					Ok(s) => s };
 				let pos = match name.find('.') { None => continue, Some(p) => p };
 				if pos > 8 { continue }
-				let resref = Resref { name: StaticString::<8>::from(&name[..pos]), };
+				let resref = Resref(StaticString::<8>::from(&name[..pos]));
 				let ext = &name[pos+1..];
 				let restype = Restype::from(ext);
 				trace!("reading override file: {name}; restype={restype:?}");
@@ -1320,6 +1318,13 @@ end"#))?;
 			uwriteln!(w, ";");
 		}
 	}
+	/// Displays a full description of the schema on stdout.
+	pub fn describe(&self) {
+		println!("header = {:?}", self.table_type);
+		for (i, f) in self.fields.iter().enumerate() {
+			println!("{i:2} {:<20} {}", f.fname, f.ftype.to_lua());
+		}
+	}
 }
 
 } // mod schemas
@@ -1340,14 +1345,17 @@ use crate::database::{DbInserter};
 /// Rust struct go to [`SqlRow`].
 /// Methods depending only on the schema go to [`Schema`].
 /// Methods depending only on the list of columns from the schema (i.e.
-/// the intersection of both cases) go to [`ColumnWriter`]
+/// the intersection of both cases) go to [`crate::schemas::Fields`]
 pub trait TopResource: SqlRow {
 	const EXTENSION: &'static str;
 	const RESTYPE: Restype;
 	type Subresources;
 
+	/// Loads a resource from filesystem directly into database.
 	fn load(tables: &mut AllTables<Statement<'_>>, db: &impl DbInterface, cursor: impl Read+Seek, resref: Resref) -> Result<()>;
+	/// Saves a resource (from struct + subresources) to filesystem.
 	fn save(&mut self, file: impl Write+Seek+Debug, subresources: &Self::Subresources) ->Result<()>;
+	/// Selects subresources from database.
 	fn select_subresources(&mut self, tables: &mut AllTables<Statement<'_>>, resref: Resref)->Result<Self::Subresources>;
 	// Provided functions:
 	fn load_from_handle<T: DbInterface>(db: &mut DbInserter<'_,T>, resref: Resref,
@@ -1366,7 +1374,7 @@ pub trait TopResource: SqlRow {
 			r#"select "id", {cols} from "{name}" where "id" in "dirty_{name}""#,
 			cols=Self::FIELDS))?;
 		let mut n_saved = 0;
-		for row in Self::read_rows(&mut sel, ())? {
+		for row in Self::iter_rows(&mut sel, ())? {
 			let (resref, mut resource) = row?;
 			let subresources = resource.select_subresources(tables, resref)?;
 			let filename = format!("{resref}.{extension}");
@@ -1377,16 +1385,17 @@ pub trait TopResource: SqlRow {
 		}
 		Ok(n_saved)
 	}
-	fn read_rows<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(Resref,Self)>> {
+	fn iter_rows<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(Resref,Self)>> {
 		Ok(s.query(params)?.into())
 	}
 }
 pub trait SubResource: SqlRow {
-	fn read_rows<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(i64,Self)>> {
+	/// Iterates over rows returned by this statement, as (i64, Self).
+	fn iter_rows<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(i64,Self)>> {
 		Ok(s.query(params)?.into())
 	}
-	fn read_rows_vec(s: &mut Statement<'_>, params: impl rusqlite::Params)->Result<Vec<Self>> {
-		Self::read_rows(s, params)?.map(|x| Ok(x?.1)).collect()
+	fn collect_rows(s: &mut Statement<'_>, params: impl rusqlite::Params)->Result<Vec<Self>> {
+		Self::iter_rows(s, params)?.map(|x| Ok(x?.1)).collect()
 	}
 }
 impl AllTables<Schema> {
@@ -1589,10 +1598,6 @@ pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 } // mod gamestrings
 pub(crate) mod database {
 //! Access to the SQL side of the database.
-//!
-//! Main exports are:
-//!  - [`Schema`] type: description of a particular SQL table;
-//!  - [`Resource`] trait: connect a Rust structure to a SQL row.
 use crate::prelude::*;
 use crate::restypes::*;
 use crate::gamefiles::GameIndex;
@@ -1773,7 +1778,7 @@ impl GameDB {
 	///
 	/// There are global tables, per-resource tables, and per-language tables.
 	/// The per-resource tables are described in the
-	/// [`Schema::create_tables_and_views`] function.
+	/// [`crate::schemas::Schema::create_tables_and_views`] function.
 	/// The per-language tables are described in [`Self::create_language_tables`].
 	/// The global tables are the following:
 	///
@@ -1784,8 +1789,7 @@ impl GameDB {
 	///    de-namespacing (all resrefs in this list translate to themselves);
 	/// - `resref_dict`: translations of resrefs (from namespaced to 8 bytes);
 	/// - `strref_dict`: translations of strrefs (from string key to 4-bytes int);
-	/// - `new_strings`: (built in [`crate::schemas::create_new_strings`])
-	///    a view of all strrefs currently introduced by mods.
+	/// - `new_strings`: a view of all strrefs currently introduced by mods.
 	///    This gets compiled into `strref_dict` as part of `save`.
 	pub fn create(db_file: impl AsRef<Path>, game: &GameIndex)->Result<Self> {
 		let db_file = db_file.as_ref();
@@ -1952,7 +1956,7 @@ macro_rules! fail {
 impl<'lua> Value<'lua> {
 	/// Conversion to SQL.
 	/// We need this as (1) a tool for impl of [`ToLua`] for a newtype
-	/// around [`&Value`], and (2) to decouple the lifetime of the
+	/// around [`Value`], and (2) to decouple the lifetime of the
 	/// resulting `ToSqlOutput` from the incoming reference
 	/// (since we are producing owned values here, we can use `'static`).
 	///
@@ -1975,7 +1979,7 @@ impl<'lua> Value<'lua> {
 		x
 	}
 }
-/// A newtype around [`&mlua::Value`], allowing us to implement various
+/// A newtype around [`mlua::Value`], allowing us to implement various
 /// extra traits: [`rusqlite::ToSql`], custom [`Debug`] etc.
 ///
 /// This would be more properly written with *two* lifetime parameters
@@ -2356,7 +2360,6 @@ use crate::resources::{TopResource};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
-
 /// Saves all modified game strings and resources to current directory.
 ///
 /// This function saves in the current directory;
@@ -2523,17 +2526,9 @@ fn main() -> Result<()> {
 		Command::Add{ target, .. } =>
 			lua_api::command_add(GameDB::open(db_file)?, &target)?,
 		Command::Schema{ table, .. } => match table {
-			None => {
-				SCHEMAS.map(|schema| any_ok(println!("{}", schema.name)))?;
-			},
-			Some(s) => {
-				let schema = SCHEMAS.by_name(&s)?;
-				println!("header = {:?}", schema.table_type);
-				for (i, f) in schema.fields.iter().enumerate() {
-					println!("{i:2} {:<20} {}", f.fname, f.ftype.to_lua());
-				}
-			},
-			},
+			None => { SCHEMAS.map(|schema| any_ok(println!("{}", schema.name)))?; },
+			Some(s) => { SCHEMAS.by_name(&s)?.describe(); },
+		},
 		_ => todo!(),
 	};
 	info!("execution terminated with flying colors");
