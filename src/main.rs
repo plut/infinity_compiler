@@ -549,6 +549,7 @@ impl<T: FromSqlRow> Iterator for TypedRows<'_,T> {
 			let row = match self.rows.next() {
 				Ok(Some(row)) => row,
 				Ok(None) => break,
+				Err(e)
 				Err(e) => return Some(Err(e.into()))
 			};
 			self.index+= 1;
@@ -1395,7 +1396,7 @@ pub trait TopResource: SqlRow {
 	}
 }
 pub trait SubResource: SqlRow {
-	fn select_where<T: FromSql>(db: &impl DbInterface, name: impl Display)->Result<TypedStatement<'_,(T,Self)>> {
+	fn select_where(db: &impl DbInterface, name: impl Display)->Result<TypedStatement<'_,(i64,Self)>> {
 		TypedStatement::<'_,_>::new(db, format!(
 		r#"select "id", {cols} from "{name}" where "parent"=? sort by "position""#,
 		cols=Self::FIELDS))
@@ -1612,27 +1613,6 @@ use crate::restypes::*;
 use crate::gamefiles::GameIndex;
 use crate::resources::{TopResource};
 
-// I. Low-level stuff: basic types and extensions for `rusqlite` traits.
-/// Detecting recoverable errors due to incorrect SQL typing.
-pub trait DbTypeCheck {
-	/// Returns `true` when a `Result` is an `Err` variant corresponding to
-	/// a recoverable error due to a wrong SQL type.
-	fn is_db_malformed(&self)->bool;
-}
-impl<T> DbTypeCheck for Result<T,anyhow::Error> {
-	fn is_db_malformed(&self)-> bool {
-		use rusqlite::types::FromSqlError::{self,*};
-		let err = match self { Ok(_) => return false, Err(e) => e };
-		matches!(err.downcast_ref::<FromSqlError>(), Some(InvalidType))
-	}
-}
-impl<T> DbTypeCheck for Result<T, rusqlite::Error> {
-	fn is_db_malformed(&self)-> bool {
-		matches!(self, Err(rusqlite::Error::FromSqlConversionFailure(_,_,_)))
-	}
-}
-
-// III. Structure accessing directly SQL data
 /// A trivial wrapper on [`rusqlite::Connection`];
 /// mainly used for standardizing log messages.
 #[derive(Debug)]

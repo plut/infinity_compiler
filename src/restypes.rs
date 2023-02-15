@@ -204,33 +204,26 @@ impl TopResource for Item {
 		// TODO: find something intelligent to have
 		// all of this encoded in the `AllTables` structure
 		let mut sel_item = Self::select_dirty(db, "save_items")?;
-		let mut sel_ab = ItemAbility::select_where::<Resref>(db,
-			"save_item_abilities")?;
-		let mut sel_eff = ItemEffect::select_where::<Resref>(db,
-			"save_item_effects")?;
-		let mut sel_ab_eff = ItemEffect::select_where::<i64>(db,
-			"save_item_ability_effects")?;
+		let mut sel_ab = ItemAbility::select_where(db, "save_item_abilities")?;
+		let mut sel_eff = ItemEffect::select_where(db, "save_item_effects")?;
+		let mut sel_ab_eff = ItemEffect::select_where(db, "save_item_ability_effects")?;
 		let mut n_items = 0;
 		for x in sel_item.iter(())? {
 			// TODO: move this inside TypedRows itself!
-			if x.is_db_malformed() { continue }
 			let (itemref, mut item) = x?;
 			debug!("reading item: {}", itemref);
 			let mut abilities = Vec::<(ItemAbility,Vec<ItemEffect>)>::new();
 			let mut item_effects = Vec::<ItemEffect>::new();
 			for x in sel_eff.iter((&itemref,))? {
-				if x.is_db_malformed() { continue }
 				let (_, effect) = x?;
 				item_effects.push(effect);
 			}
 			item.equip_effect_count = item_effects.len() as u16;
 			let mut current_effect_idx = item.equip_effect_count;
 			for x in sel_ab.iter((&itemref,))? {
-				if x.is_db_malformed() { continue }
 				let (ab_id, mut ability) = x?;
 				let mut ab_effects = Vec::<ItemEffect>::new();
 				for x in sel_ab_eff.iter((&ab_id,))? {
-					if x.is_db_malformed() { continue }
 					let (_, effect) = x?;
 					ab_effects.push(effect);
 				}
