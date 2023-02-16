@@ -124,7 +124,7 @@ pub struct Item {
 
 impl ResourceIO for Item {
 	/// load an item from cursor
-	fn load(mut io: impl Read+Seek, resref: Resref)->Result<Self> {
+	fn load(mut io: impl Read+Seek)->Result<Self> {
 		let mut item = Item::unpack(&mut io)
 			.context("unpack Item main struct")?;
 

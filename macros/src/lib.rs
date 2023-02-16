@@ -482,12 +482,12 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let mut node_struct = quote!{};
 	let mut recurse = quote!{};
 	let mut fields_node = quote!{};
-	let mut index = quote!{ i64 };
-	let mut build = quote!{};
+	let mut primary = quote!{ i64 };
+	let mut insert_sub = quote!{};
 	for (name, mut args) in attrs.iter().map(parse_attr) {
 		match name.as_str() {
 			"top" => if let Some(AttrArg::Ident(s)) = args.get::<syn::Expr>() {
-				index = quote!{ crate::gamefiles::Resref };
+				primary = quote!{ crate::gamefiles::Resref };
 				define_top_resource(TopResource {
 					table_name: s.clone(),
 					type_name: ident.to_string(),
@@ -511,8 +511,12 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				.to_tokens(&mut recurse);
 			quote!{ #name: <#eltype as crate::resources::Resource>::FIELDS_NODE, }
 				.to_tokens(&mut fields_node);
-			quote!{ self.#name = #eltype::collect_rows(&mut node.#name, (index,))?; }
-				.to_tokens(&mut build);
+			quote!{ for (index, sub) in self.#name.iter().enumerate() {
+					sub.insert_as_subresource(db, &mut node.#name, primary, index)?;
+				}
+			}.to_tokens(&mut insert_sub);
+// 			quote!{ self.#name = #eltype::collect_rows(&mut node.#name,(primary,))?;}
+// 				.to_tokens(&mut select_sub);
 		}
 	}
 	let node_ty = ident.node_ident();
@@ -542,10 +546,16 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				#fields_node
 				content: <Self as crate::sql_rows::SqlRow>::FIELDS
 			};
-			type Index = #index;
+			type Primary = #primary;
 			type StatementNode<'a> = #node_ty<Statement<'a>>;
-			fn build(&mut self, node: &mut #node_ty<Statement<'_>>, index: #index)->Result<()> {
-				#build
+// 			fn select_sub(&mut self, node: &mut #node_ty<Statement<'_>>,
+// 				primary: #primary)->Result<()> {
+// 				#select_sub
+// 				Ok(())
+// 			}
+			fn insert_subresources(&self, db: &Connection, node: &mut #node_ty<Statement<'_>>,
+				primary: impl rusqlite::ToSql+Copy)->Result<()> {
+				#insert_sub
 				Ok(())
 			}
 		}
