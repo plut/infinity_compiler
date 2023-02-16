@@ -317,7 +317,7 @@ macro_rules! table_type {
 	{Sub($parent:ident)} => { table_type!(Sub($parent, $parent)) };
 	{Sub($parent:ident,$root:ident)} => {
 		crate::schemas::TableType::Sub {
-			parent: stringify!($parent),
+			parent: stringify!($parent).to_owned(),
 			root: stringify!($root),
 		}
 	};

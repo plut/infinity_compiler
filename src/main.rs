@@ -1126,12 +1126,12 @@ impl<T: Display> Display for FieldsWithPrefix<T> {
 }
 
 /// Identifies whether this is a top resource or a sub-resource.
-#[derive(Debug,Clone,Copy)]
+#[derive(Debug,Clone)]
 pub enum TableType {
 	/// A top-level resource (associated to a given file extension).
 	Top { extension: &'static str, },
 	/// A sub-resource
-	Sub { parent: &'static str, root: &'static str, },
+	Sub { parent: String, root: &'static str, },
 }
 /// The full database description of a game resource.
 ///
@@ -1160,7 +1160,7 @@ impl Schema {
 	/// Creates a table with this schema and an arbitrary name.
 	pub fn create_table(&self, name: impl Display, more: impl Display)->String {
 		let mut sql = format!("create table \"{name}\" (");
-		if let TableType::Sub { parent, .. } = self.table_type {
+		if let TableType::Sub { parent, .. } = &self.table_type {
 			uwrite!(&mut sql, r#"
 	"id" integer primary key,
 	"position" integer,
@@ -1182,7 +1182,7 @@ impl Schema {
 		let mut sql = format!(r#"create view "{self}" as
 	select "source"."id""#);
 		let source_position: &'static str;
-		if let TableType::Sub { parent, .. } = self.table_type {
+		if let TableType::Sub { parent, .. } = &self.table_type {
 			source_position = r#""parent", "position", "#;
 			uwrite!(&mut sql, r#",
 	"{parent}"."root" as "root",
@@ -1201,7 +1201,7 @@ impl Schema {
 from
 	(select "id", {source_position}{fields} from "load_{self}" union select "id", {source_position}{fields} from "add_{self}")
 as "source""#, fields = self.fields);
-		if let TableType::Sub{ parent, .. } = self.table_type {
+		if let TableType::Sub{ parent, .. } = &self.table_type {
 			uwrite!(&mut sql, r#"
 	inner join "{parent}" on "source"."parent" = "{parent}"."id""#);
 		}
@@ -1383,7 +1383,7 @@ pub mod resources {
 use crate::prelude::*;
 use rusqlite::{ToSql,types::{FromSql}};
 use crate::sql_rows::{SqlRow,TypedRows};
-use crate::schemas::{Schema};
+use crate::schemas::{Schema,Fields};
 use crate::gamefiles::Restype;
 use crate::restypes::{RootNode,TOP_FIELDS,AllTables};
 use crate::database::{DbInserter};
@@ -1407,13 +1407,13 @@ pub trait Recurse<Y>: DerefMut {
 	/// For each node in the tree, the closure `f` is invoked with:
 	///  - the content of the node,
 	///  - the name of this node (as a `&'static str`),
-	///  - the accumulator computed for the parent (as an `Option`),
+	///  - the state computed for the parent (as an `Option`),
 	/// It should return a tuple of:
-	///  - the new accumulator value passed to children,
+	///  - the new state value passed to children,
 	///  - the value computed for this node.
-	fn recurse<'n,A,E,F>(&self, f: F, name: &'n str, acc: Option<&A>)
+	fn recurse<'n,S,E,F>(&self, f: F, name: &'n str, state: Option<&S>)
 		->Result<Self::To,E>
-	where F: Fn(&Self::Target, &'n str, Option<&A>)->Result<(A,Y),E>;
+	where F: Fn(&Self::Target, &'n str, Option<&S>)->Result<(S,Y),E>;
 	// Supplied methods:
 	/// Apply a closure to each element of the tree; fallible version.
 	fn try_map<E,F>(&self, f: F)->Result<Self::To,E>
@@ -1517,20 +1517,56 @@ pub trait ResourceIO: Resource<Primary=Resref> {
 		Ok(())
 	}
 }
+/// A helper type for building schemas for all in-game resource.
+struct SchemaBuildState {
+	level: usize,
+	table_name: String,
+	parent_name: &'static str,
+	root: &'static str,
+	table_type: crate::schemas::TableType,
+}
+impl SchemaBuildState {
+	fn descend(state: Option<&Self>, _fields: &Fields, name: &'static str)->Self {
+		use crate::schemas::TableType;
+		if let Some(parent) = state {
+			Self {
+				level: parent.level+1,
+				table_name: format!("{}_{name}", parent.table_name),
+				parent_name: name,
+				root: parent.root,
+				table_type: TableType::Sub {
+					parent: parent.table_name.clone(),
+					root: parent.root
+				},
+			}
+		} else {
+			Self {
+				level: 0,
+				table_name: name.to_owned(),
+				parent_name: name,
+				root: name,
+				table_type: TableType::Top {
+					extension: ""
+				},
+			}
+		}
+	}
+	fn schema(&self, fields: &Fields)->Schema {
+		Schema {
+			table_type: self.table_type.clone(),
+			fields: *fields,
+			name: self.table_name.clone(),
+		}
+	}
+}
 /// The definition of schemas for all in-game resources.
 pub static ALL_SCHEMAS: Lazy<RootNode<Schema>> = Lazy::new(|| {
-	TOP_FIELDS.recurse(|fields,name,acc| {
+	// state contains: (level, "table_name", "parent_name", "root")
+	TOP_FIELDS.recurse(|fields,name,state| {
 		use crate::schemas::{TableType};
-		let (i,r) = if let Some((j, s)) = acc {
-			(j+1, format!("{s}_{name}"))
-		} else {
-			(0, name.to_owned())
-		};
-		infallible(((i, r.clone()), Schema {
-			name: r,
-			table_type: TableType::Top { extension: "" },
-			fields: *fields,
-		}))
+		let new_state = SchemaBuildState::descend(state, fields, name);
+		let schema = new_state.schema(fields);
+		infallible((new_state, schema))
 	}, "", None).unwrap()
 });
 
@@ -1810,7 +1846,7 @@ pub mod database {
 use crate::prelude::*;
 use crate::restypes::*;
 use crate::gamefiles::GameIndex;
-use crate::resources::{TopResource9,ALL_SCHEMAS,Recurse};
+use crate::resources::{TopResource9,ALL_SCHEMAS,Recurse,ResourceIO};
 
 /// A trivial wrapper on [`rusqlite::Connection`];
 /// mainly used for standardizing log messages.
@@ -2023,7 +2059,7 @@ create table "resref_dict" ("key" text not null primary key on conflict ignore, 
 create table "strref_dict" ("native" text not null primary key, "strref" integer unique);
 create index "strref_dict_reverse" on "strref_dict" ("strref");
 			"#).context("create strings tables")?;
-			SCHEMAS().map(|schema| {
+			ALL_SCHEMAS.try_map(|schema| {
 				debug!("  creating tables for resource '{schema}'");
 				schema.create_tables_and_views(|s| db.exec(s))
 			}).context("cannot create main tables and views")?;
@@ -2079,7 +2115,8 @@ from "new_strings"
 					.with_context(|| format!("could not register resref:{resref}"))?;
 				#[allow(clippy::single_match)]
 				match restype {
-				Item::RESTYPE => Item::load_from_handle9(&mut base, resref, handle)?,
+				Item::RESTYPE => Item::load_from_handle(base.db, &mut base.statements.items, resref, handle)?,
+// 				Item::RESTYPE => Item::load_from_handle9(&mut base, resref, handle)?,
 				_ => (),
 				};
 				Ok(())
@@ -2111,7 +2148,7 @@ impl<'a,T: DbInterface> DbInserter<'a, T> {
 	/// resources.
 	pub fn new(db: &'a T, schemas: &'a AllTables<crate::schemas::Schema>)->Result<Self> {
 		Ok(Self { db,
-		statements: (*ALL_SCHEMAS).try_map(|schema|
+		statements: ALL_SCHEMAS.try_map(|schema|
 			db.prepare(&schema.insert_sql("load_"))
 				.with_context(|| format!("insert statement for table '{schema}'")))?,
 		tables: schemas.map(|schema|
@@ -2740,9 +2777,9 @@ fn main() -> Result<()> {
 	}, "", None)?;
 // 	println!("{:?}",
 // 	*ALL_SCHEMAS);
-	if 1 > 0 {
-	return Ok(nothing)
-	}
+// 	if 1 > 0 {
+// 	return Ok(nothing)
+// 	}
 	let mut options = RuntimeOptions::parse();
 	if options.database.is_none() {
 		options.database = Some(Path::new("game.sqlite").into());

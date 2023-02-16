@@ -14,6 +14,13 @@ run:
 	cargo b
 	$(MAKE) test
 
+b: build
+build:
+	cargo b
+
+init: build
+	$(RUN) -O init.log init -B
+
 c: clippy
 clippy:
 	cargo clippy --color=always 2>&1 | less -R
