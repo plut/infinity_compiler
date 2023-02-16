@@ -514,6 +514,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	}
 	let node_ty = ident.node_ident();
 	let code = quote! {
+		/// A `Node` impl. derived by `derive(Resource)`.
 		#[derive(Debug)]
 		pub struct #node_ty<T: Debug> { #node_struct content: T }
 		impl<X: Debug> Deref for #node_ty<X> {
@@ -566,6 +567,7 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 		}
 	});
 	let code = quote!{
+		/// A `Node` impl. derived by `derive(Resource)`.
 		#[derive(Debug)] pub struct RootNode<X: Debug> { #data
 			_marker: PhantomData<X>
 		}
