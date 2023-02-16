@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"macro":[["pack_tuple",""],["unpack_int",""]],"struct":[["NotPacked","A newtype which is pass-through for SQL and blocking for [`Pack`]."]],"trait":[["NoPack",""],["Pack","A type which may be packed to binary."]]};
+window.SIDEBAR_ITEMS = {"macro":[["pack_tuple",""],["unpack_int",""]],"trait":[["NoPack","A trait which provides a dummy pack implementation."],["Pack","A type which may be packed to binary."],["PackAll","Convenience trait used for packing vectors in one call."]]};

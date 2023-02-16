@@ -317,6 +317,19 @@ This is the</li>
 <p>In general, mods should only interact with the main view <code>X</code>.
 The structure of all other views listed here is <strong>unstable</strong>.</p>
 </blockquote>
+<p>The columns of the table <code>X</code> are the following:</p>
+<ul>
+<li>the primary key is always called <code>&quot;id&quot;</code>; for the top-level resources,
+it is the resource identifier, while for sub-resources this is a
+numeric key;</li>
+<li>for sub-resources only, a column called <code>&quot;parent&quot;</code>, which refers to
+the primary key of the parent resource, followed by a column called
+<code>&quot;position&quot;</code>, which is used as a sort key for collecting
+sub-resources;</li>
+<li>then all “payload” fields as described in e.g. IESDP. All the fields
+describing sub-resources (offset, count etc.) are removed from this
+list, since sub-resources are described in their own tables.</li>
+</ul>
 <p>For top-level resources, a few additional tables are used to mark their
 status in the database with respect to the override directory:</p>
 <ul>
