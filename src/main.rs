@@ -1416,14 +1416,14 @@ pub trait Recurse<Y>: DerefMut {
 	where F: Fn(&Self::Target, &'n str, Option<&A>)->Result<(A,Y),E>;
 	// Supplied methods:
 	/// Apply a closure to each element of the tree; fallible version.
-	fn map_q<E,F>(&self, f: F)->Result<Self::To,E>
+	fn try_map<E,F>(&self, f: F)->Result<Self::To,E>
 	where F: Fn(&Self::Target)->Result<Y,E> {
 		self.recurse(|x, _, _| f(x).map(|x| ((),x)), "", None)
 	}
 	/// Apply a closure to each element of the tree; infallible version.
 	fn map<F>(&self, f: F)->Self::To
 	where F: Fn(&Self::Target)->Y {
-		self.map_q(|x| Ok::<_,Infallible>(f(x))).unwrap()
+		self.try_map(|x| Ok::<_,Infallible>(f(x))).unwrap()
 	}
 // 	/// Recursively apply a closure to the tree (top-down fold); fallible
 // 	/// version.
@@ -1810,7 +1810,7 @@ pub mod database {
 use crate::prelude::*;
 use crate::restypes::*;
 use crate::gamefiles::GameIndex;
-use crate::resources::{TopResource9,ALL_SCHEMAS};
+use crate::resources::{TopResource9,ALL_SCHEMAS,Recurse};
 
 /// A trivial wrapper on [`rusqlite::Connection`];
 /// mainly used for standardizing log messages.
@@ -2099,7 +2099,7 @@ pub struct DbInserter<'a, T: DbInterface> {
 	pub db: &'a T,
 	add_resref: Statement<'a>,
 // 	/// the insert statements for all tables
-// 	pub statements: RootNode<Statement<'a>>,
+	pub statements: RootNode<Statement<'a>>,
 	/// the insert statements for all tables
 	pub tables: AllTables<Statement<'a>>,
 	/// the statement marking that a resource lives in override
@@ -2111,6 +2111,9 @@ impl<'a,T: DbInterface> DbInserter<'a, T> {
 	/// resources.
 	pub fn new(db: &'a T, schemas: &'a AllTables<crate::schemas::Schema>)->Result<Self> {
 		Ok(Self { db,
+		statements: (*ALL_SCHEMAS).try_map(|schema|
+			db.prepare(&schema.insert_sql("load_"))
+				.with_context(|| format!("insert statement for table '{schema}'")))?,
 		tables: schemas.map(|schema|
 			db.prepare(&schema.insert_sql("load_"))
 				.with_context(|| format!("insert statement for table '{schema}'")))?,
