@@ -1741,7 +1741,7 @@ pub mod database {
 use crate::prelude::*;
 use crate::restypes::*;
 use crate::gamefiles::GameIndex;
-use crate::resources::{TopResource};
+use crate::resources::{TopResource,ALL_SCHEMAS};
 
 /// A trivial wrapper on [`rusqlite::Connection`];
 /// mainly used for standardizing log messages.
@@ -2093,6 +2093,7 @@ use rusqlite::{ToSql, types::ToSqlOutput};
 use std::collections::HashMap;
 
 use crate::prelude::*;
+use crate::resources::{ALL_SCHEMAS};
 use crate::restypes::{AllTables,SCHEMAS};
 use crate::schemas::{Schema,TableType};
 use crate::sql_rows::{AsParams};
@@ -2182,7 +2183,15 @@ impl<'lua> AsParams for MultiValue<'lua> {
 		self.into_iter().map(LuaValueRef::from)
 	}
 }
-trait Callback<'a>: Sized {
+/// A callback function, callable by Lua user code.
+///
+/// This traits is for structs wrapping some per-table data (e.g. some
+/// prepared statements). This happens in two phases:
+///  - `prepare` builds the struct from the schema for a table,
+///  - when called from Lua, `execute` builds the returned Lua value.
+/// The extension trait for `AllTables<Callback>` defined later takes
+/// care of dispatching all callback invocations to the correct table.
+pub trait Callback<'a>: Sized {
 	/// Builds the data for the callback from the table schema.
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self>;
 	/// Runs the callback (from the selected table, etc.) and builds the
@@ -2230,6 +2239,7 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 		Ok(Value::Table(ret))
 	}
 }
+/*
 /// Implementation of the `simod.select` callback.
 #[derive(Debug)]
 struct SelectRow<'a>(Statement<'a>);
@@ -2264,6 +2274,8 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 		}
 	}
 }
+*/
+/*
 /// Implementation of `simod.insert`.
 #[derive(Debug)]
 struct InsertRow<'a>(&'a Connection, Statement<'a>,&'a Schema);
@@ -2319,6 +2331,8 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		Ok(Value::Table(table))
 	}
 }
+*/
+/*
 /// Implementation of `simod.update`.
 ///
 /// We collect all the per-field update statements in a hash map.
@@ -2355,6 +2369,8 @@ impl<'a> Callback<'a> for UpdateRow<'a> {
 		Ok((n > 0).to_lua(lua)?)
 	}
 }
+*/
+/*
 /// Implementation of `simod.delete`.
 struct DeleteRow<'a>(Statement<'a>);
 impl<'a> Callback<'a> for DeleteRow<'a> {
@@ -2373,6 +2389,7 @@ impl<'a> Callback<'a> for DeleteRow<'a> {
 /// Once this is done, the individual [`Callback`] instance for this
 /// table is run.
 #[ext]
+*/
 impl<'a, T: Callback<'a> + Debug+'a> AllTables<T> {
 	fn prepare(db: &'a impl DbInterface, schemas: &'a AllTables<Schema>)->Result<Self> where Self: Sized {
 		schemas.map(|s| T::prepare(db, s))
@@ -2416,20 +2433,20 @@ struct LuaStatements<'a> {
 // 	schemas: AllResources<Schema>,
 	/// Prepared statements for `simod.list`.
 	list_keys: AllTables<ListKeys<'a>>,
-	select_row: AllTables<SelectRow<'a>>,
-	insert_row: AllTables<InsertRow<'a>>,
-	update_row: AllTables<InsertRow<'a>>,
-	delete_row: AllTables<InsertRow<'a>>,
+// 	select_row: AllTables<SelectRow<'a>>,
+// 	insert_row: AllTables<InsertRow<'a>>,
+// 	update_row: AllTables<InsertRow<'a>>,
+// 	delete_row: AllTables<InsertRow<'a>>,
 }
 impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface, schemas: &'a AllTables<Schema>)->Result<Self> {
 		Ok(Self {
 // 			schemas,
 			list_keys: AllTables::<_>::prepare(db, schemas)?,
-			select_row: AllTables::<_>::prepare(db, schemas)?,
-			insert_row: AllTables::<_>::prepare(db, schemas)?,
-			update_row: AllTables::<_>::prepare(db, schemas)?,
-			delete_row: AllTables::<_>::prepare(db, schemas)?,
+// 			select_row: AllTables::<_>::prepare(db, schemas)?,
+// 			insert_row: AllTables::<_>::prepare(db, schemas)?,
+// 			update_row: AllTables::<_>::prepare(db, schemas)?,
+// 			delete_row: AllTables::<_>::prepare(db, schemas)?,
 		})
 	}
 }
@@ -2490,10 +2507,10 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 			Ok::<_,mlua::Error>(())
 		})?)?;
 		statements.list_keys.install_callback(scope, &simod, "list")?;
-		statements.select_row.install_callback(scope, &simod, "select")?;
-		statements.insert_row.install_callback(scope, &simod, "insert")?;
-		statements.update_row.install_callback(scope, &simod, "update")?;
-		statements.delete_row.install_callback(scope, &simod, "delete")?;
+// 		statements.select_row.install_callback(scope, &simod, "select")?;
+// 		statements.insert_row.install_callback(scope, &simod, "insert")?;
+// 		statements.update_row.install_callback(scope, &simod, "update")?;
+// 		statements.delete_row.install_callback(scope, &simod, "delete")?;
 		lua.globals().set("simod", simod)?;
 
 		info!("loading file {lua_file:?}");
@@ -2512,7 +2529,7 @@ use clap::Parser;
 use gamefiles::{GameIndex};
 use toolbox::{Progress};
 use crate::restypes::*;
-use crate::resources::{TopResource};
+use crate::resources::{TopResource,ALL_SCHEMAS};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
