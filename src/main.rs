@@ -36,19 +36,22 @@ pub(crate) use log::{trace,debug,info,warn,error};
 pub(crate) use rusqlite::{self,Connection,Statement,Row};
 pub(crate) use extend::ext;
 pub(crate) use lazy_format::prelude::*;
+pub(crate) use once_cell::sync::{Lazy,OnceCell};
 
 pub(crate) use core::marker::PhantomData;
-pub(crate) use std::ops::{Deref};
+pub(crate) use std::ops::{Deref,DerefMut};
 pub(crate) use std::fmt::{self,Display,Debug,Formatter,Write as FWrite};
 pub(crate) use std::fs::{self,File};
 pub(crate) use std::io::{self,Cursor,Read,Write,Seek,SeekFrom};
 pub(crate) use std::path::{Path, PathBuf};
+pub(crate) use std::convert::{Infallible};
 
-pub(crate) use macros::{Pack,Newtype,SqlRow};
+pub(crate) use macros::{Pack,SqlRow};
 pub(crate) use crate::gamefiles::{Resref,Strref};
 pub(crate) use crate::database::{GameDB,DbInterface};
 pub(crate) use crate::toolbox::{Progress,scope_trace,NullDisplay};
 
+pub(crate) fn infallible<T>(x: T)->std::result::Result<T,Infallible>{ Ok(x) }
 pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
 
 #[derive(Debug)]
@@ -238,6 +241,7 @@ impl<T: NoPack> Pack for T {
 	fn pack(&self, _f: &mut impl Write)->io::Result<()> { Ok(()) }
 }
 impl NoPack for String { }
+impl<T> NoPack for Vec<T> { }
 
 }
 pub(crate) mod staticstrings {
@@ -1097,12 +1101,12 @@ pub enum TableType {
 /// resource, and it is compiled by the [`SqlRow`] derive macro.
 #[derive(Debug)]
 pub struct Schema {
-	pub name: &'static str,
+	pub name: String,
 	pub table_type: TableType,
 	pub fields: Fields,
 }
 impl Display for Schema {
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { f.write_str(self.name) }
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { f.write_str(&self.name) }
 }
 impl Schema {
 	pub fn is_subresource(&self)->bool {
@@ -1219,7 +1223,7 @@ left join "strref_dict" as {b} on {a} = {b}."native""#);
 begin
 	insert into "orphan_{self}" values (old."id");
 end"#))?;
-			self.name
+			&self.name
 		},
 		};
 		// populate resref_dict or strref_dict as needed:
@@ -1303,7 +1307,7 @@ end"#))?;
 		for Field { fname, ftype, .. } in self.fields.iter() {
 			let root = match self.table_type {
 				TableType::Sub { root, .. }=> root,
-				TableType::Top { .. }  => self.name
+				TableType::Top { .. }  => &self.name
 			};
 			if *ftype != FieldType::Strref { continue }
 			if is_first_field {
@@ -1320,7 +1324,7 @@ end"#))?;
 	}
 	/// Displays a full description of the schema on stdout.
 	pub fn describe(&self) {
-		println!("header = {:?}", self.table_type);
+		println!("name={self}\nheader = {:?}", self.table_type);
 		for (i, f) in self.fields.iter().enumerate() {
 			println!("{i:2} {:<20} {}", f.fname, f.ftype.to_lua());
 		}
@@ -1330,11 +1334,86 @@ end"#))?;
 } // mod schemas
 pub(crate) mod resources {
 use crate::prelude::*;
+use rusqlite::{types::{FromSql}};
 use crate::sql_rows::{SqlRow,TypedRows};
 use crate::schemas::{Schema};
 use crate::gamefiles::Restype;
 use crate::restypes::{AllTables};
 use crate::database::{DbInserter};
+/// Values organized along a tree matching the structure of resources in
+/// the database.
+///
+/// This is a crude version of a higher-kinded type; the value is wrapped
+/// in a `DerefMut` (the type is `<Self as Deref>::Target`).
+///
+/// This type is implemented by the `Resource` derive macro.
+/// It has sub-fields matching the sub-resources for this resource,
+/// and the implementation for the `Self::recurse` method iterate over
+/// these fields.
+pub trait NodeMap<Y>: DerefMut {
+	/// Result of replacing current parameter by `Y`.
+	type To;
+	// Macro-defined methods:
+	/// Recursively traverse the tree from its root,
+	/// applying the closure on each element. Used by `traverse` and `map`.
+	///
+	/// For each node in the tree, the closure `f` is invoked with:
+	///  - the content of the node,
+	///  - the name of this node (as a `&'static str`),
+	///  - the accumulator computed for the parent (as an `Option`),
+	/// It should return a tuple of:
+	///  - the new accumulator value passed to children,
+	///  - the value computed for this node.
+	fn recurse<'n,A,E,F>(&self, f: F, name: &'n str, acc: Option<&A>)
+		->Result<Self::To,E>
+	where F: Fn(&Self::Target, &'n str, Option<&A>)->Result<(A,Y),E>;
+	// Supplied methods:
+	/// Apply a closure to each element of the tree; fallible version.
+	fn map_q<E,F>(&self, f: F)->Result<Self::To,E>
+	where F: Fn(&Self::Target)->Result<Y,E> {
+		self.recurse(|x, _, _| f(x).map(|x| ((),x)), "", None)
+	}
+	/// Apply a closure to each element of the tree; infallible version.
+	fn map<F>(&self, f: F)->Self::To
+	where F: Fn(&Self::Target)->Y {
+		self.map_q(|x| Ok::<_,Infallible>(f(x))).unwrap()
+	}
+// 	/// Recursively apply a closure to the tree (top-down fold); fallible
+// 	/// version.
+// 	fn traverse_q<E,F>(&self, f: F, init: Option<Y>)->Result<Self::To,E>
+// 	where F: Fn(&Self::Target, &str, Option<&Y>)->Result<Y,E> {
+// 		self.recurse(f, "", init.as_ref())
+// 	}
+// 	/// Recursively apply a closure to the tree; non-fallible version.
+// 	fn traverse<F>(&self, f:F, init: Option<Y>)->Self::To
+// 	where F: Fn(&Self::Target, &str, Option<&Y>)->Y {
+// 		self.traverse_q(|x,n,i| Ok::<_,Infallible>(f(x,n,i)), init).unwrap()
+// 	}
+}
+pub trait Resource: SqlRow {
+	/// Always `FooNode<Fields>`.
+	type FieldNode;
+	/// The node in the tree holding the fields description for this
+	/// resource.
+	const FIELDS_NODE: Self::FieldNode;
+	// The type of the primary key for this resource:
+	// either Resref for top-level or i64 for sub-resources.
+	type Index: FromSql;
+	fn iter_rows<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(Self::Index,Self)>> {
+		Ok(s.query(params)?.into())
+	}
+	// API for reading:
+	// given a StatementNode sn, return an iterator of values
+	// - return main value with sn.as_ref()
+	// - 
+	// 
+// 	/// Always `FooNode<Statement<'a>>`.
+// 	type StatementNode<'a>;
+// 	/// 
+// 	fn collect_rows<'a>(s: &'a mut Self::StatementNode<'a>, params: impl rusqlite::Params)->Result<Vec<Self>> {
+// 		unimplemented!()
+// 	}
+}
 /// One of the resource tables stored in the database.
 ///
 /// Methods attached to this trait are those which depend **both** on
@@ -1708,7 +1787,7 @@ update "new_strings" set "strref"=-1 where "strref" is null"#))
 	/// Deletes from current directory all resources marked as 'orphan' in
 	/// the database. This also clears the list of orphan resources.
 	fn clear_orphan_resources(&self)->Result<()> {
-		SCHEMAS.map(|schema| {
+		SCHEMAS().map(|schema| {
 			let extension = match schema.table_type {
 				crate::schemas::TableType::Top { extension, .. } => extension,
 				_ => return any_ok(())
@@ -1735,7 +1814,7 @@ update "new_strings" set "strref"=-1 where "strref" is null"#))
 	}
 	/// Cleans the dirty bit from all resources after saving.
 	fn unmark_dirty_resources(&self)->Result<()> {
-		SCHEMAS.map(|schema| {
+		SCHEMAS().map(|schema| {
 			if matches!(schema.table_type, crate::schemas::TableType::Top { .. }) {
 				self.exec(format!(r#"delete from "dirty_{schema}""#))?;
 				self.exec(format!(r#"delete from "orphan_{schema}""#))?;
@@ -1810,11 +1889,11 @@ create table "resref_dict" ("key" text not null primary key on conflict ignore, 
 create table "strref_dict" ("native" text not null primary key, "strref" integer unique);
 create index "strref_dict_reverse" on "strref_dict" ("strref");
 			"#).context("create strings tables")?;
-			SCHEMAS.map(|schema| {
+			SCHEMAS().map(|schema| {
 				debug!("  creating tables for resource '{schema}'");
 				schema.create_tables_and_views(|s| db.exec(s))
 			}).context("cannot create main tables and views")?;
-			SCHEMAS.create_new_strings(|s| db.exec(s))?;
+			SCHEMAS().create_new_strings(|s| db.exec(s))?;
 			Ok(())
 		}).context("creating global tables")?;
 		db.create_language_tables(game).context("cannot create language tables")?;
@@ -1858,7 +1937,8 @@ from "new_strings"
 		pb.inc(1);
 		debug!("loading game resources");
 		self.transaction(|db| {
-			let mut base = DbInserter::new(db)?;
+			let schemas = SCHEMAS();
+			let mut base = DbInserter::new(db, &schemas)?;
 			game.for_each(|restype, resref, handle| {
 				trace!("found resource {}.{:#04x}", resref, restype.0);
 				base.register(&resref)
@@ -1885,17 +1965,17 @@ pub struct DbInserter<'a, T: DbInterface> {
 	add_resref: Statement<'a>,
 	pub tables: AllTables<Statement<'a>>,
 	pub add_override: Statement<'a>,
-	resource_count: AllTables<(&'static str, usize)>,
+	resource_count: AllTables<(&'a str, usize)>,
 }
 impl<'a,T: DbInterface> DbInserter<'a, T> {
 	/// Creates a new `DbInserter` from a database and the list of all
 	/// resources.
-	pub fn new(db: &'a T)->Result<Self> {
+	pub fn new(db: &'a T, schemas: &'a AllTables<crate::schemas::Schema>)->Result<Self> {
 		Ok(Self { db,
-		tables: SCHEMAS.map(|schema|
+		tables: schemas.map(|schema|
 			db.prepare(&schema.insert_sql("load_"))
 				.with_context(|| format!("insert statement for table '{schema}'")))?,
-		resource_count: SCHEMAS.map(|schema| any_ok((schema.name, 0)))?,
+		resource_count: schemas.map(|schema| any_ok((schema.name.as_ref(), 0)))?,
 		add_resref: db.prepare(
 			r#"insert or ignore into "resref_orig" values (?)"#)?,
 		add_override: db.prepare(
@@ -1946,7 +2026,7 @@ use std::collections::HashMap;
 
 use crate::prelude::*;
 use crate::restypes::{AllTables,SCHEMAS};
-use crate::schemas::{Schema};
+use crate::schemas::{Schema,TableType};
 use crate::sql_rows::{AsParams};
 /// Small simplification for frequent use in callbacks.
 macro_rules! fail {
@@ -2300,13 +2380,14 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 	use crate::sql_rows::RowExt;
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
-	let mut statements = LuaStatements::new(&db, &SCHEMAS)?;
+	let schemas = SCHEMAS();
+	let mut statements = LuaStatements::new(&db, &schemas)?;
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
 	lua.scope(|scope| {
 		let simod = lua.create_table()?;
 		let lua_schema = lua.create_table()?;
-		SCHEMAS.map_mut(|schema| {
+		SCHEMAS().map_mut(|schema| {
 			let fields = lua.create_table()?;
 // 			let context = lua.create_table()?;
 			for f in schema.fields.iter() {
@@ -2320,6 +2401,13 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 // 			res_schema.set("context", context)?;
 // 			res_schema.set("primary", schema.primary().fname)?;
 			lua_schema.set(schema.to_string(), res_schema)?;
+			Ok::<_,mlua::Error>(())
+		})?;
+		// Step 2: build the sub-schema relations
+		// We do this in a second pass since by now all resource tables exist
+		SCHEMAS().map_mut(|schema| {
+			if let TableType::Sub {  .. } = schema.table_type {
+			}
 			Ok::<_,mlua::Error>(())
 		})?;
 		simod.set("schema", lua_schema)?;
@@ -2369,7 +2457,7 @@ fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
 	gamestrings::save(db, game)?;
 	pb.inc(1);
-	let mut tables = SCHEMAS.map(|schema| db.prepare(format!(
+	let mut tables = SCHEMAS().map(|schema| db.prepare(format!(
 	r#"select "id", {cols} from "save_{schema}" where "parent"=? sort by "position""#,
 		cols=schema.fields)))?;
 	Item::save_all_dirty(db, &mut tables, "save_items")?;
@@ -2448,7 +2536,7 @@ struct RuntimeOptions {
 	database: Option<PathBuf>,
 	#[arg(short='O',long,help="sets log output",default_value="simod.log")]
 	log_output: String,
-	#[arg(short='L',long,help="sets log level",default_value_t=0)]
+	#[arg(short='L',long,help="sets log level")]
 	log_level: i32,
 	#[command(subcommand)]
 	command: Command,
@@ -2458,7 +2546,7 @@ struct RuntimeOptions {
 enum Command {
 	/// Initializes the database from the game installation.
 	Init {
-#[arg(short='B',default_value_t=false,help="Don't abort even if backup fails.")]
+#[arg(short='B',help="Don't abort even if backup fails.")]
 		ignore_backup_fail: bool,
 	},
 	/// Saves the database to the game installation (differential save).
@@ -2485,7 +2573,33 @@ enum Command {
 	},
 }
 
+static ALL_SCHEMAS: Lazy<RootNode<crate::schemas::Schema>> = Lazy::new(|| {
+	use crate::resources::NodeMap;
+	TOP_FIELDS.recurse(|fields,name,acc| {
+		use crate::schemas::{Schema,TableType};
+		let (i,r) = if let Some((j, s)) = acc {
+			(j+1, format!("{s}_{name}"))
+		} else {
+			(0, name.to_owned())
+		};
+		infallible(((i, r.clone()), Schema {
+			name: r,
+			table_type: TableType::Top { extension: "" },
+			fields: *fields,
+		}))
+	}, "", None).unwrap()
+	});
+
 fn main() -> Result<()> {
+	use crate::resources::NodeMap;
+	(*ALL_SCHEMAS).recurse(|x,_n,_a| {
+		x.describe(); infallible(((),()))
+	}, "", None)?;
+// 	println!("{:?}",
+// 	*ALL_SCHEMAS);
+	if 1 > 0 {
+	return Ok(());
+	}
 	let mut options = RuntimeOptions::parse();
 	if options.database.is_none() {
 		options.database = Some(Path::new("game.sqlite").into());
@@ -2526,8 +2640,8 @@ fn main() -> Result<()> {
 		Command::Add{ target, .. } =>
 			lua_api::command_add(GameDB::open(db_file)?, &target)?,
 		Command::Schema{ table, .. } => match table {
-			None => { SCHEMAS.map(|schema| any_ok(println!("{}", schema.name)))?; },
-			Some(s) => { SCHEMAS.by_name(&s)?.describe(); },
+			None => { SCHEMAS().map(|schema| any_ok(println!("{}", schema.name)))?; },
+			Some(s) => { SCHEMAS().by_name(&s)?.describe(); },
 		},
 		_ => todo!(),
 	};

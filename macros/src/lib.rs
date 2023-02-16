@@ -19,11 +19,23 @@ use quote::{quote, ToTokens};
 use syn::{self, DeriveInput, parse_macro_input, Attribute};
 use syn::{Data::Struct, DataStruct};
 use syn::{Expr, ExprLit, ExprPath};
-use syn::{Field, Fields::Named, Fields::Unnamed};
+use syn::{Ident, Type, Field, Fields::Named, Fields::Unnamed};
 use syn::{punctuated::Punctuated, token::Comma};
 use std::cell::RefCell;
 use extend::ext;
 
+#[derive(Debug)]
+struct TopResource {
+	table_name: String,
+	type_name: String,
+}
+thread_local! {
+	static TOP: RefCell<Vec<TopResource>> =
+	RefCell::new(Vec::<TopResource>::new());
+}
+fn define_top_resource(rdef: TopResource) {
+	TOP.with(|v| v.borrow_mut().push(rdef))
+}
 // use std::any::type_name;
 // fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
 
@@ -37,24 +49,42 @@ use extend::ext;
 impl<T: quote::ToTokens> T {
 	fn toks_string(&self)->String { self.to_token_stream().to_string() }
 }
+#[ext]
+impl syn::Ident {
+	fn node_ident(&self)->Self { Self::new(&format!("{self}Node"), self.span()) }
+}
 
-fn vec_eltype(ty: &syn::Type)->Option<&syn::Type> {
-	let segments = match ty {
-		syn::Type::Path(syn::TypePath { path: syn::Path { segments, .. }, .. })
-			=> segments,
-		_ => return None
-	};
-	let syn::PathSegment { ident, arguments } = segments.first()?;
-	if &ident.to_string() != "Vec" {
-		return None
+#[ext]
+impl syn::Type {
+	/// From a type `crate::module::Foo<Bar>` returns `(Foo, <Bar>)`.
+	fn name_and_args(&self)->Option<(&syn::Ident, &syn::PathArguments)> {
+		let segments = match self {
+			syn::Type::Path(syn::TypePath { path: syn::Path { segments, .. }, .. })
+				=> segments,
+			_ => return None
+		};
+		let syn::PathSegment { ident, arguments } = segments.last()?;
+		Some((ident, arguments))
 	}
-	let args: &syn::punctuated::Punctuated<_,_> = match arguments {
-		syn::PathArguments::AngleBracketed(ref g) => &g.args,
-		_ => return None
-	};
-	match args.first()? {
-		syn::GenericArgument::Type(ty) => Some(ty),
-		_ => None
+	/// If this type is `Vec<T>` then return `Some(T)`.
+	fn vec_eltype(&self)->Option<&Self> {
+		let (ident, arguments) = self.name_and_args()?;
+		if &ident.to_string() != "Vec" {
+			return None
+		}
+		let args: &syn::punctuated::Punctuated<_,_> = match arguments {
+			syn::PathArguments::AngleBracketed(ref g) => &g.args,
+			_ => return None
+		};
+		match args.first()? {
+			syn::GenericArgument::Type(ty) => Some(ty),
+			_ => None
+		}
+	}
+	/// From `crate::Type` return `TypeNode` identifier.
+	fn node_ident(&self)->Option<syn::Ident> {
+		let (name, _) = self.name_and_args()?;
+		Some(name.node_ident())
 	}
 }
 
@@ -407,9 +437,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 				_ => ()
 			} // match
 		} // for
-		let fname = name.toks_string();
-		// FIXME: this is bugware, we should parse the actual `Type` struct
-		if vec_eltype(ty).is_some() {
+		if ty.vec_eltype().is_some() {
 			field_info.hidden = true;
 		}
 		if field_info.hidden {
@@ -418,7 +446,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 		}
 		let create = field_info.create;
 		quote!{
-			crate::schemas::Field { fname: #fname,
+			crate::schemas::Field { fname: stringify!(#name),
 				ftype: <#ty as crate::sql_rows::SqlLeaf>::FIELD_TYPE,
 				create: #create },
 		}.to_tokens(&mut fields_def);
@@ -443,5 +471,123 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 			}
 		}
 	};
+// 	println!("{}", code);
+	code.into()
+}
+/// The macro deriving `Resource`.
+#[proc_macro_derive(Resource,attributes(top))]
+pub fn derive_resource(tokens: TokenStream)->TokenStream {
+	let DeriveInput{ ident, data, attrs,.. } = parse_macro_input!(tokens);
+	let fields = Fields::from(data);
+	let mut node_struct = quote!{};
+	let mut recurse = quote!{};
+	let mut fields_node = quote!{};
+	let mut index = quote!{ i64 };
+	for (name, mut args) in attrs.iter().map(parse_attr) {
+		match name.as_str() {
+			"top" => if let Some(AttrArg::Ident(s)) = args.get::<syn::Expr>() {
+				index = quote!{ crate::gamefiles::Resref };
+				define_top_resource(TopResource {
+					table_name: s.clone(),
+					type_name: ident.to_string(),
+				})
+			},
+			_ => ()
+		}
+	}
+	for FieldRef { name, attrs, ty, .. } in fields.iter() {
+		// Read attributes for this field
+		for (name, mut _args) in attrs.iter().map(parse_attr) {
+			match name.as_str() {
+				_ => ()
+			} // match
+		} // for
+		if let Some(eltype) = ty.vec_eltype() {
+			let subnode = eltype.node_ident();
+			quote!{ pub #name: #subnode::<T>, }.to_tokens(&mut node_struct);
+			quote!{ #name:
+				self.#name.recurse(f, stringify!(#name), Some(&new_acc))?, }
+				.to_tokens(&mut recurse);
+			quote!{ #name: <#eltype as crate::resources::Resource>::FIELDS_NODE, }
+				.to_tokens(&mut fields_node);
+		}
+	}
+	let node_ty = ident.node_ident();
+	let code = quote! {
+		#[derive(Debug)]
+		pub struct #node_ty<T: Debug> { #node_struct content: T }
+		impl<X: Debug> Deref for #node_ty<X> {
+			type Target = X;
+			fn deref(&self)->&X { &self.content }
+		}
+		impl<X: Debug> DerefMut for #node_ty<X> {
+			fn deref_mut(&mut self)->&mut X { &mut self.content }
+		}
+		impl<X: Debug, Y:Debug> crate::resources::NodeMap<Y> for #node_ty<X> {
+			type To = #node_ty<Y>;
+			fn recurse<'n,A,E,F>(&self, f: F, name: &'n str, acc: Option<&A>)
+				->Result<Self::To,E>
+			where F: Fn(&Self::Target, &'n str, Option<&A>)->Result<(A,Y),E> {
+				let (new_acc, content) = f(&self.content, name, acc)?;
+				Ok(#node_ty { #recurse content })
+			}
+		}
+		impl crate::resources::Resource for #ident {
+			type FieldNode = #node_ty<crate::schemas::Fields>;
+			const FIELDS_NODE: Self::FieldNode = #node_ty {
+				#fields_node
+				content: <Self as crate::sql_rows::SqlRow>::FIELDS
+			};
+			type Index = #index;
+		}
+// 		impl<T: Debug> Node<T> for #ident {
+// 			type Output = #node_ty<T>
+// 		}
+	};
+// 	println!("{}", code);
+	code.into()
+}
+
+#[proc_macro]
+pub fn top_resources(_: TokenStream)->TokenStream {
+	let mut data = quote!{};
+	let mut recurse = quote!{};
+	let mut const_def = quote!{};
+	TOP.with(|v| {
+		for TopResource { type_name, table_name } in v.borrow().iter() {
+			let field = syn::Ident::new(table_name, Span::call_site());
+			let ty = syn::Ident::new(type_name, Span::call_site());
+			let subnode = ty.node_ident();
+			quote!{ pub #field: #subnode<X>, }.to_tokens(&mut data);
+			quote!{ #field: self.#field.recurse(f, stringify!(#field), init)?, }
+				.to_tokens(&mut recurse);
+			quote!{ #field: <#ty as crate::resources::Resource>::FIELDS_NODE, }
+				.to_tokens(&mut const_def);
+		}
+	});
+	let code = quote!{
+		#[derive(Debug)] pub struct RootNode<X: Debug> { #data
+			_marker: PhantomData<X>
+		}
+		impl<X: Debug> Deref for RootNode<X> {
+			type Target = X;
+			fn deref(&self)->&X { unimplemented!() }
+		}
+		impl<X: Debug> DerefMut for RootNode<X> {
+			fn deref_mut(&mut self)->&mut X { unimplemented!() }
+		}
+		impl<X: Debug, Y:Debug> crate::resources::NodeMap<Y> for RootNode<X> {
+			type To = RootNode<Y>;
+			fn recurse<'n,A,E,F>(&self, f: F, _: &'n str, init: Option<&A>)
+				->Result<Self::To,E>
+			where F: Fn(&Self::Target, &'n str, Option<&A>)->Result<(A,Y),E> {
+				Ok(RootNode { #recurse _marker: PhantomData })
+			}
+		}
+		pub const TOP_FIELDS: RootNode<crate::schemas::Fields> = RootNode {
+			#const_def _marker: PhantomData
+		};
+	};
+// 	println!("{}", code);
 	code.into()
 }

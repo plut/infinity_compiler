@@ -1,3 +1,7 @@
+# Recursive schema
+ - likely useful because of convenience for saving + building Lua schema
+ - build code for root type `RootNode`
+ - build code for const (schema) base case `ROOT_SCHEMA`
 # Override
  - [x] improve backup procedure: a full backup as part of init
  - [x] a mod `base_types` for chaff such as SqlType etc.
@@ -12,6 +16,7 @@
  - [+] atomic save to override
  - [+] they need to be read as resource handles
 # Lua side
+ - [ ] decide when conversion from native to strref (etc.1
 ## Primitive operations
  - [x] `update`
  - [x] `select`

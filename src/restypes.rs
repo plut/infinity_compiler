@@ -9,9 +9,10 @@ use crate::gamefiles::{Restype};
 use crate::sql_rows::{SqlRow};
 use crate::database::{DbInterface};
 use crate::resources::{TopResource,SubResource};
+use macros::{Resource,top_resources};
 
 /// An effect inside a .itm file (either global or in an ability).
-#[derive(Debug,Pack,SqlRow)]
+#[derive(Debug,Pack,SqlRow,Resource)]
 // #[subresource(item_effects,itemref,items)]
 #[allow(missing_copy_implementations)]
 // #[resource(item_effects)]
@@ -76,7 +77,8 @@ pub struct ItemAbility {
 // 	id: Rowid,
 }
 /// A game item, corresponding to a .itm file.
-#[derive(Debug,Pack,SqlRow)]
+#[derive(Debug,Pack,SqlRow,Resource)]
+#[top(items)]
 // #[topresource("items", "itm", 0x03ed)]
 pub struct Item {
 #[header("ITM V1  ")]
@@ -115,6 +117,7 @@ pub struct Item {
 #[sql(false)] effect_offset: u32,
 #[sql(false)] effect_index: u16,
 #[sql(false)] equip_effect_count: u16,
+	effects: Vec::<ItemEffect>,
 }
 
 impl TopResource for Item {
@@ -200,6 +203,21 @@ impl TopResource for Item {
 impl SubResource for ItemAbility { }
 impl SubResource for ItemEffect { }
 
+/// Builds the full list of schemas for all resource tables.
+///
+/// The syntax is as follows:
+/// `table_name: StructType = header`,
+/// where `header` is either:
+///  - `Top("extension", resource_type)`,
+///  - `Sub(parent [, root])`
+///
+/// In these:
+///  - `extension` is the file extension for this resource (e.g. `"itm"`),
+///  - `resource_type` is the numeric identifier (e.g. 0x03ed),
+///  - `parent` is the identifier for the parent table,
+///  - `root` is the identifier for the highest resource table (strictly
+///  put, this could be derived from the parent relations, but
+///  `macro_rules!` is not too practical for walking in trees).
 macro_rules! tables {
 	($($tablename:ident: $ty:ty = $which:ident ($($arg:tt)*));*$(;)?) => {
 		#[derive(Debug)]
@@ -229,13 +247,16 @@ macro_rules! tables {
 			}
 		}
 		use crate::schemas::Schema;
-		pub const SCHEMAS: AllTables<Schema> = AllTables {
-			$($tablename: Schema {
-				name: stringify!($tablename),
-				table_type: table_type!($which($($arg)*)),
-				fields: <$ty as crate::sql_rows::SqlRow>::FIELDS,
-			}),*
-		};
+		#[allow(non_snake_case)]
+		pub fn SCHEMAS()->AllTables<Schema> {
+				AllTables {
+				$($tablename: Schema {
+					name: stringify!($tablename).to_owned(),
+					table_type: table_type!($which($($arg)*)),
+					fields: <$ty as crate::sql_rows::SqlRow>::FIELDS,
+				}),*
+			}
+		}
 		impl Restype {
 			pub fn from(e: &str)->Self {
 				$(table_restype!(e,$which($($arg)*)));*;
@@ -262,26 +283,12 @@ macro_rules! table_restype {
 		if $e.eq_ignore_ascii_case($ext) { return Self($restype) }
 	}
 }
-// trace_macros!(true);
-/// Builds the full list of schemas for all resource tables.
-///
-/// The syntax is as follows:
-/// `table_name: StructType = header`,
-/// where `header` is either:
-///  - `Top("extension", resource_type)`,
-///  - `Sub(parent [, root])`
-///
-/// In these:
-///  - `extension` is the file extension for this resource (e.g. `"itm"`),
-///  - `resource_type` is the numeric identifier (e.g. 0x03ed),
-///  - `parent` is the identifier for the parent table,
-///  - `root` is the identifier for the highest resource table (strictly
-///  put, this could be derived from the parent relations, but
-///  `macro_rules!` is not too practical for walking in trees).
 tables! {
 	items: Item = Top ("itm", 0x03ed);
 	item_abilities: ItemAbility = Sub (items);
 	item_ability_effects: ItemEffect = Sub(item_abilities, items);
 	item_effects: ItemEffect = Sub (items);
 }
+// trace_macros!(true);
+top_resources!();
 // trace_macros!(false);
