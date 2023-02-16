@@ -8,7 +8,7 @@ use crate::pack::{Pack,PackAll};
 use crate::gamefiles::{Restype};
 use crate::sql_rows::{SqlRow};
 use crate::database::{DbInterface};
-use crate::resources::{TopResource0,SubResource,ResourceIO};
+use crate::resources::{TopResource9,SubResource,ResourceIO};
 use macros::{Resource,top_resources};
 
 /// An effect inside a .itm file (either global or in an ability).
@@ -123,22 +123,49 @@ pub struct Item {
 }
 
 impl ResourceIO for Item {
-	fn save(&mut self, mut file: impl Write+Seek+Debug)->Result<()> {
+	/// load an item from cursor
+	fn load(mut io: impl Read+Seek, resref: Resref)->Result<Self> {
+		let mut item = Item::unpack(&mut io)
+			.context("unpack Item main struct")?;
+
+		io.seek(SeekFrom::Start(item.abilities_offset as u64))?;
+		item.abilities = ItemAbility::vecunpack(&mut io,
+			item.abilities_count as usize)?;
+
+		io.seek(SeekFrom::Start(item.effect_offset as u64))?;
+		item.effects = ItemEffect::vecunpack(&mut io,
+			item.equip_effect_count as usize)?;
+		for ability in item.abilities.iter_mut() {
+			ability.effects = ItemEffect::vecunpack(&mut io,
+				ability.effect_count as usize)?;
+		}
+		Ok(item)
+	}
+	fn save(&mut self, mut io: impl Write+Seek+Debug)->Result<()> {
 		trace!("saving item with {} abilities and {} effects",
 			self.abilities.len(), self.effects.len());
-		self.pack(&mut file)?;
-		// pack abilities:
-		self.abilities.pack_all(&mut file)?;
-		// pack global effects:
-		self.effects.pack_all(&mut file)?;
-		// pack per-ability effects:
+		self.abilities_offset = 114;
+		self.abilities_count = self.abilities.len() as u16;
+		self.effect_offset = 114 + 56*(self.abilities_count as u32);
+		self.equip_effect_count = self.effects.len() as u16;
+
+		let mut current_effect_idx = self.equip_effect_count;
+		for ab in self.abilities.iter_mut() {
+			ab.effect_count = ab.effects.len() as u16;
+			ab.effect_index = current_effect_idx;
+			current_effect_idx+= ab.effect_count;
+		}
+
+		self.pack(&mut io)?;
+		self.abilities.pack_all(&mut io)?;
+		self.effects.pack_all(&mut io)?;
 		for ab in self.abilities.iter() {
-			ab.effects.pack_all(&mut file)?;
+			ab.effects.pack_all(&mut io)?;
 		}
 		Ok(())
 	}
 }
-impl TopResource0 for Item {
+impl TopResource9 for Item {
 	const EXTENSION: &'static str = "itm";
 	const RESTYPE: Restype = Restype(0x03ed);
 	type Subresources = (Vec<(ItemAbility,Vec<ItemEffect>)>, Vec<ItemEffect>);

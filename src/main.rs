@@ -1473,7 +1473,10 @@ pub trait Resource: SqlRow {
 /// For this reasons, all functions here must have a default
 /// `unimplemented!()` impl.
 pub trait ResourceIO: Resource {
-	fn save(&mut self, file: impl Write+Seek+Debug)->Result<()> {
+	fn save(&mut self, io: impl Write+Seek+Debug)->Result<()> {
+		unimplemented!()
+	}
+	fn load(io: impl Read+Seek, resref: Resref)->Result<Self> {
 		unimplemented!()
 	}
 }
@@ -1505,7 +1508,7 @@ pub static ALL_SCHEMAS: Lazy<RootNode<Schema>> = Lazy::new(|| {
 /// Methods depending only on the schema go to [`Schema`].
 /// Methods depending only on the list of columns from the schema (i.e.
 /// the intersection of both cases) go to [`crate::schemas::Fields`]
-pub trait TopResource0: SqlRow {
+pub trait TopResource9: SqlRow {
 	/// The file extension attached to this resource.
 	const EXTENSION: &'static str;
 	/// The numeric identifier for this resource (e.g. 0x03ed).
@@ -1770,7 +1773,7 @@ pub mod database {
 use crate::prelude::*;
 use crate::restypes::*;
 use crate::gamefiles::GameIndex;
-use crate::resources::{TopResource0,ALL_SCHEMAS};
+use crate::resources::{TopResource9,ALL_SCHEMAS};
 
 /// A trivial wrapper on [`rusqlite::Connection`];
 /// mainly used for standardizing log messages.
@@ -2560,7 +2563,7 @@ use clap::Parser;
 use gamefiles::{GameIndex};
 use toolbox::{Progress};
 use crate::restypes::*;
-use crate::resources::{TopResource0,ALL_SCHEMAS};
+use crate::resources::{TopResource9,ALL_SCHEMAS};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
