@@ -53,6 +53,13 @@ pub(crate) use crate::toolbox::{Progress,scope_trace,NullDisplay};
 
 pub(crate) fn infallible<T>(x: T)->std::result::Result<T,Infallible>{ Ok(x) }
 pub(crate) fn any_ok<T>(x: T)->Result<T> { Ok(x) }
+/// Alias for `()`; makes some code easier to read:
+#[allow(non_upper_case_globals)]
+pub(crate) const nothing: () = ();
+/// Alias for `((),())` (pair of empty tuples); makes some code easier to read:
+#[allow(non_upper_case_globals)]
+pub(crate) const nothing2: ((),()) = (nothing, nothing);
+
 
 #[derive(Debug)]
 pub(crate) enum Error{
@@ -1338,7 +1345,7 @@ use rusqlite::{types::{FromSql}};
 use crate::sql_rows::{SqlRow,TypedRows};
 use crate::schemas::{Schema};
 use crate::gamefiles::Restype;
-use crate::restypes::{AllTables};
+use crate::restypes::{RootNode,TOP_FIELDS,AllTables};
 use crate::database::{DbInserter};
 /// Values organized along a tree matching the structure of resources in
 /// the database.
@@ -1414,6 +1421,23 @@ pub trait Resource: SqlRow {
 // 		unimplemented!()
 // 	}
 }
+/// The definition of schemas for all in-game resources.
+pub static ALL_SCHEMAS: Lazy<RootNode<Schema>> = Lazy::new(|| {
+	TOP_FIELDS.recurse(|fields,name,acc| {
+		use crate::schemas::{TableType};
+		let (i,r) = if let Some((j, s)) = acc {
+			(j+1, format!("{s}_{name}"))
+		} else {
+			(0, name.to_owned())
+		};
+		infallible(((i, r.clone()), Schema {
+			name: r,
+			table_type: TableType::Top { extension: "" },
+			fields: *fields,
+		}))
+	}, "", None).unwrap()
+});
+
 /// One of the resource tables stored in the database.
 ///
 /// Methods attached to this trait are those which depend **both** on
@@ -2573,32 +2597,16 @@ enum Command {
 	},
 }
 
-static ALL_SCHEMAS: Lazy<RootNode<crate::schemas::Schema>> = Lazy::new(|| {
-	use crate::resources::NodeMap;
-	TOP_FIELDS.recurse(|fields,name,acc| {
-		use crate::schemas::{Schema,TableType};
-		let (i,r) = if let Some((j, s)) = acc {
-			(j+1, format!("{s}_{name}"))
-		} else {
-			(0, name.to_owned())
-		};
-		infallible(((i, r.clone()), Schema {
-			name: r,
-			table_type: TableType::Top { extension: "" },
-			fields: *fields,
-		}))
-	}, "", None).unwrap()
-	});
 
 fn main() -> Result<()> {
-	use crate::resources::NodeMap;
-	(*ALL_SCHEMAS).recurse(|x,_n,_a| {
-		x.describe(); infallible(((),()))
+	use crate::resources::{ALL_SCHEMAS,NodeMap};
+	ALL_SCHEMAS.recurse(|x,_n,_a| {
+		x.describe(); infallible(nothing2)
 	}, "", None)?;
 // 	println!("{:?}",
 // 	*ALL_SCHEMAS);
 	if 1 > 0 {
-	return Ok(());
+	return Ok(nothing)
 	}
 	let mut options = RuntimeOptions::parse();
 	if options.database.is_none() {
