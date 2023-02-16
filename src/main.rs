@@ -1,11 +1,11 @@
 //! Compiler between IE game files and a SQLite database.
 #![allow(
 	unused_attributes,
-// 	unused_imports,
-// 	dead_code,
+	unused_imports,
+	dead_code,
 // 	unreachable_code,
-// 	unused_macros,
-// 	unused_variables,
+	unused_macros,
+	unused_variables,
 // 	unused_must_use,
 // 	unused_mut,
 )]
@@ -23,7 +23,7 @@
 	missing_copy_implementations,
 	missing_debug_implementations,
 	elided_lifetimes_in_paths,
-	missing_docs,
+// 	missing_docs,
 )]
 // #![feature(trace_macros)]
 // trace_macros!(false);
@@ -605,7 +605,7 @@ impl<T: FromSqlRow> Iterator for TypedRows<'_,T> {
 }
 
 } // mod sql_rows
-pub(crate) mod gamefiles {
+pub mod gamefiles {
 //! Access to the KEY/BIF side of the database.
 //!
 //! Main interface:
@@ -695,7 +695,9 @@ impl FromSql for Strref {
 		i32::column_result(v).map(Self)
 	}
 }
+/// A 16-bit value describing a resource type in the Key file.
 #[derive(Debug,Pack,Clone,Copy,PartialEq,Eq)] pub struct Restype (pub u16);
+/// A 32-bit vlaue describing the position of the resource in the BIF file.
 #[derive(Debug,Pack,Clone,Copy)] pub struct BifIndex(u32);
 /// A reference to a resource inside a BIF file as encoded in
 /// `chitin.key`.
@@ -776,6 +778,7 @@ impl BifFile {
 		buf.seek(SeekFrom::Start(offset as u64))?;
 		Ok(Cursor::new(BifHdr::read_bytes(buf, size as usize)?))
 	}
+	/// Lazily opens a BIF file.
 	pub fn new(path: PathBuf)->Self { Self { contents: None, path } }
 }
 /// A (lazy) accessor to a game resource.
@@ -785,11 +788,15 @@ impl BifFile {
 /// lazy: this file is loaded only when [`ResHandle::open`] is called.
 #[derive(Debug)]
 pub enum ResHandle<'a> {
+	/// A resource stored at some position inside a BIF file.
 	Bif(&'a mut BifFile, BifIndex, Restype),
+	/// A resource stored in its own file.
 	Override(&'a Path),
 }
 impl ResHandle<'_> {
+	/// Tests where the resource is stored.
 	pub fn is_override(&self)->bool { matches!(self, Self::Override(_)) }
+	/// Opens the file and returns a [`Cursor`] pointing to the data.
 	pub fn open(&mut self)->Result<Cursor<Vec<u8>>> {
 		match self {
 		Self::Bif(bif, location, restype) =>
@@ -825,6 +832,8 @@ pub fn create_dir(path: impl AsRef<Path>)->io::Result<()> {
 				{ info!("not creating directory {path:?}: it already exists"); Ok(()) },
 			_ => Err(e) } }
 }
+/// Executes a closure in a given directory and returns to the original
+/// directory as soon as the closure returns.
 pub fn with_dir<T>(dir: impl AsRef<Path>, f: impl FnOnce()->Result<T>)->Result<T> {
 	let orig_dir = std::env::current_dir()?;
 	std::env::set_current_dir(dir)?;
@@ -1048,7 +1057,7 @@ impl GameIndex {
 	}
 }
 } // mod gamefiles
-pub(crate) mod schemas {
+pub mod schemas {
 //! Inner description of SQL table.
 //!
 //! This mod groups everything which has access to the content of the
@@ -1079,7 +1088,7 @@ impl Display for Field {
 #[derive(Debug,Clone,Copy)]
 pub struct Fields(pub &'static [Field]);
 impl Fields {
-	pub fn len(&self)->usize { self.0.len() }
+	pub(crate) fn len(&self)->usize { self.0.len() }
 	pub fn iter(&self)->std::slice::Iter<'_,Field> { self.0.iter() }
 	fn with_prefix<T: Display>(self, prefix: T)->FieldsWithPrefix<T> {
 		FieldsWithPrefix(self, prefix)
@@ -1099,10 +1108,11 @@ impl Fields {
 }
 impl Display for Fields {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		self.with_prefix(NullDisplay()).fmt(f)
+		Display::fmt(&self.with_prefix(NullDisplay()), f)
 	}
 }
 /// A helper type to insert new."fields" inside a query.
+#[derive(Debug)]
 pub struct FieldsWithPrefix<T: Display>(Fields, T);
 impl<T: Display> Display for FieldsWithPrefix<T> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
@@ -1118,7 +1128,9 @@ impl<T: Display> Display for FieldsWithPrefix<T> {
 /// Identifies whether this is a top resource or a sub-resource.
 #[derive(Debug,Clone,Copy)]
 pub enum TableType {
+	/// A top-level resource (associated to a given file extension).
 	Top { extension: &'static str, },
+	/// A sub-resource
 	Sub { parent: &'static str, root: &'static str, },
 }
 /// The full database description of a game resource.
@@ -1130,14 +1142,18 @@ pub enum TableType {
 /// resource, and it is compiled by the [`SqlRow`] derive macro.
 #[derive(Debug)]
 pub struct Schema {
+	/// Name of the SQL table mapped to this data.
 	pub name: String,
+	/// Position of the schema in the arborescence.
 	pub table_type: TableType,
+	/// Description of the SQL table for this data.
 	pub fields: Fields,
 }
 impl Display for Schema {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { f.write_str(&self.name) }
 }
 impl Schema {
+	/// `true` iff this is not a top-level resource.
 	pub fn is_subresource(&self)->bool {
 		matches!(self.table_type, TableType::Sub { .. })
 	}
@@ -1381,7 +1397,7 @@ use crate::database::{DbInserter};
 /// It has sub-fields matching the sub-resources for this resource,
 /// and the implementation for the `Self::recurse` method iterate over
 /// these fields.
-pub trait NodeMap<Y>: DerefMut {
+pub trait Recurse<Y>: DerefMut {
 	/// Result of replacing current parameter by `Y`.
 	type To;
 	// Macro-defined methods:
@@ -1436,13 +1452,11 @@ pub trait Resource: SqlRow {
 	fn iter_rows<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(Self::Index,Self)>> {
 		Ok(s.query(params)?.into())
 	}
-	// API for reading:
-	// given a StatementNode sn, return an iterator of values
-	// - return main value with sn.as_ref()
-	// - 
-	// 
-// 	/// Always `FooNode<Statement<'a>>`.
-// 	type StatementNode<'a>;
+	/// Always `FooNode<Statement<'a>>`.
+	type StatementNode<'a>;
+	/// Given an incomplete object, and the statements for its
+	/// sub-resources, finish building the object.
+	fn build(&mut self, node: Self::StatementNode<'_>, index: Self::Index)->Result<()>;
 // 	/// 
 // 	fn collect_rows<'a>(s: &'a mut Self::StatementNode<'a>, params: impl rusqlite::Params)->Result<Vec<Self>> {
 // 		unimplemented!()
@@ -2029,6 +2043,8 @@ pub struct DbInserter<'a, T: DbInterface> {
 	/// a reference to the database (used for `last_insert_rowid`)
 	pub db: &'a T,
 	add_resref: Statement<'a>,
+// 	/// the insert statements for all tables
+// 	pub statements: RootNode<Statement<'a>>,
 	/// the insert statements for all tables
 	pub tables: AllTables<Statement<'a>>,
 	/// the statement marking that a resource lives in override
@@ -2660,7 +2676,7 @@ enum Command {
 
 
 fn main() -> Result<()> {
-	use crate::resources::{ALL_SCHEMAS,NodeMap};
+	use crate::resources::{ALL_SCHEMAS,Recurse};
 	ALL_SCHEMAS.recurse(|x,_n,_a| {
 		x.describe(); infallible(nothing2)
 	}, "", None)?;

@@ -483,6 +483,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let mut recurse = quote!{};
 	let mut fields_node = quote!{};
 	let mut index = quote!{ i64 };
+	let mut build = quote!{};
 	for (name, mut args) in attrs.iter().map(parse_attr) {
 		match name.as_str() {
 			"top" => if let Some(AttrArg::Ident(s)) = args.get::<syn::Expr>() {
@@ -510,6 +511,8 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				.to_tokens(&mut recurse);
 			quote!{ #name: <#eltype as crate::resources::Resource>::FIELDS_NODE, }
 				.to_tokens(&mut fields_node);
+			quote!{ self.#name = collect_rows(node.#name, id)?; }
+				.to_tokens(&mut build);
 		}
 	}
 	let node_ty = ident.node_ident();
@@ -524,7 +527,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 		impl<X: Debug> DerefMut for #node_ty<X> {
 			fn deref_mut(&mut self)->&mut X { &mut self.content }
 		}
-		impl<X: Debug, Y:Debug> crate::resources::NodeMap<Y> for #node_ty<X> {
+		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for #node_ty<X> {
 			type To = #node_ty<Y>;
 			fn recurse<'n,A,E,F>(&self, f: F, name: &'n str, acc: Option<&A>)
 				->Result<Self::To,E>
@@ -540,6 +543,10 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				content: <Self as crate::sql_rows::SqlRow>::FIELDS
 			};
 			type Index = #index;
+			type StatementNode<'a> = #node_ty<Statement<'a>>;
+			fn build(&mut self, s: #node_ty<Statement<'_>>, idx: #index)->Result<()> {
+				Ok(())
+			}
 		}
 // 		impl<T: Debug> Node<T> for #ident {
 // 			type Output = #node_ty<T>
@@ -578,7 +585,7 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 		impl<X: Debug> DerefMut for RootNode<X> {
 			fn deref_mut(&mut self)->&mut X { unimplemented!() }
 		}
-		impl<X: Debug, Y:Debug> crate::resources::NodeMap<Y> for RootNode<X> {
+		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for RootNode<X> {
 			type To = RootNode<Y>;
 			fn recurse<'n,A,E,F>(&self, f: F, _: &'n str, init: Option<&A>)
 				->Result<Self::To,E>
