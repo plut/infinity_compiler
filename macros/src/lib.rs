@@ -511,7 +511,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				.to_tokens(&mut recurse);
 			quote!{ #name: <#eltype as crate::resources::Resource>::FIELDS_NODE, }
 				.to_tokens(&mut fields_node);
-			quote!{ self.#name = collect_rows(node.#name, id)?; }
+			quote!{ self.#name = #eltype::collect_rows(&mut node.#name, (index,))?; }
 				.to_tokens(&mut build);
 		}
 	}
@@ -544,7 +544,8 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			};
 			type Index = #index;
 			type StatementNode<'a> = #node_ty<Statement<'a>>;
-			fn build(&mut self, s: #node_ty<Statement<'_>>, idx: #index)->Result<()> {
+			fn build(&mut self, node: &mut #node_ty<Statement<'_>>, index: #index)->Result<()> {
+				#build
 				Ok(())
 			}
 		}

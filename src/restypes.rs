@@ -183,12 +183,12 @@ impl TopResource for Item {
 	fn select_subresources(&mut self, tables: &mut AllTables<Statement<'_>>, itemref: Resref)->Result<Self::Subresources> {
 		debug!("reading item: {}", itemref);
 		let mut abilities = Vec::<(ItemAbility,Vec<ItemEffect>)>::new();
-		let item_effects = ItemEffect::collect_rows(&mut tables.item_effects, (itemref,))?;
+		let item_effects = ItemEffect::collect_rows0(&mut tables.item_effects, (itemref,))?;
 		self.equip_effect_count = item_effects.len() as u16;
 		let mut current_effect_idx = self.equip_effect_count;
-		for x in ItemAbility::iter_rows(&mut tables.item_abilities, (itemref,))? {
+		for x in ItemAbility::iter_rows0(&mut tables.item_abilities, (itemref,))? {
 			let (ab_id, mut ability) = x?;
-			let ab_effects = ItemEffect::collect_rows(&mut tables.item_ability_effects, (ab_id,))?;
+			let ab_effects = ItemEffect::collect_rows0(&mut tables.item_ability_effects, (ab_id,))?;
 			ability.effect_count = ab_effects.len() as u16;
 			ability.effect_index = current_effect_idx;
 			current_effect_idx+= ability.effect_count;

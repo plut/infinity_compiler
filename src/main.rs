@@ -1453,12 +1453,16 @@ pub trait Resource: SqlRow {
 		Ok(s.query(params)?.into())
 	}
 	/// Always `FooNode<Statement<'a>>`.
-	type StatementNode<'a>;
+	type StatementNode<'a>: DerefMut<Target=Statement<'a>>;
 	/// Given an incomplete object, and the statements for its
 	/// sub-resources, finish building the object.
-	fn build(&mut self, node: Self::StatementNode<'_>, index: Self::Index)->Result<()>;
+	fn build(&mut self, node: &mut Self::StatementNode<'_>, index: Self::Index)->Result<()>;
+	/// Collects all rows returned by a statement into a vector.
+	fn collect_rows(node: &mut Self::StatementNode<'_>, params: impl rusqlite::Params)->Result<Vec<Self>> {
+		Self::iter_rows(node.deref_mut(), params)?.map(|x| Ok(x?.1)).collect()
+	}
 // 	/// 
-// 	fn collect_rows<'a>(s: &'a mut Self::StatementNode<'a>, params: impl rusqlite::Params)->Result<Vec<Self>> {
+// 	fn collect_rows0<'a>(s: &'a mut Self::StatementNode<'a>, params: impl rusqlite::Params)->Result<Vec<Self>> {
 // 		unimplemented!()
 // 	}
 }
@@ -1525,7 +1529,7 @@ pub trait TopResource: SqlRow {
 			r#"select "id", {cols} from "{name}" where "id" in "dirty_{name}""#,
 			cols=Self::FIELDS))?;
 		let mut n_saved = 0;
-		for row in Self::iter_rows(&mut sel, ())? {
+		for row in Self::iter_rows0(&mut sel, ())? {
 			let (resref, mut resource) = row?;
 			let subresources = resource.select_subresources(tables, resref)?;
 			let filename = format!("{resref}.{extension}");
@@ -1537,19 +1541,19 @@ pub trait TopResource: SqlRow {
 		Ok(n_saved)
 	}
 	/// Iterates over rows returned by this statement, as (Resref, Self).
-	fn iter_rows<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(Resref,Self)>> {
+	fn iter_rows0<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(Resref,Self)>> {
 		Ok(s.query(params)?.into())
 	}
 }
 /// Specific functions for sub-resources. TODO: replace this.
 pub trait SubResource: SqlRow {
 	/// Iterates over rows returned by this statement, as (i64, Self).
-	fn iter_rows<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(i64,Self)>> {
+	fn iter_rows0<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(i64,Self)>> {
 		Ok(s.query(params)?.into())
 	}
 	/// Collects all rows returned by a statement into a vector.
-	fn collect_rows(s: &mut Statement<'_>, params: impl rusqlite::Params)->Result<Vec<Self>> {
-		Self::iter_rows(s, params)?.map(|x| Ok(x?.1)).collect()
+	fn collect_rows0(s: &mut Statement<'_>, params: impl rusqlite::Params)->Result<Vec<Self>> {
+		Self::iter_rows0(s, params)?.map(|x| Ok(x?.1)).collect()
 	}
 }
 impl AllTables<Schema> {
