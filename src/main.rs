@@ -1462,9 +1462,20 @@ pub trait Resource: SqlRow {
 		Self::iter_rows(node.deref_mut(), params)?.map(|x| Ok(x?.1)).collect()
 	}
 // 	/// 
-// 	fn collect_rows0<'a>(s: &'a mut Self::StatementNode<'a>, params: impl rusqlite::Params)->Result<Vec<Self>> {
+// 	fn collect_rows9<'a>(s: &'a mut Self::StatementNode<'a>, params: impl rusqlite::Params)->Result<Vec<Self>> {
 // 		unimplemented!()
 // 	}
+}
+/// A trait containing resource I/O functions.
+///
+/// For technical reasons this is implemented for all resources,
+/// although this code will be executed only for top resources.
+/// For this reasons, all functions here must have a default
+/// `unimplemented!()` impl.
+pub trait ResourceIO: Resource {
+	fn save(&mut self, file: impl Write+Seek+Debug)->Result<()> {
+		unimplemented!()
+	}
 }
 /// The definition of schemas for all in-game resources.
 pub static ALL_SCHEMAS: Lazy<RootNode<Schema>> = Lazy::new(|| {
@@ -1494,7 +1505,7 @@ pub static ALL_SCHEMAS: Lazy<RootNode<Schema>> = Lazy::new(|| {
 /// Methods depending only on the schema go to [`Schema`].
 /// Methods depending only on the list of columns from the schema (i.e.
 /// the intersection of both cases) go to [`crate::schemas::Fields`]
-pub trait TopResource: SqlRow {
+pub trait TopResource0: SqlRow {
 	/// The file extension attached to this resource.
 	const EXTENSION: &'static str;
 	/// The numeric identifier for this resource (e.g. 0x03ed).
@@ -1505,7 +1516,7 @@ pub trait TopResource: SqlRow {
 	/// Loads a resource from filesystem directly into database.
 	fn load(tables: &mut AllTables<Statement<'_>>, db: &impl DbInterface, cursor: impl Read+Seek, resref: Resref) -> Result<()>;
 	/// Saves a resource (from struct + subresources) to filesystem.
-	fn save(&mut self, file: impl Write+Seek+Debug, subresources: &Self::Subresources) ->Result<()>;
+	fn save9(&mut self, file: impl Write+Seek+Debug, subresources: &Self::Subresources) ->Result<()>;
 	/// Selects subresources from database.
 	fn select_subresources(&mut self, tables: &mut AllTables<Statement<'_>>, resref: Resref)->Result<Self::Subresources>;
 	// Provided functions:
@@ -1529,31 +1540,31 @@ pub trait TopResource: SqlRow {
 			r#"select "id", {cols} from "{name}" where "id" in "dirty_{name}""#,
 			cols=Self::FIELDS))?;
 		let mut n_saved = 0;
-		for row in Self::iter_rows0(&mut sel, ())? {
+		for row in Self::iter_rows9(&mut sel, ())? {
 			let (resref, mut resource) = row?;
 			let subresources = resource.select_subresources(tables, resref)?;
 			let filename = format!("{resref}.{extension}");
 			let mut file = File::create(&filename)
 				.with_context(|| format!("cannot open output file: {filename}"))?;
-			resource.save(&mut file, &subresources)?;
+			resource.save9(&mut file, &subresources)?;
 			n_saved+= 1;
 		}
 		Ok(n_saved)
 	}
 	/// Iterates over rows returned by this statement, as (Resref, Self).
-	fn iter_rows0<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(Resref,Self)>> {
+	fn iter_rows9<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(Resref,Self)>> {
 		Ok(s.query(params)?.into())
 	}
 }
 /// Specific functions for sub-resources. TODO: replace this.
 pub trait SubResource: SqlRow {
 	/// Iterates over rows returned by this statement, as (i64, Self).
-	fn iter_rows0<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(i64,Self)>> {
+	fn iter_rows9<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(i64,Self)>> {
 		Ok(s.query(params)?.into())
 	}
 	/// Collects all rows returned by a statement into a vector.
-	fn collect_rows0(s: &mut Statement<'_>, params: impl rusqlite::Params)->Result<Vec<Self>> {
-		Self::iter_rows0(s, params)?.map(|x| Ok(x?.1)).collect()
+	fn collect_rows9(s: &mut Statement<'_>, params: impl rusqlite::Params)->Result<Vec<Self>> {
+		Self::iter_rows9(s, params)?.map(|x| Ok(x?.1)).collect()
 	}
 }
 impl AllTables<Schema> {
@@ -1759,7 +1770,7 @@ pub mod database {
 use crate::prelude::*;
 use crate::restypes::*;
 use crate::gamefiles::GameIndex;
-use crate::resources::{TopResource,ALL_SCHEMAS};
+use crate::resources::{TopResource0,ALL_SCHEMAS};
 
 /// A trivial wrapper on [`rusqlite::Connection`];
 /// mainly used for standardizing log messages.
@@ -2549,7 +2560,7 @@ use clap::Parser;
 use gamefiles::{GameIndex};
 use toolbox::{Progress};
 use crate::restypes::*;
-use crate::resources::{TopResource,ALL_SCHEMAS};
+use crate::resources::{TopResource0,ALL_SCHEMAS};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 

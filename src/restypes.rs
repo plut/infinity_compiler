@@ -8,7 +8,7 @@ use crate::pack::{Pack,PackAll};
 use crate::gamefiles::{Restype};
 use crate::sql_rows::{SqlRow};
 use crate::database::{DbInterface};
-use crate::resources::{TopResource,SubResource};
+use crate::resources::{TopResource0,SubResource,ResourceIO};
 use macros::{Resource,top_resources};
 
 /// An effect inside a .itm file (either global or in an ability).
@@ -35,7 +35,7 @@ pub struct ItemEffect {
 	stacking_id: u32,
 }
 /// An ability inside a .itm file.
-#[derive(Debug,Pack,SqlRow)]
+#[derive(Debug,Pack,SqlRow,Resource)]
 #[allow(missing_copy_implementations)]
 // #[resource(item_abilities)]
 pub struct ItemAbility {
@@ -72,6 +72,7 @@ pub struct ItemAbility {
 	is_arrow: u16,
 	is_bolt: u16,
 	is_bullet: u16,
+	effects: Vec::<ItemEffect>,
 // 	itemref: NotPacked::<Resref>,
 // 	index: NotPacked::<u16>,
 // 	id: Rowid,
@@ -118,9 +119,26 @@ pub struct Item {
 #[sql(false)] effect_index: u16,
 #[sql(false)] equip_effect_count: u16,
 	effects: Vec::<ItemEffect>,
+	abilities: Vec::<ItemAbility>,
 }
 
-impl TopResource for Item {
+impl ResourceIO for Item {
+	fn save(&mut self, mut file: impl Write+Seek+Debug)->Result<()> {
+		trace!("saving item with {} abilities and {} effects",
+			self.abilities.len(), self.effects.len());
+		self.pack(&mut file)?;
+		// pack abilities:
+		self.abilities.pack_all(&mut file)?;
+		// pack global effects:
+		self.effects.pack_all(&mut file)?;
+		// pack per-ability effects:
+		for ab in self.abilities.iter() {
+			ab.effects.pack_all(&mut file)?;
+		}
+		Ok(())
+	}
+}
+impl TopResource0 for Item {
 	const EXTENSION: &'static str = "itm";
 	const RESTYPE: Restype = Restype(0x03ed);
 	type Subresources = (Vec<(ItemAbility,Vec<ItemEffect>)>, Vec<ItemEffect>);
@@ -166,7 +184,7 @@ impl TopResource for Item {
 		}
 	Ok(())
 	}
-	fn save(&mut self, mut file: impl Write+Seek+Debug, (abilities, effects): &Self::Subresources) ->Result<()> {
+	fn save9(&mut self, mut file: impl Write+Seek+Debug, (abilities, effects): &Self::Subresources) ->Result<()> {
 		trace!("saving item with {} abilities and {} effects",
 			abilities.len(), effects.len());
 		self.pack(&mut file)?;
@@ -183,12 +201,12 @@ impl TopResource for Item {
 	fn select_subresources(&mut self, tables: &mut AllTables<Statement<'_>>, itemref: Resref)->Result<Self::Subresources> {
 		debug!("reading item: {}", itemref);
 		let mut abilities = Vec::<(ItemAbility,Vec<ItemEffect>)>::new();
-		let item_effects = ItemEffect::collect_rows0(&mut tables.item_effects, (itemref,))?;
+		let item_effects = ItemEffect::collect_rows9(&mut tables.item_effects, (itemref,))?;
 		self.equip_effect_count = item_effects.len() as u16;
 		let mut current_effect_idx = self.equip_effect_count;
-		for x in ItemAbility::iter_rows0(&mut tables.item_abilities, (itemref,))? {
+		for x in ItemAbility::iter_rows9(&mut tables.item_abilities, (itemref,))? {
 			let (ab_id, mut ability) = x?;
-			let ab_effects = ItemEffect::collect_rows0(&mut tables.item_ability_effects, (ab_id,))?;
+			let ab_effects = ItemEffect::collect_rows9(&mut tables.item_ability_effects, (ab_id,))?;
 			ability.effect_count = ab_effects.len() as u16;
 			ability.effect_index = current_effect_idx;
 			current_effect_idx+= ability.effect_count;

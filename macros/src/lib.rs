@@ -350,9 +350,9 @@ pub fn derive_newtype(tokens: TokenStream)->TokenStream {
 		}
 	});
 	add_trait(quote!(Display), quote!{
-			fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-				Display::fmt(&self.#name, f)
-			}
+		fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+			Display::fmt(&self.#name, &mut f)
+		}
 	});
 	add_trait(quote!(std::fmt::LowerHex), quote!{
 			fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
@@ -507,7 +507,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			let subnode = eltype.node_ident();
 			quote!{ pub #name: #subnode::<T>, }.to_tokens(&mut node_struct);
 			quote!{ #name:
-				self.#name.recurse(f, stringify!(#name), Some(&new_acc))?, }
+				self.#name.recurse(&f, stringify!(#name), Some(&new_acc))?, }
 				.to_tokens(&mut recurse);
 			quote!{ #name: <#eltype as crate::resources::Resource>::FIELDS_NODE, }
 				.to_tokens(&mut fields_node);
