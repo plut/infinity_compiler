@@ -1610,15 +1610,15 @@ impl<X: Debug, T: Tree<In=X>> Node<T> {
 		let (new_state, content) = f(&self.content, name, state)?;
 		Ok(Node { content, tree: self.tree.recurse(f, name, &new_state)? })
 	}
-// 	/// Same as `recurse`, but for a `FnMut`.
-// 	pub fn recurse_mut<'a,'n,S,E,F,Y>(&'a self, f: F, name: &'n str, state: &S)
-// 		->Result<Node<T::To>,E>
-// 	where Y: Debug, T: TreeRecurse<Y>,
-// 		F: FnMut(&'a X, &'n str, &S)->Result<(S,Y),E>
-// 	{
-// 		let (new_state, content) = f(&self.content, name, state)?;
-// 		Ok(Node { content, tree: self.tree.recurse_mut(f, name, &new_state)? })
-// 	}
+	/// Same as `recurse`, but for a `FnMut`.
+	pub fn recurse_mut<'a,'n,S,E,F,Y>(&'a self, mut f: F, name: &'n str, state: &S)
+		->Result<Node<T::To>,E>
+	where X: 'a, Y: Debug, T: TreeRecurse<Y>,
+		F: FnMut(&'a X, &'n str, &S)->Result<(S,Y),E>
+	{
+		let (new_state, content) = f(&self.content, name, state)?;
+		Ok(Node { content, tree: self.tree.recurse_mut(f, name, &new_state)? })
+	}
 }
 /// Impl of this trait is produced by macro
 pub trait Tree {
@@ -1631,9 +1631,9 @@ pub trait TreeRecurse<Y>: Tree {
 	fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 		->Result<Self::To,E>
 	where F: Fn(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;
-// 	fn recurse_mut<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
-// 		->Result<Self::To,E>
-// 	where F: FnMut(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;
+	fn recurse_mut<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
+		->Result<Self::To,E>
+	where F: FnMut(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;
 }
 /// A helper type for building schemas for all in-game resource.
 struct SchemaBuildState {

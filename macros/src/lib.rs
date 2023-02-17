@@ -581,15 +581,15 @@ impl ToTokens for DeriveTree {
 						_marker: PhantomData
 					})
 				}
-// 				fn recurse_mut<'a,'n,S,E,F>(&'a self, mut f: F, name: &'n str, state: &S)
-// 					->Result<Self::To,E>
-// 				where F: FnMut(&'a Self::In, &'n str, &S)->Result<(S,Y),E> {
-// 					Ok(#treename {
-// 					#(#field:
-// 						self.#field.recurse_mut(&f, stringify!(#field), &state)?,)*
-// 						_marker: PhantomData
-// 					})
-// 				}
+				fn recurse_mut<'a,'n,S,E,F>(&'a self, mut f: F, name: &'n str, state: &S)
+					->Result<Self::To,E>
+				where F: FnMut(&'a Self::In, &'n str, &S)->Result<(S,Y),E> {
+					Ok(#treename {
+					#(#field:
+						self.#field.recurse_mut(&mut f, stringify!(#field), &state)?,)*
+						_marker: PhantomData
+					})
+				}
 			}
 // -- end of quote:
 		}.to_tokens(dest)
@@ -661,7 +661,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 		}
 	}
 	let node_ty = ident.extend("Node");
-	let code0 = quote!{ #derive_tree
+	let _code0 = quote!{
 		impl crate::resources::RecursiveResource for #ident {
 			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
 			const FIELDS_NODE: Self::FieldNode = #node_ty {
@@ -744,6 +744,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 // 			type Output = #node_ty<T>
 // 		}
 	};
+// 	println!("{code}");
 	code.into()
 }
 
