@@ -499,7 +499,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	code.into()
 }
 /// The macro deriving `Resource`.
-#[proc_macro_derive(Resource,attributes(topresource))]
+#[proc_macro_derive(RecursiveResource,attributes(topresource))]
 pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let DeriveInput{ ident, data, attrs,.. } = parse_macro_input!(tokens);
 	let fields = Fields::from(data);
@@ -533,7 +533,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			quote!{ #name:
 				self.#name.recurse(&f, stringify!(#name), Some(&new_state))?, }
 				.to_tokens(&mut recurse);
-			quote!{ #name: <#eltype as crate::resources::Resource>::FIELDS_NODE, }
+			quote!{ #name: <#eltype as crate::resources::RecursiveResource>::FIELDS_NODE, }
 				.to_tokens(&mut fields_node);
 			quote!{ for (index, sub) in self.#name.iter().enumerate() {
 					sub.insert_as_subresource(db, &mut node.#name, primary, index)?;
@@ -545,7 +545,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	}
 	let node_ty = ident.node_ident();
 	let code = quote! {
-		/// A `Node` impl. derived by `derive(Resource)`.
+		/// A `Node` impl. derived by `derive(RecursiveResource)`.
 		#[derive(Debug)]
 		pub struct #node_ty<T: Debug> { #node_struct content: T }
 		impl<X: Debug> Deref for #node_ty<X> {
@@ -564,7 +564,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				Ok(#node_ty { #recurse content })
 			}
 		}
-		impl crate::resources::Resource for #ident {
+		impl crate::resources::RecursiveResource for #ident {
 			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
 			const FIELDS_NODE: Self::FieldNode = #node_ty {
 				#fields_node
@@ -606,12 +606,12 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 			quote!{ #field: self.#field.recurse(f, stringify!(#field), init)?, }
 				.to_tokens(&mut recurse);
 			quote!{
-				#field: <#ty as crate::resources::Resource>::FIELDS_NODE,
+				#field: <#ty as crate::resources::RecursiveResource>::FIELDS_NODE,
 			}.to_tokens(&mut const_def);
 		}
 	});
 	let code = quote!{
-		/// A `Node` impl. derived by `derive(Resource)`.
+		/// A `Node` impl. derived by `derive(RecursiveResource)`.
 		#[derive(Debug)] pub struct RootNode<X: Debug> { #data
 			_marker: PhantomData<X>
 		}

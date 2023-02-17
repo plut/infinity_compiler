@@ -9,10 +9,10 @@ use crate::gamefiles::{Restype};
 use crate::sql_rows::{SqlRow};
 use crate::database::{DbInterface};
 use crate::resources::{TopResource9,SubResource,ResourceIO};
-use macros::{Resource,top_resources};
+use macros::{RecursiveResource,top_resources};
 
 /// An effect inside a .itm file (either global or in an ability).
-#[derive(Debug,Pack,SqlRow,Resource)]
+#[derive(Debug,Pack,SqlRow,RecursiveResource)]
 // #[subresource(item_effects,itemref,items)]
 #[allow(missing_copy_implementations)]
 // #[resource(item_effects)]
@@ -35,7 +35,7 @@ pub struct ItemEffect {
 	stacking_id: u32,
 }
 /// An ability inside a .itm file.
-#[derive(Debug,Pack,SqlRow,Resource)]
+#[derive(Debug,Pack,SqlRow,RecursiveResource)]
 #[allow(missing_copy_implementations)]
 // #[resource(item_abilities)]
 pub struct ItemAbility {
@@ -78,7 +78,7 @@ pub struct ItemAbility {
 // 	id: Rowid,
 }
 /// A game item, corresponding to a .itm file.
-#[derive(Debug,Pack,SqlRow,Resource)]
+#[derive(Debug,Pack,SqlRow,RecursiveResource)]
 #[topresource(items, "itm", 0x03ed)]
 pub struct Item {
 #[header("ITM V1  ")]
