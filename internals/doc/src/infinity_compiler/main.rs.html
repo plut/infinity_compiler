@@ -2828,24 +2828,15 @@
 <a href="#2828" id="2828">2828</a>
 <a href="#2829" id="2829">2829</a>
 <a href="#2830" id="2830">2830</a>
-<a href="#2831" id="2831">2831</a>
-<a href="#2832" id="2832">2832</a>
-<a href="#2833" id="2833">2833</a>
-<a href="#2834" id="2834">2834</a>
-<a href="#2835" id="2835">2835</a>
-<a href="#2836" id="2836">2836</a>
-<a href="#2837" id="2837">2837</a>
-<a href="#2838" id="2838">2838</a>
-<a href="#2839" id="2839">2839</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Compiler between IE game files and a SQLite database.
 </span><span class="attr">#![allow(
 	unused_attributes,
-	unused_imports,
-	dead_code,
-	unreachable_code,
-	unused_macros,
-	unused_variables,
-<span class="comment">// 	unused_must_use,
+<span class="comment">// 	unused_imports,
+// 	dead_code,
+// 	unreachable_code,
+// 	unused_macros,
+// 	unused_variables,
+// 	unused_must_use,
 // 	unused_mut,
 </span>)]
 #![warn(
@@ -4020,6 +4011,13 @@
 	</span><span class="kw">pub fn </span>is_subresource(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;bool {
 		<span class="macro">matches!</span>(<span class="self">self</span>.table_type, TableType::Sub { .. })
 	}
+	<span class="doccomment">/// Displays a full description of the schema on stdout.
+	</span><span class="kw">pub fn </span>describe(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+		<span class="macro">println!</span>(<span class="string">&quot;name={self}\nheader = {:?}&quot;</span>, <span class="self">self</span>.table_type);
+		<span class="kw">for </span>(i, f) <span class="kw">in </span><span class="self">self</span>.fields.iter().enumerate() {
+			<span class="macro">println!</span>(<span class="string">&quot;{i:2} {:&lt;20} {}&quot;</span>, f.fname, f.ftype.description());
+		}
+	}
 	<span class="doccomment">/// Creates a table with this schema and an arbitrary name.
 	</span><span class="kw">pub fn </span>create_table(<span class="kw-2">&amp;</span><span class="self">self</span>, name: <span class="kw">impl </span>Display, more: <span class="kw">impl </span>Display)-&gt;String {
 		<span class="kw">let </span><span class="kw-2">mut </span>sql = <span class="macro">format!</span>(<span class="string">&quot;create table \&quot;{name}\&quot; (&quot;</span>);
@@ -4230,13 +4228,6 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 			<span class="macro">uwriteln!</span>(w, <span class="string">&quot;;&quot;</span>);
 		}
 	}
-	<span class="doccomment">/// Displays a full description of the schema on stdout.
-	</span><span class="kw">pub fn </span>describe(<span class="kw-2">&amp;</span><span class="self">self</span>) {
-		<span class="macro">println!</span>(<span class="string">&quot;name={self}\nheader = {:?}&quot;</span>, <span class="self">self</span>.table_type);
-		<span class="kw">for </span>(i, f) <span class="kw">in </span><span class="self">self</span>.fields.iter().enumerate() {
-			<span class="macro">println!</span>(<span class="string">&quot;{i:2} {:&lt;20} {}&quot;</span>, f.fname, f.ftype.description());
-		}
-	}
 	<span class="doccomment">/// Returns the SQL statement for saving resources to filesystem.
 	</span><span class="kw">pub fn </span>select_dirty_sql(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;String {
 		<span class="kw">match </span><span class="self">self</span>.table_type {
@@ -4306,7 +4297,7 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 		<span class="self">self</span>.insert_subresources(db, <span class="kw-2">&amp;mut </span>tree.branches, primary)<span class="question-mark">?</span>;
 		<span class="prelude-val">Ok</span>(())
 	}
-	<span class="kw">fn </span>collect_all(node: <span class="kw-2">&amp;mut </span>Tree&lt;<span class="self">Self</span>::StatementForest&lt;<span class="lifetime">&#39;_</span>&gt;&gt;, params: <span class="kw">impl </span>rusqlite::Params)-&gt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="self">Self</span>&gt;&gt; {
+	<span class="kw">fn </span>collect_all(tree: <span class="kw-2">&amp;mut </span>Tree&lt;<span class="self">Self</span>::StatementForest&lt;<span class="lifetime">&#39;_</span>&gt;&gt;, params: <span class="kw">impl </span>rusqlite::Params)-&gt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="self">Self</span>&gt;&gt; {
 		<span class="macro">todo!</span>()
 	}
 }
@@ -4672,7 +4663,7 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 </span><span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
 <span class="kw">use </span><span class="kw">crate</span>::restypes::<span class="kw-2">*</span>;
 <span class="kw">use </span><span class="kw">crate</span>::gamefiles::GameIndex;
-<span class="kw">use </span><span class="kw">crate</span>::resources::{ALL_SCHEMAS,Tree,ResourceIO,Recurse};
+<span class="kw">use </span><span class="kw">crate</span>::resources::{ALL_SCHEMAS,ResourceIO,Recurse};
 <span class="kw">use </span><span class="kw">crate</span>::schemas::{Schema};
 
 <span class="doccomment">/// A trivial wrapper on [`rusqlite::Connection`];
@@ -5187,17 +5178,16 @@ begin&quot;#</span>);
 		<span class="prelude-val">Ok</span>(Value::Table(ret))
 	}
 }
-<span class="comment">/*
-/// Implementation of the `simod.select` callback.
-#[derive(Debug)]
-struct SelectRow&lt;&#39;a&gt;(Statement&lt;&#39;a&gt;);
-impl&lt;&#39;a&gt; Callback&lt;&#39;a&gt; for SelectRow&lt;&#39;a&gt; {
-	fn prepare(db: &amp;&#39;a impl DbInterface, schema: &amp;&#39;a Schema)-&gt;Result&lt;Self&gt; {
-		let sql = format!(r#&quot;select {cols} from &quot;{schema}&quot; where &quot;id&quot;=?&quot;#,
+<span class="doccomment">/// Implementation of the `simod.select` callback.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">struct </span>SelectRow&lt;<span class="lifetime">&#39;a</span>&gt;(Statement&lt;<span class="lifetime">&#39;a</span>&gt;);
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>&gt; Callback&lt;<span class="lifetime">&#39;a</span>&gt; <span class="kw">for </span>SelectRow&lt;<span class="lifetime">&#39;a</span>&gt; {
+	<span class="kw">fn </span>prepare(db: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw">impl </span>DbInterface, schema: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>Schema)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+		<span class="kw">let </span>sql = <span class="macro">format!</span>(<span class="string">r#&quot;select {cols} from &quot;{schema}&quot; where &quot;id&quot;=?&quot;#</span>,
 			cols = schema.fields);
-		db.prepare(sql).map(Self)
+		db.prepare(sql).map(<span class="self">Self</span>)
 	}
-	/// Implementation of `simod.list`.
+	<span class="doccomment">/// Implementation of `simod.list`.
 	///
 	/// This takes as parameters either
 	/// 1. the name of a top-level resource table, or
@@ -5205,141 +5195,134 @@ impl&lt;&#39;a&gt; Callback&lt;&#39;a&gt; for SelectRow&lt;&#39;a&gt; {
 	///    top-level resource,
 	/// and returns in a Lua table the list of all primary keys matching
 	/// this condition.
-	fn execute&lt;&#39;lua&gt;(&amp;mut self, lua: &amp;&#39;lua Lua, args: MultiValue&lt;&#39;lua&gt;)-&gt;Result&lt;Value&lt;&#39;lua&gt;&gt; {
-		Self::expect_arguments(&amp;args, self.0.parameter_count()+1)?;
-		let mut rows = self.0.query(args.as_params())?;
-		match rows.next()? {
-			Some(row) =&gt; {
-				let ret = lua.create_table()?;
-				for i in 0..row.as_ref().column_count() {
-					let val = row.get_ref(i)
-						.with_context(|| format!(&quot;cannot read field {i} in row&quot;))?;
-					ret.set(row.as_ref().column_name(i)?, sql_to_lua(val, lua)?)?;
+	</span><span class="kw">fn </span>execute&lt;<span class="lifetime">&#39;lua</span>&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, lua: <span class="kw-2">&amp;</span><span class="lifetime">&#39;lua </span>Lua, args: MultiValue&lt;<span class="lifetime">&#39;lua</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;Value&lt;<span class="lifetime">&#39;lua</span>&gt;&gt; {
+		<span class="self">Self</span>::expect_arguments(<span class="kw-2">&amp;</span>args, <span class="self">self</span>.<span class="number">0</span>.parameter_count()+<span class="number">1</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span><span class="kw-2">mut </span>rows = <span class="self">self</span>.<span class="number">0</span>.query(args.as_params())<span class="question-mark">?</span>;
+		<span class="kw">match </span>rows.next()<span class="question-mark">? </span>{
+			<span class="prelude-val">Some</span>(row) =&gt; {
+				<span class="kw">let </span>ret = lua.create_table()<span class="question-mark">?</span>;
+				<span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..row.as_ref().column_count() {
+					<span class="kw">let </span>val = row.get_ref(i)
+						.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;cannot read field {i} in row&quot;</span>))<span class="question-mark">?</span>;
+					ret.set(row.as_ref().column_name(i)<span class="question-mark">?</span>, sql_to_lua(val, lua)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 				}
-				Ok(Value::Table(ret))
+				<span class="prelude-val">Ok</span>(Value::Table(ret))
 			},
-			None =&gt; Ok(Value::Nil),
+			<span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(Value::Nil),
 		}
 	}
 }
-*/
-/*
-/// Implementation of `simod.insert`.
-#[derive(Debug)]
-struct InsertRow&lt;&#39;a&gt;(&amp;&#39;a Connection, Statement&lt;&#39;a&gt;,&amp;&#39;a Schema);
-impl&lt;&#39;a&gt; Callback&lt;&#39;a&gt; for InsertRow&lt;&#39;a&gt; {
-	fn prepare(db: &amp;&#39;a impl DbInterface, schema: &amp;&#39;a Schema)-&gt;Result&lt;Self&gt; {
-		let s = schema.insert_sql(lazy_format!(&quot;&quot;));
-		// TODO: use a restricted form of insertion where primary is not
+<span class="doccomment">/// Implementation of `simod.insert`.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">struct </span>InsertRow&lt;<span class="lifetime">&#39;a</span>&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>Connection, Statement&lt;<span class="lifetime">&#39;a</span>&gt;,<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>Schema);
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>&gt; Callback&lt;<span class="lifetime">&#39;a</span>&gt; <span class="kw">for </span>InsertRow&lt;<span class="lifetime">&#39;a</span>&gt; {
+	<span class="kw">fn </span>prepare(db: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw">impl </span>DbInterface, schema: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>Schema)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+		<span class="kw">let </span>s = schema.insert_sql(<span class="macro">lazy_format!</span>(<span class="string">&quot;&quot;</span>));
+		<span class="comment">// TODO: use a restricted form of insertion where primary is not
 		// inserted
-		Ok(Self(db.db(), db.prepare(s)?, schema))
+		</span><span class="prelude-val">Ok</span>(<span class="self">Self</span>(db.db(), db.prepare(s)<span class="question-mark">?</span>, schema))
 	}
-	fn execute&lt;&#39;lua&gt;(&amp;mut self, _lua: &amp;&#39;lua Lua, mut args: MultiValue&lt;&#39;lua&gt;)-&gt;Result&lt;Value&lt;&#39;lua&gt;&gt; {
-		Self::expect_arguments(&amp;args, 2)?;
-		let table = match args.pop_front().unwrap() {
+	<span class="kw">fn </span>execute&lt;<span class="lifetime">&#39;lua</span>&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _lua: <span class="kw-2">&amp;</span><span class="lifetime">&#39;lua </span>Lua, <span class="kw-2">mut </span>args: MultiValue&lt;<span class="lifetime">&#39;lua</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;Value&lt;<span class="lifetime">&#39;lua</span>&gt;&gt; {
+		<span class="self">Self</span>::expect_arguments(<span class="kw-2">&amp;</span>args, <span class="number">2</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span>table = <span class="kw">match </span>args.pop_front().unwrap() {
 			Value::Table(t) =&gt; t,
-			other =&gt; fail!(BadArgumentType { position: 2, expected: &quot;table&quot;,
-				found: format!(&quot;{other:?}&quot;)}),
+			other =&gt; <span class="macro">fail!</span>(BadArgumentType { position: <span class="number">2</span>, expected: <span class="string">&quot;table&quot;</span>,
+				found: <span class="macro">format!</span>(<span class="string">&quot;{other:?}&quot;</span>)}),
 		};
-		let Self(db, stmt, schema) = self;
-		// We could use two strategies here:
+		<span class="kw">let </span><span class="self">Self</span>(db, stmt, schema) = <span class="self">self</span>;
+		<span class="comment">// We could use two strategies here:
 		// 1. build an iterator from schema.fields, then map to SQL values,
 		//    then pass to [`rusqlite::params_from_iter`],
 		// 2. use a loop and raw bind to the statement.
 		// Since [`rusqlite::params_from_iter`] does not accept `Result`
 		// values, taking option 2 will produce better failure messages.
-		let offset: usize;
-		let expected = stmt.parameter_count();
-		let mut bind_field = |i, name| {
-			let v_lua: Value&lt;&#39;_&gt; = table.get(name)?;
-			// Note that sqlite uses 1-based indexing.
-			stmt.raw_bind_parameter(i+1, v_lua.to_sql_owned()?)?;
+		</span><span class="kw">let </span>offset: usize;
+		<span class="kw">let </span>expected = stmt.parameter_count();
+		<span class="kw">let </span><span class="kw-2">mut </span>bind_field = |i, name| {
+			<span class="kw">let </span>v_lua: Value&lt;<span class="lifetime">&#39;_</span>&gt; = table.get(name)<span class="question-mark">?</span>;
+			<span class="comment">// Note that sqlite uses 1-based indexing.
+			</span>stmt.raw_bind_parameter(i+<span class="number">1</span>, v_lua.to_sql_owned()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 			any_ok(())
 		};
-		// first bind the header fields:
-		if schema.is_subresource() {
-			offset = 2;
-			bind_field(0, &quot;parent&quot;)?;
-			bind_field(1, &quot;position&quot;)?;
-		} else {
-			offset = 1;
-			bind_field(0, &quot;id&quot;)?;
+		<span class="comment">// first bind the header fields:
+		</span><span class="kw">if </span>schema.is_subresource() {
+			offset = <span class="number">2</span>;
+			bind_field(<span class="number">0</span>, <span class="string">&quot;parent&quot;</span>)<span class="question-mark">?</span>;
+			bind_field(<span class="number">1</span>, <span class="string">&quot;position&quot;</span>)<span class="question-mark">?</span>;
+		} <span class="kw">else </span>{
+			offset = <span class="number">1</span>;
+			bind_field(<span class="number">0</span>, <span class="string">&quot;id&quot;</span>)<span class="question-mark">?</span>;
 		}
-		let found = schema.fields.len() + offset;
-		if found != expected {
-			fail!(BadParameterCount { expected, found })
+		<span class="kw">let </span>found = schema.fields.len() + offset;
+		<span class="kw">if </span>found != expected {
+			<span class="macro">fail!</span>(BadParameterCount { expected, found })
 		}
-		for (i, field) in schema.fields.iter().enumerate() {
-			bind_field(i + offset, field.fname)?;
+		<span class="kw">for </span>(i, field) <span class="kw">in </span>schema.fields.iter().enumerate() {
+			bind_field(i + offset, field.fname)<span class="question-mark">?</span>;
 		}
-		stmt.raw_execute()?;
-		if schema.is_subresource() {
-			table.set(&quot;id&quot;, db.last_insert_rowid())?;
+		stmt.raw_execute()<span class="question-mark">?</span>;
+		<span class="kw">if </span>schema.is_subresource() {
+			table.set(<span class="string">&quot;id&quot;</span>, db.last_insert_rowid())<span class="question-mark">?</span>;
 		}
-		Ok(Value::Table(table))
+		<span class="prelude-val">Ok</span>(Value::Table(table))
 	}
 }
-*/
-/*
-/// Implementation of `simod.update`.
+<span class="doccomment">/// Implementation of `simod.update`.
 ///
 /// We collect all the per-field update statements in a hash map.
 /// While this might lead to preparing useless statements in the case of
 /// a small mod, this should save time for large mods on average,
 /// and using prepared statements is safer anyway.
 /// (Besides, the memory storage req for a prepared statement is small).
-struct UpdateRow&lt;&#39;a&gt;(HashMap&lt;&amp;&#39;a str, Statement&lt;&#39;a&gt;&gt;);
-impl&lt;&#39;a&gt; Callback&lt;&#39;a&gt; for UpdateRow&lt;&#39;a&gt; {
-	fn prepare(db: &amp;&#39;a impl DbInterface, schema: &amp;&#39;a Schema)-&gt;Result&lt;Self&gt; {
-		let mut h = HashMap::&lt;&amp;str, Statement&lt;&#39;_&gt;&gt;::
+</span><span class="kw">struct </span>UpdateRow&lt;<span class="lifetime">&#39;a</span>&gt;(HashMap&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>str, Statement&lt;<span class="lifetime">&#39;a</span>&gt;&gt;);
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>&gt; Callback&lt;<span class="lifetime">&#39;a</span>&gt; <span class="kw">for </span>UpdateRow&lt;<span class="lifetime">&#39;a</span>&gt; {
+	<span class="kw">fn </span>prepare(db: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw">impl </span>DbInterface, schema: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>Schema)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+		<span class="kw">let </span><span class="kw-2">mut </span>h = HashMap::&lt;<span class="kw-2">&amp;</span>str, Statement&lt;<span class="lifetime">&#39;_</span>&gt;&gt;::
 			with_capacity(schema.fields.len());
-		for field in schema.fields.iter() {
-			h.insert(field.fname, db.prepare(&amp;format!(
-				r#&quot;update &quot;{schema}&quot; set {field}=?2 where &quot;id&quot;=?1&quot;#))?);
+		<span class="kw">for </span>field <span class="kw">in </span>schema.fields.iter() {
+			h.insert(field.fname, db.prepare(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+				<span class="string">r#&quot;update &quot;{schema}&quot; set {field}=?2 where &quot;id&quot;=?1&quot;#</span>))<span class="question-mark">?</span>);
 		}
-		Ok(Self(h))
+		<span class="prelude-val">Ok</span>(<span class="self">Self</span>(h))
 	}
-	fn execute&lt;&#39;lua&gt;(&amp;mut self, lua: &amp;&#39;lua Lua, mut args: MultiValue&lt;&#39;lua&gt;)-&gt;Result&lt;Value&lt;&#39;lua&gt;&gt; {
-		Self::expect_arguments(&amp;args, 4)?;
-		let arg0 = args.pop_front().unwrap(); // take ownership of first argument
-		let fieldname = match arg0 {
-			Value::String(ref s) =&gt; s.to_str()?,
-			other =&gt; fail!(BadArgumentType { position: 2, expected: &quot;string&quot;,
-				found: format!(&quot;{other:?}&quot;)}),
+	<span class="kw">fn </span>execute&lt;<span class="lifetime">&#39;lua</span>&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, lua: <span class="kw-2">&amp;</span><span class="lifetime">&#39;lua </span>Lua, <span class="kw-2">mut </span>args: MultiValue&lt;<span class="lifetime">&#39;lua</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;Value&lt;<span class="lifetime">&#39;lua</span>&gt;&gt; {
+		<span class="self">Self</span>::expect_arguments(<span class="kw-2">&amp;</span>args, <span class="number">4</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span>arg0 = args.pop_front().unwrap(); <span class="comment">// take ownership of first argument
+		</span><span class="kw">let </span>fieldname = <span class="kw">match </span>arg0 {
+			Value::String(<span class="kw-2">ref </span>s) =&gt; s.to_str()<span class="question-mark">?</span>,
+			other =&gt; <span class="macro">fail!</span>(BadArgumentType { position: <span class="number">2</span>, expected: <span class="string">&quot;string&quot;</span>,
+				found: <span class="macro">format!</span>(<span class="string">&quot;{other:?}&quot;</span>)}),
 		};
-		let stmt = match self.0.get_mut(fieldname) {
-			Some(s) =&gt; s,
-			_ =&gt; fail!(UnknownField { field: fieldname.into(), }),
+		<span class="kw">let </span>stmt = <span class="kw">match </span><span class="self">self</span>.<span class="number">0</span>.get_mut(fieldname) {
+			<span class="prelude-val">Some</span>(s) =&gt; s,
+			<span class="kw">_ </span>=&gt; <span class="macro">fail!</span>(UnknownField { field: fieldname.into(), }),
 		};
-		// Return the number of changed rows:
-		let n = stmt.execute((LuaValueRef(args.get(0).unwrap()),
-			LuaValueRef(args.get(1).unwrap())))?;
-		Ok((n &gt; 0).to_lua(lua)?)
+		<span class="comment">// Return the number of changed rows:
+		</span><span class="kw">let </span>n = stmt.execute((LuaValueRef(args.get(<span class="number">0</span>).unwrap()),
+			LuaValueRef(args.get(<span class="number">1</span>).unwrap())))<span class="question-mark">?</span>;
+		<span class="prelude-val">Ok</span>((n &gt; <span class="number">0</span>).to_lua(lua)<span class="question-mark">?</span>)
 	}
 }
-*/
-/*
-/// Implementation of `simod.delete`.
-struct DeleteRow&lt;&#39;a&gt;(Statement&lt;&#39;a&gt;);
-impl&lt;&#39;a&gt; Callback&lt;&#39;a&gt; for DeleteRow&lt;&#39;a&gt; {
-	fn prepare(db: &amp;&#39;a impl DbInterface, schema: &amp;&#39;a Schema)-&gt;Result&lt;Self&gt; {
-		db.prepare(&amp;format!(r#&quot;delete from &quot;{schema}&quot; where &quot;id&quot;=?&quot;#))
-			.map(Self)
+<span class="doccomment">/// Implementation of `simod.delete`.
+</span><span class="kw">struct </span>DeleteRow&lt;<span class="lifetime">&#39;a</span>&gt;(Statement&lt;<span class="lifetime">&#39;a</span>&gt;);
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>&gt; Callback&lt;<span class="lifetime">&#39;a</span>&gt; <span class="kw">for </span>DeleteRow&lt;<span class="lifetime">&#39;a</span>&gt; {
+	<span class="kw">fn </span>prepare(db: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw">impl </span>DbInterface, schema: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>Schema)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+		db.prepare(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">r#&quot;delete from &quot;{schema}&quot; where &quot;id&quot;=?&quot;#</span>))
+			.map(<span class="self">Self</span>)
 	}
-	fn execute&lt;&#39;lua&gt;(&amp;mut self, lua: &amp;&#39;lua Lua, args: MultiValue&lt;&#39;lua&gt;)-&gt;Result&lt;Value&lt;&#39;lua&gt;&gt; {
-		Self::expect_arguments(&amp;args, self.0.parameter_count()+1)?;
-		let n = self.0.execute(args.as_params())?;
-		Ok((n &gt; 0).to_lua(lua)?)
+	<span class="kw">fn </span>execute&lt;<span class="lifetime">&#39;lua</span>&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, lua: <span class="kw-2">&amp;</span><span class="lifetime">&#39;lua </span>Lua, args: MultiValue&lt;<span class="lifetime">&#39;lua</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;Value&lt;<span class="lifetime">&#39;lua</span>&gt;&gt; {
+		<span class="self">Self</span>::expect_arguments(<span class="kw-2">&amp;</span>args, <span class="self">self</span>.<span class="number">0</span>.parameter_count()+<span class="number">1</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span>n = <span class="self">self</span>.<span class="number">0</span>.execute(args.as_params())<span class="question-mark">?</span>;
+		<span class="prelude-val">Ok</span>((n &gt; <span class="number">0</span>).to_lua(lua)<span class="question-mark">?</span>)
 	}
 }
-/// This extension trait allows factoring the code for selecting the
+<span class="doccomment">/// This extension trait allows factoring the code for selecting the
 /// appropriate table for a Lua callback.
 /// Once this is done, the individual [`Callback`] instance for this
 /// table is run.
-#[ext]
-*/
+</span><span class="attr">#[ext]
 </span><span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>, T: Callback&lt;<span class="lifetime">&#39;a</span>&gt; + Debug+<span class="lifetime">&#39;a </span>+ Sized&gt; RootForest&lt;T&gt; {
-	<span class="kw">fn </span>prepare(db: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw">impl </span>DbInterface)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+	<span class="kw">fn </span>prepare(db: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw">impl </span>DbInterface)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; <span class="kw">where </span><span class="self">Self</span>: Sized {
 		ALL_SCHEMAS.try_map(|s| T::prepare(db, s))
 	}
 	<span class="doccomment">/// Selects the appropriate individual callback from the first argument
@@ -5382,21 +5365,21 @@ impl&lt;&#39;a&gt; Callback&lt;&#39;a&gt; for DeleteRow&lt;&#39;a&gt; {
 // 	schemas: AllResources&lt;Schema&gt;,
 	</span><span class="doccomment">/// Prepared statements for `simod.list`.
 	</span>list_keys: RootForest&lt;ListKeys&lt;<span class="lifetime">&#39;a</span>&gt;&gt;,
-<span class="comment">// 	select_row: RootForest&lt;SelectRow&lt;&#39;a&gt;&gt;,
-// 	insert_row: RootForest&lt;InsertRow&lt;&#39;a&gt;&gt;,
-// 	update_row: RootForest&lt;InsertRow&lt;&#39;a&gt;&gt;,
-// 	delete_row: RootForest&lt;InsertRow&lt;&#39;a&gt;&gt;,
-</span>}
+	select_row: RootForest&lt;SelectRow&lt;<span class="lifetime">&#39;a</span>&gt;&gt;,
+	insert_row: RootForest&lt;InsertRow&lt;<span class="lifetime">&#39;a</span>&gt;&gt;,
+	update_row: RootForest&lt;InsertRow&lt;<span class="lifetime">&#39;a</span>&gt;&gt;,
+	delete_row: RootForest&lt;InsertRow&lt;<span class="lifetime">&#39;a</span>&gt;&gt;,
+}
 <span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>&gt; LuaStatements&lt;<span class="lifetime">&#39;a</span>&gt; {
 	<span class="kw">pub fn </span>new(db: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw">impl </span>DbInterface)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
 		<span class="prelude-val">Ok</span>(<span class="self">Self </span>{
 <span class="comment">// 			schemas,
 			</span>list_keys: RootForest::&lt;<span class="kw">_</span>&gt;::prepare(db)<span class="question-mark">?</span>,
-<span class="comment">// 			select_row: RootForest::&lt;_&gt;::prepare(db, schemas)?,
-// 			insert_row: RootForest::&lt;_&gt;::prepare(db, schemas)?,
-// 			update_row: RootForest::&lt;_&gt;::prepare(db, schemas)?,
-// 			delete_row: RootForest::&lt;_&gt;::prepare(db, schemas)?,
-		</span>})
+			select_row: RootForest::&lt;<span class="kw">_</span>&gt;::prepare(db)<span class="question-mark">?</span>,
+			insert_row: RootForest::&lt;<span class="kw">_</span>&gt;::prepare(db)<span class="question-mark">?</span>,
+			update_row: RootForest::&lt;<span class="kw">_</span>&gt;::prepare(db)<span class="question-mark">?</span>,
+			delete_row: RootForest::&lt;<span class="kw">_</span>&gt;::prepare(db)<span class="question-mark">?</span>,
+		})
 	}
 }
 
@@ -5456,11 +5439,11 @@ impl&lt;&#39;a&gt; Callback&lt;&#39;a&gt; for DeleteRow&lt;&#39;a&gt; {
 			mlua_ok(())
 		})<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 		statements.list_keys.install_callback(scope, <span class="kw-2">&amp;</span>simod, <span class="string">&quot;list&quot;</span>)<span class="question-mark">?</span>;
-<span class="comment">// 		statements.select_row.install_callback(scope, &amp;simod, &quot;select&quot;)?;
-// 		statements.insert_row.install_callback(scope, &amp;simod, &quot;insert&quot;)?;
-// 		statements.update_row.install_callback(scope, &amp;simod, &quot;update&quot;)?;
-// 		statements.delete_row.install_callback(scope, &amp;simod, &quot;delete&quot;)?;
-		</span>lua.globals().set(<span class="string">&quot;simod&quot;</span>, simod)<span class="question-mark">?</span>;
+		statements.select_row.install_callback(scope, <span class="kw-2">&amp;</span>simod, <span class="string">&quot;select&quot;</span>)<span class="question-mark">?</span>;
+		statements.insert_row.install_callback(scope, <span class="kw-2">&amp;</span>simod, <span class="string">&quot;insert&quot;</span>)<span class="question-mark">?</span>;
+		statements.update_row.install_callback(scope, <span class="kw-2">&amp;</span>simod, <span class="string">&quot;update&quot;</span>)<span class="question-mark">?</span>;
+		statements.delete_row.install_callback(scope, <span class="kw-2">&amp;</span>simod, <span class="string">&quot;delete&quot;</span>)<span class="question-mark">?</span>;
+		lua.globals().set(<span class="string">&quot;simod&quot;</span>, simod)<span class="question-mark">?</span>;
 
 		<span class="macro">info!</span>(<span class="string">&quot;loading file {lua_file:?}&quot;</span>);
 		lua.load(lua_file).exec()<span class="question-mark">?</span>;
@@ -5477,7 +5460,6 @@ impl&lt;&#39;a&gt; Callback&lt;&#39;a&gt; for DeleteRow&lt;&#39;a&gt; {
 
 <span class="kw">use </span>gamefiles::{GameIndex};
 <span class="kw">use </span>toolbox::{Progress};
-<span class="kw">use </span><span class="kw">crate</span>::restypes::<span class="kw-2">*</span>;
 <span class="kw">use </span><span class="kw">crate</span>::resources::{ALL_SCHEMAS,ByName,Recurse};
 
 <span class="kw">fn </span>type_of&lt;T&gt;(<span class="kw">_</span>:<span class="kw-2">&amp;</span>T)-&gt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str { std::any::type_name::&lt;T&gt;() }
