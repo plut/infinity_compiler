@@ -2878,6 +2878,71 @@
 <a href="#2878" id="2878">2878</a>
 <a href="#2879" id="2879">2879</a>
 <a href="#2880" id="2880">2880</a>
+<a href="#2881" id="2881">2881</a>
+<a href="#2882" id="2882">2882</a>
+<a href="#2883" id="2883">2883</a>
+<a href="#2884" id="2884">2884</a>
+<a href="#2885" id="2885">2885</a>
+<a href="#2886" id="2886">2886</a>
+<a href="#2887" id="2887">2887</a>
+<a href="#2888" id="2888">2888</a>
+<a href="#2889" id="2889">2889</a>
+<a href="#2890" id="2890">2890</a>
+<a href="#2891" id="2891">2891</a>
+<a href="#2892" id="2892">2892</a>
+<a href="#2893" id="2893">2893</a>
+<a href="#2894" id="2894">2894</a>
+<a href="#2895" id="2895">2895</a>
+<a href="#2896" id="2896">2896</a>
+<a href="#2897" id="2897">2897</a>
+<a href="#2898" id="2898">2898</a>
+<a href="#2899" id="2899">2899</a>
+<a href="#2900" id="2900">2900</a>
+<a href="#2901" id="2901">2901</a>
+<a href="#2902" id="2902">2902</a>
+<a href="#2903" id="2903">2903</a>
+<a href="#2904" id="2904">2904</a>
+<a href="#2905" id="2905">2905</a>
+<a href="#2906" id="2906">2906</a>
+<a href="#2907" id="2907">2907</a>
+<a href="#2908" id="2908">2908</a>
+<a href="#2909" id="2909">2909</a>
+<a href="#2910" id="2910">2910</a>
+<a href="#2911" id="2911">2911</a>
+<a href="#2912" id="2912">2912</a>
+<a href="#2913" id="2913">2913</a>
+<a href="#2914" id="2914">2914</a>
+<a href="#2915" id="2915">2915</a>
+<a href="#2916" id="2916">2916</a>
+<a href="#2917" id="2917">2917</a>
+<a href="#2918" id="2918">2918</a>
+<a href="#2919" id="2919">2919</a>
+<a href="#2920" id="2920">2920</a>
+<a href="#2921" id="2921">2921</a>
+<a href="#2922" id="2922">2922</a>
+<a href="#2923" id="2923">2923</a>
+<a href="#2924" id="2924">2924</a>
+<a href="#2925" id="2925">2925</a>
+<a href="#2926" id="2926">2926</a>
+<a href="#2927" id="2927">2927</a>
+<a href="#2928" id="2928">2928</a>
+<a href="#2929" id="2929">2929</a>
+<a href="#2930" id="2930">2930</a>
+<a href="#2931" id="2931">2931</a>
+<a href="#2932" id="2932">2932</a>
+<a href="#2933" id="2933">2933</a>
+<a href="#2934" id="2934">2934</a>
+<a href="#2935" id="2935">2935</a>
+<a href="#2936" id="2936">2936</a>
+<a href="#2937" id="2937">2937</a>
+<a href="#2938" id="2938">2938</a>
+<a href="#2939" id="2939">2939</a>
+<a href="#2940" id="2940">2940</a>
+<a href="#2941" id="2941">2941</a>
+<a href="#2942" id="2942">2942</a>
+<a href="#2943" id="2943">2943</a>
+<a href="#2944" id="2944">2944</a>
+<a href="#2945" id="2945">2945</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Compiler between IE game files and a SQLite database.
 </span><span class="attr">#![allow(
 	unused_attributes,
@@ -4449,7 +4514,72 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 		}
 	}
 }
-
+<span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>Node&lt;T: Tree&gt; {
+	content: T::In,
+	tree: T,
+}
+<span class="kw">impl</span>&lt;T: Tree&gt; Deref <span class="kw">for </span>Node&lt;T&gt; {
+	<span class="kw">type </span>Target = T::In;
+	<span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span><span class="self">Self</span>::Target { <span class="kw-2">&amp;</span><span class="self">self</span>.content }
+}
+<span class="kw">impl</span>&lt;T: Tree&gt; DerefMut <span class="kw">for </span>Node&lt;T&gt; {
+	<span class="kw">fn </span>deref_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>)-&gt;<span class="kw-2">&amp;mut </span><span class="self">Self</span>::Target { <span class="kw-2">&amp;mut </span><span class="self">self</span>.content }
+}
+<span class="kw">impl</span>&lt;X: Debug, T: Tree&lt;In=X&gt;&gt; Node&lt;T&gt; {
+	<span class="kw">pub fn </span>by_name&lt;<span class="lifetime">&#39;a</span>&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="self">self</span>, s: <span class="kw-2">&amp;</span>str)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>X&gt; {
+		<span class="kw">if </span>s.is_empty() { <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.content) }
+		<span class="kw">if </span>s.as_bytes()[<span class="number">0</span>] != <span class="string">b&#39;_&#39; </span>{ <span class="kw">return </span><span class="prelude-val">None </span>}
+		<span class="self">self</span>.tree.by_name(<span class="kw-2">&amp;</span>s[<span class="number">1</span>..])
+	}
+	<span class="kw">pub fn </span>by_name_mut&lt;<span class="lifetime">&#39;a</span>&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw-2">mut </span><span class="self">self</span>, s: <span class="kw-2">&amp;</span>str)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw-2">mut </span>X&gt; {
+		<span class="kw">if </span>s.is_empty() { <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;mut </span><span class="self">self</span>.content) }
+		<span class="kw">if </span>s.as_bytes()[<span class="number">0</span>] != <span class="string">b&#39;_&#39; </span>{ <span class="kw">return </span><span class="prelude-val">None </span>}
+		<span class="self">self</span>.tree.by_name_mut(<span class="kw-2">&amp;</span>s[<span class="number">1</span>..])
+	}
+	<span class="doccomment">/// Recursively traverse the tree from its root,
+	/// applying the closure on each element. Used by `traverse` and `map`.
+	///
+	/// For each node in the tree, the closure `f` is invoked with:
+	///  - the content of the node,
+	///  - the name of this node (as a `&amp;&#39;static str`),
+	///  - the state computed for the parent (as an `Option`),
+	/// It should return a tuple of:
+	///  - the new state value passed to children,
+	///  - the value computed for this node.
+	</span><span class="kw">pub fn </span>recurse&lt;<span class="lifetime">&#39;a</span>,<span class="lifetime">&#39;n</span>,S,E,F,Y&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="self">self</span>, f: F, name: <span class="kw-2">&amp;</span><span class="lifetime">&#39;n </span>str, state: <span class="kw-2">&amp;</span>S)
+		-&gt;<span class="prelude-ty">Result</span>&lt;Node&lt;T::To&gt;,E&gt;
+	<span class="kw">where </span>X: <span class="lifetime">&#39;a</span>, Y: Debug, T: TreeRecurse&lt;Y&gt;,
+		F: Fn(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>X, <span class="kw-2">&amp;</span><span class="lifetime">&#39;n </span>str, <span class="kw-2">&amp;</span>S)-&gt;<span class="prelude-ty">Result</span>&lt;(S,Y),E&gt;
+	{
+		<span class="kw">let </span>(new_state, content) = f(<span class="kw-2">&amp;</span><span class="self">self</span>.content, name, state)<span class="question-mark">?</span>;
+		<span class="prelude-val">Ok</span>(Node { content, tree: <span class="self">self</span>.tree.recurse(f, name, <span class="kw-2">&amp;</span>new_state)<span class="question-mark">? </span>})
+	}
+	<span class="doccomment">/// Same as `recurse`, but for a `FnMut`.
+	</span><span class="kw">pub fn </span>recurse_mut&lt;<span class="lifetime">&#39;a</span>,<span class="lifetime">&#39;n</span>,S,E,F,Y&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="self">self</span>, <span class="kw-2">mut </span>f: F, name: <span class="kw-2">&amp;</span><span class="lifetime">&#39;n </span>str, state: <span class="kw-2">&amp;</span>S)
+		-&gt;<span class="prelude-ty">Result</span>&lt;Node&lt;T::To&gt;,E&gt;
+	<span class="kw">where </span>X: <span class="lifetime">&#39;a</span>, Y: Debug, T: TreeRecurse&lt;Y&gt;,
+		F: FnMut(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>X, <span class="kw-2">&amp;</span><span class="lifetime">&#39;n </span>str, <span class="kw-2">&amp;</span>S)-&gt;<span class="prelude-ty">Result</span>&lt;(S,Y),E&gt;
+	{
+		<span class="kw">let </span>(new_state, content) = f(<span class="kw-2">&amp;</span><span class="self">self</span>.content, name, state)<span class="question-mark">?</span>;
+		<span class="prelude-val">Ok</span>(Node { content, tree: <span class="self">self</span>.tree.recurse_mut(f, name, <span class="kw-2">&amp;</span>new_state)<span class="question-mark">? </span>})
+	}
+}
+<span class="doccomment">/// Impl of this trait is produced by macro
+</span><span class="kw">pub trait </span>Tree {
+	<span class="kw">type </span>In;
+	<span class="kw">fn </span>by_name&lt;<span class="lifetime">&#39;a</span>&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="self">self</span>, target: <span class="kw-2">&amp;</span>str)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="self">Self</span>::In&gt;;
+	<span class="kw">fn </span>by_name_mut&lt;<span class="lifetime">&#39;a</span>&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw-2">mut </span><span class="self">self</span>, target: <span class="kw-2">&amp;</span>str)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw-2">mut </span><span class="self">Self</span>::In&gt;;
+}
+<span class="kw">pub trait </span>TreeRecurse&lt;Y&gt;: Tree {
+	<span class="kw">type </span>To: Tree&lt;In=Y&gt;;
+	<span class="kw">fn </span>recurse&lt;<span class="lifetime">&#39;a</span>,<span class="lifetime">&#39;n</span>,S,E,F&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="self">self</span>, f: F, name: <span class="kw-2">&amp;</span><span class="lifetime">&#39;n </span>str, state: <span class="kw-2">&amp;</span>S)
+		-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::To,E&gt;
+	<span class="kw">where </span>F: Fn(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="self">Self</span>::In, <span class="kw-2">&amp;</span><span class="lifetime">&#39;n </span>str, <span class="kw-2">&amp;</span>S)-&gt;<span class="prelude-ty">Result</span>&lt;(S,Y),E&gt;;
+	<span class="kw">fn </span>recurse_mut&lt;<span class="lifetime">&#39;a</span>,<span class="lifetime">&#39;n</span>,S,E,F&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="self">self</span>, f: F, name: <span class="kw-2">&amp;</span><span class="lifetime">&#39;n </span>str, state: <span class="kw-2">&amp;</span>S)
+		-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::To,E&gt;
+	<span class="kw">where </span>F: FnMut(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="self">Self</span>::In, <span class="kw-2">&amp;</span><span class="lifetime">&#39;n </span>str, <span class="kw-2">&amp;</span>S)-&gt;<span class="prelude-ty">Result</span>&lt;(S,Y),E&gt;;
+}
 <span class="doccomment">/// A helper type for building schemas for all in-game resource.
 </span><span class="kw">struct </span>SchemaBuildState {
 	level: usize,
