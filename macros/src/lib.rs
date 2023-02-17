@@ -519,12 +519,12 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 
 /// The structure that does the work of producing the `FooNode` code.
 #[derive(Debug)]
-struct DeriveTree {
+struct DeriveForest {
 	ident: syn::Ident,
 	field: Vec<syn::Ident>,
 	ty: Vec<syn::Type>,
 }
-impl DeriveTree {
+impl DeriveForest {
 	fn new(ident: &syn::Ident)->Self {
 		Self {
 			ident: ident.clone(),
@@ -537,24 +537,24 @@ impl DeriveTree {
 		self.ty.push(ft.clone());
 	}
 }
-impl ToTokens for DeriveTree {
+impl ToTokens for DeriveForest {
 	fn to_tokens(&self, dest: &mut TS) {
 		let Self { ident, field, ty } = self;
-		let treename = ident.extend("Forest");
-		let subtree = ty.iter().map(|x| x.extend("Forest"))
+		let forestname = ident.extend("Forest");
+		let subforest = ty.iter().map(|x| x.extend("Forest"))
 			.collect::<Vec<_>>();
 		quote! {
-			/// A `Node` impl. derived by `derive(RecursiveResource)`.
+			/// A `Node` impl. derived by `derive(Forest)`.
 			#[derive(Debug)]
-			pub struct #treename<X: Debug> {
-				#(pub #field: crate::resources::Tree<#subtree::<X>>,)*
+			pub struct #forestname<X: Debug> {
+				#(pub #field: crate::resources::Tree<#subforest::<X>>,)*
 				_marker: PhantomData<X>
 			}
 			/// Runtime search in the tree.
 			/// this would be a bit hard to do with `recurse` — the lifetimes are
 			/// a mess, and we want to interrupt search as soon as we find *and*
 			/// cut branches with a non-matching name:
-			impl<X: Debug> crate::resources::Forest for #treename<X> {
+			impl<X: Debug> crate::resources::Forest for #forestname<X> {
 				type In = X;
 				fn by_name<'a>(&'a self, s: &str)->Option<&'a X> {
 					#(if let Some(tail) = s.strip_prefix(stringify!(#field)) {
@@ -570,12 +570,12 @@ impl ToTokens for DeriveTree {
 					None
 				}
 			}
-			impl<X: Debug, Y:Debug> crate::resources::TreeRecurse<Y> for #treename<X> {
-				type To = #treename<Y>;
+			impl<X: Debug, Y:Debug> crate::resources::TreeRecurse<Y> for #forestname<X> {
+				type To = #forestname<Y>;
 				fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 					->Result<Self::To,E>
 				where F: Fn(&'a Self::In, &'n str, &S)->Result<(S,Y),E> {
-					Ok(#treename {
+					Ok(#forestname {
 					#(#field:
 						self.#field.recurse(&f, stringify!(#field), &state)?,)*
 						_marker: PhantomData
@@ -584,7 +584,7 @@ impl ToTokens for DeriveTree {
 				fn recurse_mut<'a,'n,S,E,F>(&'a self, mut f: F, name: &'n str, state: &S)
 					->Result<Self::To,E>
 				where F: FnMut(&'a Self::In, &'n str, &S)->Result<(S,Y),E> {
-					Ok(#treename {
+					Ok(#forestname {
 					#(#field:
 						self.#field.recurse_mut(&mut f, stringify!(#field), &state)?,)*
 						_marker: PhantomData
@@ -597,7 +597,7 @@ impl ToTokens for DeriveTree {
 }
 
 /// The macro deriving `Resource`.
-#[proc_macro_derive(RecursiveResource,attributes(topresource))]
+#[proc_macro_derive(Forest,attributes(topresource))]
 pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let DeriveInput{ ident, data, attrs,.. } = parse_macro_input!(tokens);
 	let fields = Fields::from(data);
@@ -622,8 +622,8 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			_ => ()
 		}
 	}
-	let mut derive_tree = DeriveTree::new(&ident);
-	for FieldRef { name, attrs, ty, .. } in fields.iter() {
+	let mut derive_forest = DeriveForest::new(&ident);
+	for FieldRef { name, ty, .. } in fields.iter() {
 		// Read attributes for this field
 // 		for (name, mut _args) in attrs.iter().map(parse_attr) {
 // 			match name.as_str() {
@@ -631,7 +631,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 // 			} // match
 // 		} // for
 		if let Some(eltype) = ty.vec_eltype() {
-			derive_tree.push(&name.ident(), eltype);
+			derive_forest.push(&name.ident(), eltype);
 			let subnode = eltype.extend("Node");
 			quote!{ pub #name: #subnode::<T>, }.to_tokens(&mut node_struct);
 			quote!{ #name:
@@ -640,7 +640,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			quote!{ #name:
 				self.#name.recurse_mut(&mut f, stringify!(#name), &new_state)?, }
 				.to_tokens(&mut recurse_mut);
-			quote!{ #name: <#eltype as crate::resources::RecursiveResource>::FIELDS_NODE, }
+			quote!{ #name: <#eltype as crate::resources::ResourceTree>::FIELDS_NODE, }
 				.to_tokens(&mut fields_node);
 			quote!{ for (index, sub) in self.#name.iter().enumerate() {
 					sub.insert_as_subresource(db, &mut node.#name, primary, index)?;
@@ -662,7 +662,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	}
 	let node_ty = ident.extend("Node");
 	let _code0 = quote!{
-		impl crate::resources::RecursiveResource for #ident {
+		impl crate::resources::ResourceTree for #ident {
 			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
 			const FIELDS_NODE: Self::FieldNode = #node_ty {
 				#fields_node
@@ -680,8 +680,8 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 // 		}
 	};
 // 	println!("{}", code);
-	let code = quote! { #derive_tree
-		/// A `Node` impl. derived by `derive(RecursiveResource)`.
+	let code = quote! { #derive_forest
+		/// A `Node` impl. derived by `derive(Forest)`.
 		#[derive(Debug)]
 		pub struct #node_ty<T: Debug> { #node_struct content: T }
 		impl<X: Debug> Deref for #node_ty<X> {
@@ -727,7 +727,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				Ok(#node_ty { #recurse_mut content })
 			}
 		}
-		impl crate::resources::RecursiveResource for #ident {
+		impl crate::resources::ResourceTree for #ident {
 			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
 			const FIELDS_NODE: Self::FieldNode = #node_ty {
 				#fields_node
@@ -756,7 +756,7 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 	let mut by_name = quote!{};
 	let mut by_name_mut = quote!{};
 	let mut const_def = quote!{};
-	let mut derive_root = DeriveTree::new(&syn::Ident::new("RootNode", Span::call_site()));
+	let mut derive_root = DeriveForest::new(&syn::Ident::new("RootNode", Span::call_site()));
 	TOP.with(|v| {
 		for TopResource { type_name, table_name, ext: _ext, resref: _res }
 				in v.borrow().iter() {
@@ -771,7 +771,7 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 			quote!{ #field: self.#field.recurse_mut(f, stringify!(#field), init)?, }
 				.to_tokens(&mut recurse_mut);
 			quote!{
-				#field: <#ty as crate::resources::RecursiveResource>::FIELDS_NODE,
+				#field: <#ty as crate::resources::ResourceTree>::FIELDS_NODE,
 			}.to_tokens(&mut const_def);
 			quote!{
 				if let Some(new_target) = tail.strip_prefix(stringify!(#field)) {
@@ -786,7 +786,7 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 		}
 	});
 	let code = quote!{
-		/// A `Node` impl. derived by `derive(RecursiveResource)`.
+		/// A `Node` impl. derived by `derive(Forest)`.
 		#[derive(Debug)] pub struct RootNode<X: Debug> { #data
 			_marker: PhantomData<X>
 		}

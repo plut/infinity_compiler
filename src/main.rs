@@ -1477,7 +1477,7 @@ pub trait Recurse<Y>: DerefMut {
 /// The trait shared by all game resources.
 /// All the required functions are produced by the `Resource` derive
 /// macro from the list of sub-resources for this resource.
-pub trait RecursiveResource: SqlRow {
+pub trait ResourceTree: SqlRow {
 	/// Always `FooNode<Fields>`.
 	type FieldNode;
 	/// The node in the tree holding the fields description for this
@@ -1543,11 +1543,11 @@ pub trait RecursiveResource: SqlRow {
 }
 /// An iterator building full recursive resources from a statement tree.
 #[allow(missing_debug_implementations)]
-pub struct RecursiveRows<'stmt, T: RecursiveResource> {
+pub struct RecursiveRows<'stmt, T: ResourceTree> {
 	rows: TypedRows<'stmt,(T::Primary,T)>,
 	node: &'stmt mut T::StatementNode<'stmt>,
 }
-impl<'a,T: RecursiveResource> RecursiveRows<'a,T> {
+impl<'a,T: ResourceTree> RecursiveRows<'a,T> {
 	fn new(node: &'a mut T::StatementNode<'a>, params: impl rusqlite::Params)->Result<Self> {
 		todo!()
 // 		let stmt = node.deref_mut();
@@ -1555,7 +1555,7 @@ impl<'a,T: RecursiveResource> RecursiveRows<'a,T> {
 // 		Ok(Self { rows: rows.into(), node })
 	}
 }
-impl<T: RecursiveResource> Iterator for RecursiveRows<'_,T> {
+impl<T: ResourceTree> Iterator for RecursiveRows<'_,T> {
 	type Item = Result<(T::Primary, T)>;
 	fn next(&mut self)->Option<Self::Item> {
 		match self.rows.next() {
@@ -1626,6 +1626,9 @@ pub trait Forest {
 	fn by_name<'a>(&'a self, target: &str)->Option<&'a Self::In>;
 	fn by_name_mut<'a>(&'a mut self, target: &str)->Option<&'a mut Self::In>;
 }
+/// Trait containing the basic recursion function for forests.
+/// Implemented by the derive macro for forests deduced from resource
+/// types.
 pub trait TreeRecurse<Y>: Forest {
 	type To: Forest<In=Y>;
 	fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
@@ -1691,7 +1694,7 @@ pub static ALL_SCHEMAS: Lazy<RootNode<Schema>> = Lazy::new(|| {
 /// A trait containing resource I/O functions.
 ///
 /// This is only available for top-level resources.
-pub trait ResourceIO: RecursiveResource<Primary=Resref> {
+pub trait ResourceIO: ResourceTree<Primary=Resref> {
 	// Required methods
 	/// Loads a resource from filesystem.
 	fn load(io: impl Read+Seek)->Result<Self>;
@@ -1699,7 +1702,7 @@ pub trait ResourceIO: RecursiveResource<Primary=Resref> {
 	fn save(&mut self, io: impl Write+Seek+Debug)->Result<()>;
 	// Provided methods
 }
-impl<T: RecursiveResource<Primary=Resref>+ResourceIO> crate::database::LoadResource for T {
+impl<T: ResourceTree<Primary=Resref>+ResourceIO> crate::database::LoadResource for T {
 	type InsertHandle<'db:'b,'b> = (&'db Connection, &'b mut T::StatementNode<'db>);
 	#[allow(single_use_lifetimes)] // clippy over-optimistic here
 	fn load_and_insert<'db:'b,'b>((db, node): Self::InsertHandle<'db,'b>, 
