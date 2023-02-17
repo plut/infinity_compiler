@@ -1545,7 +1545,8 @@ impl<X: Debug, Y: Debug, T: ByName<In=X>+Recurse<Y>> Recurse<Y> for Tree<T> {
 		Ok(Tree { content, branches: self.branches.recurse_mut(f, name, &new_state)? })
 	}
 }
-/// Impl of this trait is produced by macro
+/// Collections indexed by name. Implemented by `ResourceTree` derive
+/// macro for forests.
 pub trait ByName {
 	type In;
 	fn by_name1<'a>(&'a self, target: &str)->Option<&'a Self::In>;
@@ -1573,14 +1574,13 @@ pub trait Recurse<Y>: ByName {
 	fn recurse_mut<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 		->Result<Self::To,E>
 	where Self::In: 'a, F: FnMut(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;
+	// Provided methods:
 	/// Apply a closure to each element of the tree; fallible version.
-	fn try_map<'a,E,F>(&'a self, f: F)->Result<Self::To,E>
-	where Y: 'a, F: Fn(&'a Self::In)->Result<Y,E> {
+	fn try_map<'a,E,F>(&'a self, f: F)->Result<Self::To,E> where Y: 'a, F: Fn(&'a Self::In)->Result<Y,E> {
 		self.recurse(|x, _, _| f(x).map(|x| ((),x)), "", &())
 	}
 	/// Apply a closure to each element of the tree; fallible version.
-	fn try_map_mut<'a,E,F>(&self, mut f: F)->Result<Self::To,E>
-	where Y: 'a, F: FnMut(&Self::In)->Result<Y,E> {
+	fn try_map_mut<'a,E,F>(&self, mut f: F)->Result<Self::To,E> where Y: 'a, F: FnMut(&Self::In)->Result<Y,E> {
 		self.recurse_mut(|x, _, _| f(x).map(|x| ((),x)), "", &())
 	}
 	/// Apply a closure to each element of the tree; infallible version.
@@ -1636,8 +1636,8 @@ impl SchemaBuildState {
 	}
 }
 /// The definition of schemas for all in-game resources.
-pub static ALL_SCHEMAS: Lazy<Tree<RootForest<Schema>>> = Lazy::new(|| {
-	crate::restypes::Root::FIELDS_TREE.recurse(|row_data,name,state| {
+pub static ALL_SCHEMAS: Lazy<RootForest<Schema>> = Lazy::new(|| {
+	crate::restypes::Root::FIELDS_TREE.branches.recurse(|row_data,name,state| {
 		let new_state = SchemaBuildState::descend(state.as_ref(), row_data.ext, name);
 		let schema = new_state.schema(&row_data.fields);
 		infallible((Some(new_state), schema))
@@ -1964,7 +1964,7 @@ from "new_strings"
 				#[allow(clippy::single_match)]
 				match restype {
 				Item::RESTYPE =>
-					Item::load_and_insert((db, &mut tables.branches.items), handle)?,
+					Item::load_and_insert((db, &mut tables.items), handle)?,
 				_ => (),
 				};
 				Ok(())
@@ -2118,7 +2118,7 @@ impl<T: Deref<Target=Connection>>  DbInterface for T {
 	fn db(&self)->&Connection { self.deref() }
 }
 
-impl Tree<RootForest<Schema>> {
+impl RootForest<Schema> {
 	/// Builds the SQL statement creating the `new_strings` view.
 	///
 	/// This also builds a few triggers which mark resources as dirty
@@ -2501,7 +2501,7 @@ impl<'a> Callback<'a> for DeleteRow<'a> {
 */
 impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
 	fn prepare(db: &'a impl DbInterface)->Result<Self> {
-		ALL_SCHEMAS.branches.try_map(|s| T::prepare(db, s))
+		ALL_SCHEMAS.try_map(|s| T::prepare(db, s))
 	}
 	/// Selects the appropriate individual callback from the first argument
 	/// (table name) and runs it.
@@ -2581,7 +2581,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 	lua.scope(|scope| {
 		let simod = lua.create_table()?;
 		let lua_schema = lua.create_table()?;
-		ALL_SCHEMAS.branches.try_map_mut(|schema| {
+		ALL_SCHEMAS.try_map_mut(|schema| {
 			let fields = lua.create_table()?;
 // 			let context = lua.create_table()?;
 			for f in schema.fields.iter() {
