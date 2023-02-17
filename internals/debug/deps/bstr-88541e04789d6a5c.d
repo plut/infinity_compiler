@@ -1,0 +1,15 @@
+/home/runner/work/infinity_compiler/infinity_compiler/guide/book/internals/debug/deps/bstr-88541e04789d6a5c.rmeta: /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/lib.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/ascii.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/bstr.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/bstring.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/byteset/mod.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/byteset/scalar.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/ext_slice.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/ext_vec.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/impls.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/io.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/utf8.rs
+
+/home/runner/work/infinity_compiler/infinity_compiler/guide/book/internals/debug/deps/bstr-88541e04789d6a5c.d: /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/lib.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/ascii.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/bstr.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/bstring.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/byteset/mod.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/byteset/scalar.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/ext_slice.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/ext_vec.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/impls.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/io.rs /home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/utf8.rs
+
+/home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/lib.rs:
+/home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/ascii.rs:
+/home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/bstr.rs:
+/home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/bstring.rs:
+/home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/byteset/mod.rs:
+/home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/byteset/scalar.rs:
+/home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/ext_slice.rs:
+/home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/ext_vec.rs:
+/home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/impls.rs:
+/home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/io.rs:
+/home/runner/.cargo/registry/src/github.com-1ecc6299db9ec823/bstr-0.2.17/src/utf8.rs:
