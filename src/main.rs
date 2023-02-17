@@ -1569,9 +1569,71 @@ impl<T: RecursiveResource> Iterator for RecursiveRows<'_,T> {
 		}
 	}
 }
-struct Node<X,T> {
-	content: X,
+#[derive(Debug)]
+pub struct Node<T: Tree> {
+	content: T::In,
 	tree: T,
+}
+impl<T: Tree> Deref for Node<T> {
+	type Target = T::In;
+	fn deref(&self)->&Self::Target { &self.content }
+}
+impl<T: Tree> DerefMut for Node<T> {
+	fn deref_mut(&mut self)->&mut Self::Target { &mut self.content }
+}
+impl<X: Debug, T: Tree<In=X>> Node<T> {
+	pub fn by_name<'a>(&'a self, s: &str)->Option<&'a X> {
+		if s.is_empty() { return Some(&self.content) }
+		if s.as_bytes()[0] != b'_' { return None }
+		self.tree.by_name(&s[1..])
+	}
+	pub fn by_name_mut<'a>(&'a mut self, s: &str)->Option<&'a mut X> {
+		if s.is_empty() { return Some(&mut self.content) }
+		if s.as_bytes()[0] != b'_' { return None }
+		self.tree.by_name_mut(&s[1..])
+	}
+	/// Recursively traverse the tree from its root,
+	/// applying the closure on each element. Used by `traverse` and `map`.
+	///
+	/// For each node in the tree, the closure `f` is invoked with:
+	///  - the content of the node,
+	///  - the name of this node (as a `&'static str`),
+	///  - the state computed for the parent (as an `Option`),
+	/// It should return a tuple of:
+	///  - the new state value passed to children,
+	///  - the value computed for this node.
+	pub fn recurse<'a,'n,S,E,F,Y>(&'a self, f: F, name: &'n str, state: &S)
+		->Result<Node<T::To>,E>
+	where X: 'a, Y: Debug, T: TreeRecurse<Y>,
+		F: Fn(&'a X, &'n str, &S)->Result<(S,Y),E>
+	{
+		let (new_state, content) = f(&self.content, name, state)?;
+		Ok(Node { content, tree: self.tree.recurse(f, name, &new_state)? })
+	}
+// 	/// Same as `recurse`, but for a `FnMut`.
+// 	pub fn recurse_mut<'a,'n,S,E,F,Y>(&'a self, f: F, name: &'n str, state: &S)
+// 		->Result<Node<T::To>,E>
+// 	where Y: Debug, T: TreeRecurse<Y>,
+// 		F: FnMut(&'a X, &'n str, &S)->Result<(S,Y),E>
+// 	{
+// 		let (new_state, content) = f(&self.content, name, state)?;
+// 		Ok(Node { content, tree: self.tree.recurse_mut(f, name, &new_state)? })
+// 	}
+}
+/// Impl of this trait is produced by macro
+pub trait Tree {
+	type In;
+	fn by_name<'a>(&'a self, target: &str)->Option<&'a Self::In>;
+	fn by_name_mut<'a>(&'a mut self, target: &str)->Option<&'a mut Self::In>;
+}
+pub trait TreeRecurse<Y>: Tree {
+	type To: Tree<In=Y>;
+	fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
+		->Result<Self::To,E>
+	where F: Fn(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;
+// 	fn recurse_mut<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
+// 		->Result<Self::To,E>
+// 	where F: FnMut(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;
 }
 /// A helper type for building schemas for all in-game resource.
 struct SchemaBuildState {
