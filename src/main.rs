@@ -2504,8 +2504,7 @@ impl<'a, T: Callback<'a> + Debug+'a> RootNode<T> {
 	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
 		let table = pop_arg_as::<String>(&mut args, lua)
 			.context("first argument must be a string")?;
-		self.by_name_mut(&table)
-			.ok_or(Error::UnknownTable(table.clone()))?
+		self.by_name_mut(&table)?
 			.execute(lua, args)
 			.with_context(|| format!(r#"executing callback on table "{table}""#))
 	}
@@ -2825,7 +2824,8 @@ fn main() -> Result<()> {
 			lua_api::command_add(GameDB::open(db_file)?, &target)?,
 		Command::Schema{ table, .. } => match table {
 			None => { ALL_SCHEMAS.map(|schema| println!("{}", schema.name)); },
-			Some(s) => { SCHEMAS().by_name(&s)?.describe(); },
+			Some(s) => {
+				ALL_SCHEMAS.by_name(&s)?.describe(); },
 		},
 		_ => todo!(),
 	};

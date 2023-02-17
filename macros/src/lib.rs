@@ -680,22 +680,22 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 		impl<X: Debug> DerefMut for RootNode<X> {
 			fn deref_mut(&mut self)->&mut X { unimplemented!() }
 		}
-		/// Runtime search in the tree.
-		/// this would be a bit hard to do with `recurse` — the lifetimes are
-		/// a mess, and we want to interrupt search as soon as we find *and*
-		/// cut branches with a non-matching name:
 		impl<X: Debug> RootNode<X> {
-			pub fn by_name<'a>(&'a self, target: &str)->Option<&'a X> {
-				let tail = target; // allows re-use of code for sub-nodes
-				#by_name
-				None
+			/// Runtime search in the tree.
+			/// this would be a bit hard to do with `recurse` — the lifetimes are
+			/// a mess, and we want to interrupt search as soon as we find *and*
+			/// cut branches with a non-matching name:
+			pub fn by_name<'a>(&'a self, target: &str)->crate::Result<&'a X> {
+				self.by_name1(target).ok_or(Error::UnknownTable(target.into()).into())
 			}
+			fn by_name1<'a>(&'a self, tail: &str)->Option<&'a X> {
+				#by_name None }
 			/// Same, with mutable reference.
-			pub fn by_name_mut<'a>(&'a mut self, target: &str)->Option<&'a mut X> {
-				let tail = target; // allows re-use of code for sub-nodes
-				#by_name_mut
-				None
+			pub fn by_name_mut<'a>(&'a mut self, target: &str)->crate::Result<&'a mut X> {
+				self.by_name_mut1(target).ok_or(Error::UnknownTable(target.into()).into())
 			}
+			fn by_name_mut1<'a>(&'a mut self, tail: &str)->Option<&'a mut X> {
+				#by_name_mut None }
 		}
 		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for RootNode<X> {
 			type To = RootNode<Y>;
