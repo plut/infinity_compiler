@@ -1,14 +1,14 @@
 #![allow(
 	clippy::single_match,
 // 	unreachable_code,
-// 	dead_code,
-// 	unused_variables,
+	dead_code,
+	unused_variables,
 	unused_imports,
 // 	unused_macros,
 // 	unused_parens,
 // 	unused_mut,
 // 	unused_attributes,
-// 	unused_assignments,
+	unused_assignments,
 )]
 use proc_macro::TokenStream;
 use proc_macro2 as pm2;
@@ -559,7 +559,7 @@ impl ToTokens for DeriveResourceTree {
 			/// this would be a bit hard to do with `recurse` — the lifetimes are
 			/// a mess, and we want to interrupt search as soon as we find *and*
 			/// cut branches with a non-matching name:
-			impl<X: Debug> crate::resources::Forest for #forestname<X> {
+			impl<X: Debug> crate::resources::ByName for #forestname<X> {
 				type In = X;
 				fn by_name1<'a>(&'a self, s: &str)->Option<&'a X> {
 					#(if let Some(tail) = s.strip_prefix(stringify!(#field)) {
@@ -655,7 +655,6 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			derive_forest.push(name.ident(), eltype);
 		}
 	}
-	let node_ty = ident.extend("Node");
 	quote!{ #derive_forest }.into()
 }
 

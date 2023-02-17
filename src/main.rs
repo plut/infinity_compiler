@@ -1,9 +1,9 @@
 //! Compiler between IE game files and a SQLite database.
 #![allow(
 	unused_attributes,
-// 	unused_imports,
-// 	dead_code,
-// 	unreachable_code,
+	unused_imports,
+	dead_code,
+	unreachable_code,
 	unused_macros,
 	unused_variables,
 // 	unused_must_use,
@@ -1423,7 +1423,7 @@ pub trait ResourceTree: SqlRow {
 	/// Always `Tree<FooForest<Fields>>`.
 	type FieldsTree;
 	/// SQL statements in the database, linked to all the resources tables.
-	type StatementForest<'a>: 'a + Forest<In=Statement<'a>>;
+	type StatementForest<'a>: 'a + ByName<In=Statement<'a>>;
 	/// The tree holding the fields description for this resource and all
 	/// sub-resources.
 	const FIELDS_TREE: Self::FieldsTree;
@@ -1500,28 +1500,24 @@ impl<T: ResourceTree> Iterator for RecursiveRows<'_,T> {
 	}
 }
 #[derive(Debug)]
-pub struct Tree<T: Forest> {
+pub struct Tree<T: ByName> {
 	pub content: T::In,
 	pub branches: T,
 }
-impl<X: Debug, T: Forest<In=X>> Tree<T> {
-	pub fn by_name1<'a>(&'a self, s: &str)->Option<&'a X> {
+impl<X: Debug, T: ByName<In=X>> ByName for Tree<T> {
+	type In = X;
+	fn by_name1<'a>(&'a self, s: &str)->Option<&'a X> {
 		if s.is_empty() { return Some(&self.content) }
 		if s.as_bytes()[0] != b'_' { return None }
 		self.branches.by_name1(&s[1..])
 	}
-	pub fn by_name_mut1<'a>(&'a mut self, s: &str)->Option<&'a mut X> {
+	fn by_name_mut1<'a>(&'a mut self, s: &str)->Option<&'a mut X> {
 		if s.is_empty() { return Some(&mut self.content) }
 		if s.as_bytes()[0] != b'_' { return None }
 		self.branches.by_name_mut1(&s[1..])
 	}
-	pub fn by_name<'a>(&'a self, target: &str)->Result<&'a X> {
-		self.by_name1(target).ok_or(Error::UnknownTable(target.into()).into())
-	}
-	/// Same, with mutable reference.
-	pub fn by_name_mut<'a>(&'a mut self, target: &str)->Result<&'a mut X> {
-		self.by_name_mut1(target).ok_or(Error::UnknownTable(target.into()).into())
-	}
+}
+impl<X: Debug, T: ByName<In=X>> Tree<T> {
 	/// Recursively traverse the tree from its root,
 	/// applying the closure on each element. Used by `traverse` and `map`.
 	///
@@ -1571,7 +1567,7 @@ impl<X: Debug, T: Forest<In=X>> Tree<T> {
 	}
 }
 /// Impl of this trait is produced by macro
-pub trait Forest {
+pub trait ByName {
 	type In;
 	fn by_name1<'a>(&'a self, target: &str)->Option<&'a Self::In>;
 	fn by_name_mut1<'a>(&'a mut self, target: &str)->Option<&'a mut Self::In>;
@@ -1590,8 +1586,8 @@ pub trait Forest {
 /// Trait containing the basic recursion function for forests.
 /// Implemented by the derive macro for forests deduced from resource
 /// types.
-pub trait TreeRecurse<Y>: Forest {
-	type To: Forest<In=Y>;
+pub trait TreeRecurse<Y>: ByName {
+	type To: ByName<In=Y>;
 	fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 		->Result<Self::To,E>
 	where F: Fn(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;
@@ -2218,7 +2214,7 @@ use rusqlite::{ToSql, types::ToSqlOutput};
 use std::collections::HashMap;
 
 use crate::prelude::*;
-use crate::resources::{ALL_SCHEMAS,Forest,TreeRecurse};
+use crate::resources::{ALL_SCHEMAS,ByName,TreeRecurse};
 use crate::restypes::{RootForest};
 use crate::schemas::{Schema,TableType};
 use crate::sql_rows::{AsParams};
@@ -2656,7 +2652,7 @@ use clap::Parser;
 use gamefiles::{GameIndex};
 use toolbox::{Progress};
 use crate::restypes::*;
-use crate::resources::{ALL_SCHEMAS};
+use crate::resources::{ALL_SCHEMAS,ByName};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
