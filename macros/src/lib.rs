@@ -507,6 +507,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let mut recurse = quote!{};
 	let mut recurse_mut = quote!{};
 	let mut by_name = quote!{};
+	let mut by_name_mut = quote!{};
 	let mut fields_node = quote!{};
 	let mut primary = quote!{ i64 };
 	let mut insert_sub = quote!{};
@@ -536,7 +537,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				self.#name.recurse(&f, stringify!(#name), &new_state)?, }
 				.to_tokens(&mut recurse);
 			quote!{ #name:
-				self.#name.recurse_mut(&mut f, stringify!(#name), Some(&new_state))?, }
+				self.#name.recurse_mut(&mut f, stringify!(#name), &new_state)?, }
 				.to_tokens(&mut recurse_mut);
 			quote!{ #name: <#eltype as crate::resources::RecursiveResource>::FIELDS_NODE, }
 				.to_tokens(&mut fields_node);
@@ -549,6 +550,11 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 					return self.#name.by_name(new_target)
 				}
 			}.to_tokens(&mut by_name);
+			quote!{
+				if let Some(new_target) = tail.strip_prefix(stringify!(#name)) {
+					return self.#name.by_name_mut(new_target)
+				}
+			}.to_tokens(&mut by_name_mut);
 // 			quote!{ self.#name = #eltype::collect_rows(&mut node.#name,(primary,))?;}
 // 				.to_tokens(&mut select_sub);
 		}
@@ -565,29 +571,38 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 		impl<X: Debug> DerefMut for #node_ty<X> {
 			fn deref_mut(&mut self)->&mut X { &mut self.content }
 		}
+		/// Runtime search in the tree.
 		/// this would be a bit hard to do with `recurse` — the lifetimes are
 		/// a mess, and we want to interrupt search as soon as we find *and*
 		/// cut branches with a non-matching name:
 		impl<X: Debug> #node_ty<X> {
-			fn by_name<'a>(&'a self, target: &str)->Option<&'a X> {
+			pub fn by_name<'a>(&'a self, target: &str)->Option<&'a X> {
 				if target.is_empty() { return Some(&self.content) }
 				if target.as_bytes()[0] != b'_' { return None }
 				let tail = &target[1..];
 				#by_name
 				None
 			}
+			/// Same, with mutable reference.
+			pub fn by_name_mut<'a>(&'a mut self, target: &str)->Option<&'a mut X> {
+				if target.is_empty() { return Some(&mut self.content) }
+				if target.as_bytes()[0] != b'_' { return None }
+				let tail = &target[1..];
+				#by_name_mut
+				None
+			}
 		}
 		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for #node_ty<X> {
 			type To = #node_ty<Y>;
-			fn recurse<'n,S,E,F>(&self, f: F, name: &'n str, state: &S)
+			fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 				->Result<Self::To,E>
-			where F: Fn(&Self::Target, &'n str, &S)->Result<(S,Y),E> {
+			where F: Fn(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
 				let (new_state, content) = f(&self.content, name, state)?;
 				Ok(#node_ty { #recurse content })
 			}
-			fn recurse_mut<'n,S,E,F>(&self, mut f: F, name: &'n str, state: Option<&S>)
+			fn recurse_mut<'a,'n,S,E,F>(&'a self, mut f: F, name: &'n str, state: &S)
 				->Result<Self::To,E>
-			where F: FnMut(&Self::Target, &'n str, Option<&S>)->Result<(S,Y),E> {
+			where F: FnMut(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
 				let (new_state, content) = f(&self.content, name, state)?;
 				Ok(#node_ty { #recurse_mut content })
 			}
@@ -624,6 +639,8 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 	let mut data = quote!{};
 	let mut recurse = quote!{};
 	let mut recurse_mut = quote!{};
+	let mut by_name = quote!{};
+	let mut by_name_mut = quote!{};
 	let mut const_def = quote!{};
 	TOP.with(|v| {
 		for TopResource { type_name, table_name, ext: _ext, resref: _res }
@@ -639,6 +656,16 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 			quote!{
 				#field: <#ty as crate::resources::RecursiveResource>::FIELDS_NODE,
 			}.to_tokens(&mut const_def);
+			quote!{
+				if let Some(new_target) = tail.strip_prefix(stringify!(#field)) {
+					return self.#field.by_name(new_target)
+				}
+			}.to_tokens(&mut by_name);
+			quote!{
+				if let Some(new_target) = tail.strip_prefix(stringify!(#field)) {
+					return self.#field.by_name_mut(new_target)
+				}
+			}.to_tokens(&mut by_name_mut);
 		}
 	});
 	let code = quote!{
@@ -653,16 +680,33 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 		impl<X: Debug> DerefMut for RootNode<X> {
 			fn deref_mut(&mut self)->&mut X { unimplemented!() }
 		}
+		/// Runtime search in the tree.
+		/// this would be a bit hard to do with `recurse` — the lifetimes are
+		/// a mess, and we want to interrupt search as soon as we find *and*
+		/// cut branches with a non-matching name:
+		impl<X: Debug> RootNode<X> {
+			pub fn by_name<'a>(&'a self, target: &str)->Option<&'a X> {
+				let tail = target; // allows re-use of code for sub-nodes
+				#by_name
+				None
+			}
+			/// Same, with mutable reference.
+			pub fn by_name_mut<'a>(&'a mut self, target: &str)->Option<&'a mut X> {
+				let tail = target; // allows re-use of code for sub-nodes
+				#by_name_mut
+				None
+			}
+		}
 		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for RootNode<X> {
 			type To = RootNode<Y>;
-			fn recurse<'n,A,E,F>(&self, f: F, _: &'n str, init: &A)
+			fn recurse<'a,'n,S,E,F>(&'a self, f: F, _: &'n str, init: &S)
 				->Result<Self::To,E>
-			where F: Fn(&Self::Target, &'n str, &A)->Result<(A,Y),E> {
+			where F: Fn(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
 				Ok(RootNode { #recurse _marker: PhantomData })
 			}
-			fn recurse_mut<'n,A,E,F>(&self, f: F, _: &'n str, init: Option<&A>)
+			fn recurse_mut<'a,'n,S,E,F>(&'a self, f: F, _: &'n str, init: &S)
 				->Result<Self::To,E>
-			where F: FnMut(&Self::Target, &'n str, Option<&A>)->Result<(A,Y),E> {
+			where F: FnMut(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
 				Ok(RootNode { #recurse_mut _marker: PhantomData })
 			}
 		}

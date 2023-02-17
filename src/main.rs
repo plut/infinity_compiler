@@ -1425,33 +1425,33 @@ pub trait Recurse<Y>: DerefMut {
 	/// It should return a tuple of:
 	///  - the new state value passed to children,
 	///  - the value computed for this node.
-	fn recurse<'n,S,E,F>(&self, f: F, name: &'n str, state: &S)
+	fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 		->Result<Self::To,E>
-	where F: Fn(&Self::Target, &'n str, &S)->Result<(S,Y),E>;
+	where F: Fn(&'a Self::Target, &'n str, &S)->Result<(S,Y),E>;
 	/// Same as `recurse`, but for a `FnMut`.
-	fn recurse_mut<'n,S,E,F>(&self, f: F, name: &'n str, state: Option<&S>)
+	fn recurse_mut<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 		->Result<Self::To,E>
-	where F: FnMut(&Self::Target, &'n str, Option<&S>)->Result<(S,Y),E>;
+	where F: FnMut(&'a Self::Target, &'n str, &S)->Result<(S,Y),E>;
 	// Supplied methods:
 	/// Apply a closure to each element of the tree; fallible version.
-	fn try_map<E,F>(&self, f: F)->Result<Self::To,E>
-	where F: Fn(&Self::Target)->Result<Y,E> {
+	fn try_map<'a,E,F>(&'a self, f: F)->Result<Self::To,E>
+	where Y: 'a, F: Fn(&'a Self::Target)->Result<Y,E> {
 		self.recurse(|x, _, _| f(x).map(|x| ((),x)), "", &())
 	}
 	/// Apply a closure to each element of the tree; fallible version.
 	fn try_map_mut<E,F>(&self, mut f: F)->Result<Self::To,E>
 	where F: FnMut(&Self::Target)->Result<Y,E> {
-		self.recurse_mut(|x, _, _| f(x).map(|x| ((),x)), "", None)
+		self.recurse_mut(|x, _, _| f(x).map(|x| ((),x)), "", &())
 	}
 	/// Apply a closure to each element of the tree; infallible version.
 	fn map<F>(&self, f: F)->Self::To
 	where F: Fn(&Self::Target)->Y {
 		self.try_map(|x| infallible(f(x))).unwrap()
 	}
-	/// Apply a closure to each element of the tree; mut
+	/// Apply a closure to each element of the tree; mut version
 	fn map_mut<F>(&self, mut f: F)->Self::To
 	where F: FnMut(&Self::Target)->Y {
-		self.try_map_mut(|x| Ok::<_,Infallible>(f(x))).unwrap()
+		self.try_map_mut(|x| infallible(f(x))).unwrap()
 	}
 // 	/// Recursively apply a closure to the tree (top-down fold); fallible
 // 	/// version.
@@ -1462,7 +1462,7 @@ pub trait Recurse<Y>: DerefMut {
 // 	/// Recursively apply a closure to the tree; non-fallible version.
 // 	fn traverse<F>(&self, f:F, init: Option<Y>)->Self::To
 // 	where F: Fn(&Self::Target, &str, Option<&Y>)->Y {
-// 		self.traverse_q(|x,n,i| Ok::<_,Infallible>(f(x,n,i)), init).unwrap()
+// 		self.traverse_q(|x,n,i| infallible(f(x,n,i)), init).unwrap()
 // 	}
 }
 /// The trait shared by all game resources.
@@ -2198,7 +2198,7 @@ use std::collections::HashMap;
 
 use crate::prelude::*;
 use crate::resources::{ALL_SCHEMAS,Recurse};
-use crate::restypes::{AllTables,SCHEMAS};
+use crate::restypes::{AllTables,SCHEMAS,RootNode};
 use crate::schemas::{Schema,TableType};
 use crate::sql_rows::{AsParams};
 /// Small simplification for frequent use in callbacks.
@@ -2495,16 +2495,18 @@ impl<'a> Callback<'a> for DeleteRow<'a> {
 /// table is run.
 #[ext]
 */
-impl<'a, T: Callback<'a> + Debug+'a> AllTables<T> {
-	fn prepare(db: &'a impl DbInterface, schemas: &'a AllTables<Schema>)->Result<Self> where Self: Sized {
-		schemas.map(|s| T::prepare(db, s))
+impl<'a, T: Callback<'a> + Debug+'a> RootNode<T> {
+	fn prepare(db: &'a impl DbInterface)->Result<Self> where Self: Sized {
+		ALL_SCHEMAS.try_map(|s| T::prepare(db, s))
 	}
 	/// Selects the appropriate individual callback from the first argument
 	/// (table name) and runs it.
 	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
 		let table = pop_arg_as::<String>(&mut args, lua)
 			.context("first argument must be a string")?;
-		self.by_name_mut(&table)?.execute(lua, args)
+		self.by_name_mut(&table)
+			.ok_or(Error::UnknownTable(table.clone()))?
+			.execute(lua, args)
 			.with_context(|| format!(r#"executing callback on table "{table}""#))
 	}
 	/// The wrapper installing the callback function in a table.
@@ -2537,17 +2539,17 @@ struct LuaStatements<'a> {
 // 	/// We keep an owned copy of the original table schemas.
 // 	schemas: AllResources<Schema>,
 	/// Prepared statements for `simod.list`.
-	list_keys: AllTables<ListKeys<'a>>,
+	list_keys: RootNode<ListKeys<'a>>,
 // 	select_row: AllTables<SelectRow<'a>>,
 // 	insert_row: AllTables<InsertRow<'a>>,
 // 	update_row: AllTables<InsertRow<'a>>,
 // 	delete_row: AllTables<InsertRow<'a>>,
 }
 impl<'a> LuaStatements<'a> {
-	pub fn new(db: &'a impl DbInterface, schemas: &'a AllTables<Schema>)->Result<Self> {
+	pub fn new(db: &'a impl DbInterface)->Result<Self> {
 		Ok(Self {
 // 			schemas,
-			list_keys: AllTables::<_>::prepare(db, schemas)?,
+			list_keys: RootNode::<_>::prepare(db)?,
 // 			select_row: AllTables::<_>::prepare(db, schemas)?,
 // 			insert_row: AllTables::<_>::prepare(db, schemas)?,
 // 			update_row: AllTables::<_>::prepare(db, schemas)?,
@@ -2570,8 +2572,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 	use crate::sql_rows::RowExt;
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
-	let schemas = SCHEMAS();
-	let mut statements = LuaStatements::new(&db, &schemas)?;
+	let mut statements = LuaStatements::new(&db)?;
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
 	lua.scope(|scope| {
