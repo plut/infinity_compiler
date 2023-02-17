@@ -54,13 +54,14 @@ impl TopResource {
 			table_name, ext, resref
 		}
 	}
+	/// Stores this resource in the global table.
+	fn store(self) {
+		TOP.with(|v| v.borrow_mut().push(self))
+	}
 }
 thread_local! {
 	static TOP: RefCell<Vec<TopResource>> =
 	RefCell::new(Vec::<TopResource>::new());
-}
-fn define_top_resource(rdef: TopResource) {
-	TOP.with(|v| v.borrow_mut().push(rdef))
 }
 // use std::any::type_name;
 // fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
@@ -591,6 +592,16 @@ impl ToTokens for DeriveForest {
 					})
 				}
 			}
+			impl crate::resources::ResourceTree for #ident {
+				type FieldsTree = crate::resources::Tree<#forestname<crate::schemas::Fields>>;
+				const FIELDS_TREE: Self::FieldsTree = Self::FieldsTree {
+					content: <Self as crate::sql_rows::SqlRow>::FIELDS,
+					branches: #forestname {
+					#(#field: <#ty as crate::resources::ResourceTree>::FIELDS_TREE,)*
+						_marker: PhantomData
+					}
+				};
+			}
 // -- end of quote:
 		}.to_tokens(dest)
 	}
@@ -616,7 +627,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			"topresource" => {
 				let top = TopResource::from(&ident, args);
 				ext = top.ext.clone();
-				define_top_resource(top);
+				top.store();
 				primary = quote!{ crate::gamefiles::Resref };
 			},
 			_ => ()
@@ -640,7 +651,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			quote!{ #name:
 				self.#name.recurse_mut(&mut f, stringify!(#name), &new_state)?, }
 				.to_tokens(&mut recurse_mut);
-			quote!{ #name: <#eltype as crate::resources::ResourceTree>::FIELDS_NODE, }
+			quote!{ #name: <#eltype as crate::resources::RecResource>::FIELDS_NODE, }
 				.to_tokens(&mut fields_node);
 			quote!{ for (index, sub) in self.#name.iter().enumerate() {
 					sub.insert_as_subresource(db, &mut node.#name, primary, index)?;
@@ -662,7 +673,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	}
 	let node_ty = ident.extend("Node");
 	let _code0 = quote!{
-		impl crate::resources::ResourceTree for #ident {
+		impl crate::resources::RecResource for #ident {
 			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
 			const FIELDS_NODE: Self::FieldNode = #node_ty {
 				#fields_node
@@ -727,7 +738,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				Ok(#node_ty { #recurse_mut content })
 			}
 		}
-		impl crate::resources::ResourceTree for #ident {
+		impl crate::resources::RecResource for #ident {
 			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
 			const FIELDS_NODE: Self::FieldNode = #node_ty {
 				#fields_node
@@ -771,7 +782,7 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 			quote!{ #field: self.#field.recurse_mut(f, stringify!(#field), init)?, }
 				.to_tokens(&mut recurse_mut);
 			quote!{
-				#field: <#ty as crate::resources::ResourceTree>::FIELDS_NODE,
+				#field: <#ty as crate::resources::RecResource>::FIELDS_NODE,
 			}.to_tokens(&mut const_def);
 			quote!{
 				if let Some(new_target) = tail.strip_prefix(stringify!(#field)) {
