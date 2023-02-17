@@ -1570,18 +1570,18 @@ impl<T: RecursiveResource> Iterator for RecursiveRows<'_,T> {
 	}
 }
 #[derive(Debug)]
-pub struct Node<T: Tree> {
+pub struct Tree<T: Forest> {
 	content: T::In,
 	tree: T,
 }
-impl<T: Tree> Deref for Node<T> {
+impl<T: Forest> Deref for Tree<T> {
 	type Target = T::In;
 	fn deref(&self)->&Self::Target { &self.content }
 }
-impl<T: Tree> DerefMut for Node<T> {
+impl<T: Forest> DerefMut for Tree<T> {
 	fn deref_mut(&mut self)->&mut Self::Target { &mut self.content }
 }
-impl<X: Debug, T: Tree<In=X>> Node<T> {
+impl<X: Debug, T: Forest<In=X>> Tree<T> {
 	pub fn by_name<'a>(&'a self, s: &str)->Option<&'a X> {
 		if s.is_empty() { return Some(&self.content) }
 		if s.as_bytes()[0] != b'_' { return None }
@@ -1603,31 +1603,31 @@ impl<X: Debug, T: Tree<In=X>> Node<T> {
 	///  - the new state value passed to children,
 	///  - the value computed for this node.
 	pub fn recurse<'a,'n,S,E,F,Y>(&'a self, f: F, name: &'n str, state: &S)
-		->Result<Node<T::To>,E>
+		->Result<Tree<T::To>,E>
 	where X: 'a, Y: Debug, T: TreeRecurse<Y>,
 		F: Fn(&'a X, &'n str, &S)->Result<(S,Y),E>
 	{
 		let (new_state, content) = f(&self.content, name, state)?;
-		Ok(Node { content, tree: self.tree.recurse(f, name, &new_state)? })
+		Ok(Tree { content, tree: self.tree.recurse(f, name, &new_state)? })
 	}
 	/// Same as `recurse`, but for a `FnMut`.
 	pub fn recurse_mut<'a,'n,S,E,F,Y>(&'a self, mut f: F, name: &'n str, state: &S)
-		->Result<Node<T::To>,E>
+		->Result<Tree<T::To>,E>
 	where X: 'a, Y: Debug, T: TreeRecurse<Y>,
 		F: FnMut(&'a X, &'n str, &S)->Result<(S,Y),E>
 	{
 		let (new_state, content) = f(&self.content, name, state)?;
-		Ok(Node { content, tree: self.tree.recurse_mut(f, name, &new_state)? })
+		Ok(Tree { content, tree: self.tree.recurse_mut(f, name, &new_state)? })
 	}
 }
 /// Impl of this trait is produced by macro
-pub trait Tree {
+pub trait Forest {
 	type In;
 	fn by_name<'a>(&'a self, target: &str)->Option<&'a Self::In>;
 	fn by_name_mut<'a>(&'a mut self, target: &str)->Option<&'a mut Self::In>;
 }
-pub trait TreeRecurse<Y>: Tree {
-	type To: Tree<In=Y>;
+pub trait TreeRecurse<Y>: Forest {
+	type To: Forest<In=Y>;
 	fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 		->Result<Self::To,E>
 	where F: Fn(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;

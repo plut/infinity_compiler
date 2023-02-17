@@ -540,21 +540,21 @@ impl DeriveTree {
 impl ToTokens for DeriveTree {
 	fn to_tokens(&self, dest: &mut TS) {
 		let Self { ident, field, ty } = self;
-		let treename = ident.extend("Tree");
-		let subtree = ty.iter().map(|x| x.extend("Tree"))
+		let treename = ident.extend("Forest");
+		let subtree = ty.iter().map(|x| x.extend("Forest"))
 			.collect::<Vec<_>>();
 		quote! {
 			/// A `Node` impl. derived by `derive(RecursiveResource)`.
 			#[derive(Debug)]
 			pub struct #treename<X: Debug> {
-				#(pub #field: crate::resources::Node<#subtree::<X>>,)*
+				#(pub #field: crate::resources::Tree<#subtree::<X>>,)*
 				_marker: PhantomData<X>
 			}
 			/// Runtime search in the tree.
 			/// this would be a bit hard to do with `recurse` — the lifetimes are
 			/// a mess, and we want to interrupt search as soon as we find *and*
 			/// cut branches with a non-matching name:
-			impl<X: Debug> crate::resources::Tree for #treename<X> {
+			impl<X: Debug> crate::resources::Forest for #treename<X> {
 				type In = X;
 				fn by_name<'a>(&'a self, s: &str)->Option<&'a X> {
 					#(if let Some(tail) = s.strip_prefix(stringify!(#field)) {
