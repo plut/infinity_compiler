@@ -1732,6 +1732,11 @@ pub trait TreeRecurse<Y>: Forest {
 	fn recurse_mut<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 		->Result<Self::To,E>
 	where F: FnMut(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;
+	/// Apply a closure to each element of the tree; fallible version.
+	fn try_map<'a,E,F>(&'a self, f: F)->Result<Self::To,E>
+	where Y: 'a, F: Fn(&'a Self::In)->Result<Y,E> {
+		self.recurse(|x, _, _| f(x).map(|x| ((),x)), "", &())
+	}
 }
 /// A helper type for building schemas for all in-game resource.
 struct SchemaBuildState {
@@ -2413,8 +2418,8 @@ use rusqlite::{ToSql, types::ToSqlOutput};
 use std::collections::HashMap;
 
 use crate::prelude::*;
-use crate::resources::{ALL_SCHEMAS9,Recurse};
-use crate::restypes::{AllTables,RootNode9};
+use crate::resources::{ALL_SCHEMAS,ALL_SCHEMAS9,Recurse,Forest,TreeRecurse};
+use crate::restypes::{AllTables,RootNode9,RootForest};
 use crate::schemas::{Schema,TableType};
 use crate::sql_rows::{AsParams};
 /// Small simplification for frequent use in callbacks.
@@ -2711,9 +2716,9 @@ impl<'a> Callback<'a> for DeleteRow<'a> {
 /// table is run.
 #[ext]
 */
-impl<'a, T: Callback<'a> + Debug+'a> RootNode9<T> {
-	fn prepare(db: &'a impl DbInterface)->Result<Self> where Self: Sized {
-		ALL_SCHEMAS9.try_map(|s| T::prepare(db, s))
+impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
+	fn prepare(db: &'a impl DbInterface)->Result<Self> {
+		ALL_SCHEMAS.branches.try_map(|s| T::prepare(db, s))
 	}
 	/// Selects the appropriate individual callback from the first argument
 	/// (table name) and runs it.
@@ -2754,7 +2759,7 @@ struct LuaStatements<'a> {
 // 	/// We keep an owned copy of the original table schemas.
 // 	schemas: AllResources<Schema>,
 	/// Prepared statements for `simod.list`.
-	list_keys: RootNode9<ListKeys<'a>>,
+	list_keys: RootForest<ListKeys<'a>>,
 // 	select_row: AllTables<SelectRow<'a>>,
 // 	insert_row: AllTables<InsertRow<'a>>,
 // 	update_row: AllTables<InsertRow<'a>>,
@@ -2764,7 +2769,7 @@ impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface)->Result<Self> {
 		Ok(Self {
 // 			schemas,
-			list_keys: RootNode9::<_>::prepare(db)?,
+			list_keys: RootForest::<_>::prepare(db)?,
 // 			select_row: AllTables::<_>::prepare(db, schemas)?,
 // 			insert_row: AllTables::<_>::prepare(db, schemas)?,
 // 			update_row: AllTables::<_>::prepare(db, schemas)?,
