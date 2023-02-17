@@ -2348,7 +2348,6 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 		Ok(Value::Table(ret))
 	}
 }
-/*
 /// Implementation of the `simod.select` callback.
 #[derive(Debug)]
 struct SelectRow<'a>(Statement<'a>);
@@ -2383,8 +2382,6 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 		}
 	}
 }
-*/
-/*
 /// Implementation of `simod.insert`.
 #[derive(Debug)]
 struct InsertRow<'a>(&'a Connection, Statement<'a>,&'a Schema);
@@ -2440,8 +2437,6 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		Ok(Value::Table(table))
 	}
 }
-*/
-/*
 /// Implementation of `simod.update`.
 ///
 /// We collect all the per-field update statements in a hash map.
@@ -2478,8 +2473,6 @@ impl<'a> Callback<'a> for UpdateRow<'a> {
 		Ok((n > 0).to_lua(lua)?)
 	}
 }
-*/
-/*
 /// Implementation of `simod.delete`.
 struct DeleteRow<'a>(Statement<'a>);
 impl<'a> Callback<'a> for DeleteRow<'a> {
@@ -2498,9 +2491,8 @@ impl<'a> Callback<'a> for DeleteRow<'a> {
 /// Once this is done, the individual [`Callback`] instance for this
 /// table is run.
 #[ext]
-*/
 impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
-	fn prepare(db: &'a impl DbInterface)->Result<Self> {
+	fn prepare(db: &'a impl DbInterface)->Result<Self> where Self: Sized {
 		ALL_SCHEMAS.try_map(|s| T::prepare(db, s))
 	}
 	/// Selects the appropriate individual callback from the first argument
@@ -2543,20 +2535,20 @@ struct LuaStatements<'a> {
 // 	schemas: AllResources<Schema>,
 	/// Prepared statements for `simod.list`.
 	list_keys: RootForest<ListKeys<'a>>,
-// 	select_row: RootForest<SelectRow<'a>>,
-// 	insert_row: RootForest<InsertRow<'a>>,
-// 	update_row: RootForest<InsertRow<'a>>,
-// 	delete_row: RootForest<InsertRow<'a>>,
+	select_row: RootForest<SelectRow<'a>>,
+	insert_row: RootForest<InsertRow<'a>>,
+	update_row: RootForest<InsertRow<'a>>,
+	delete_row: RootForest<InsertRow<'a>>,
 }
 impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface)->Result<Self> {
 		Ok(Self {
 // 			schemas,
 			list_keys: RootForest::<_>::prepare(db)?,
-// 			select_row: RootForest::<_>::prepare(db, schemas)?,
-// 			insert_row: RootForest::<_>::prepare(db, schemas)?,
-// 			update_row: RootForest::<_>::prepare(db, schemas)?,
-// 			delete_row: RootForest::<_>::prepare(db, schemas)?,
+			select_row: RootForest::<_>::prepare(db)?,
+			insert_row: RootForest::<_>::prepare(db)?,
+			update_row: RootForest::<_>::prepare(db)?,
+			delete_row: RootForest::<_>::prepare(db)?,
 		})
 	}
 }
