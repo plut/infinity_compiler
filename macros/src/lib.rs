@@ -506,6 +506,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let mut node_struct = quote!{};
 	let mut recurse = quote!{};
 	let mut recurse_mut = quote!{};
+	let mut by_name = quote!{};
 	let mut fields_node = quote!{};
 	let mut primary = quote!{ i64 };
 	let mut insert_sub = quote!{};
@@ -543,6 +544,11 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 					sub.insert_as_subresource(db, &mut node.#name, primary, index)?;
 				}
 			}.to_tokens(&mut insert_sub);
+			quote!{
+				if let Some(new_target) = tail.strip_prefix(stringify!(#name)) {
+					return self.#name.by_name(new_target)
+				}
+			}.to_tokens(&mut by_name);
 // 			quote!{ self.#name = #eltype::collect_rows(&mut node.#name,(primary,))?;}
 // 				.to_tokens(&mut select_sub);
 		}
@@ -558,6 +564,18 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 		}
 		impl<X: Debug> DerefMut for #node_ty<X> {
 			fn deref_mut(&mut self)->&mut X { &mut self.content }
+		}
+		/// this would be a bit hard to do with `recurse` — the lifetimes are
+		/// a mess, and we want to interrupt search as soon as we find *and*
+		/// cut branches with a non-matching name:
+		impl<X: Debug> #node_ty<X> {
+			fn by_name<'a>(&'a self, target: &str)->Option<&'a X> {
+				if target.is_empty() { return Some(&self.content) }
+				if target.as_bytes()[0] != b'_' { return None }
+				let tail = &target[1..];
+				#by_name
+				None
+			}
 		}
 		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for #node_ty<X> {
 			type To = #node_ty<Y>;

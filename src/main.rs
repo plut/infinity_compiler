@@ -1526,11 +1526,6 @@ pub trait RecursiveResource: SqlRow {
 // 		unimplemented!()
 // 	}
 }
-impl<T: Debug> RootNode<T> {
-	pub fn by_name(&self, table_name: &str)->Result<T> {
-		todo!()
-	}
-}
 
 /// A helper type for building schemas for all in-game resource.
 struct SchemaBuildState {
