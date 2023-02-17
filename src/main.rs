@@ -1399,7 +1399,6 @@ use crate::sql_rows::{SqlRow,TypedRows};
 use crate::schemas::{Schema,Fields};
 use crate::gamefiles::Restype;
 use crate::restypes::{RootNode,TOP_FIELDS,AllTables};
-use crate::database::{DbInserter};
 /// Values organized along a tree matching the structure of resources in
 /// the database.
 ///
@@ -1616,18 +1615,6 @@ pub trait TopResource9: SqlRow {
 	/// Selects subresources from database.
 	fn select_subresources(&mut self, tables: &mut AllTables<Statement<'_>>, resref: Resref)->Result<Self::Subresources>;
 	// Provided functions:
-	/// Loads a resource from filesystem to database.
-	/// Main entry point for the `init` command.
-	fn load_from_handle9<T: DbInterface>(db: &mut DbInserter<'_,T>, resref: Resref,
-			mut handle: crate::gamefiles::ResReader<'_>)->Result<()> {
-		Self::load(&mut db.tables, db.db, handle.open()?, resref)?;
-		if handle.is_override() {
-			db.add_override.execute((resref, Self::EXTENSION))?;
-		}
-// // 		*(<T as NamedTable>::find_field_mut(&mut self.resource_count))+=1;
-// 		*count+= 1;
-		Ok(())
-	}
 	/// Saves all dirty resources to the filesystem.
 	/// Main entry point for the `save` command.
 	fn save_all_dirty(db: &impl DbInterface, tables: &mut AllTables<Statement<'_>>, name: impl Display)->Result<usize> {
@@ -2158,51 +2145,12 @@ begin"#);
 /// database.
 pub trait LoadResource {
 	type InsertHandle<'db:'b,'b>;
+	/// Reads from a resource handle and writes to database.
 	#[allow(single_use_lifetimes)] // clippy over-optimistic here
 	fn load_and_insert<'db:'b,'b>(db_handle: Self::InsertHandle<'db,'b>,
 		handle: crate::gamefiles::ResHandle<'_>)->Result<()>;
 }
 
-/// A structure holding insertion statements for all resource types.
-///
-/// This structure does the main work for initially filling the database.
-/// It also contains a statement for storing original resrefs.
-#[derive(Debug)]
-pub struct DbInserter<'a, T: DbInterface> {
-	/// a reference to the database (used for `last_insert_rowid`)
-	pub db: &'a T,
-	add_resref: Statement<'a>,
-	/// the insert statements for all tables
-	pub tables: AllTables<Statement<'a>>,
-	/// the statement marking that a resource lives in override
-	pub add_override: Statement<'a>,
-	resource_count: AllTables<(&'a str, usize)>,
-}
-impl<'a,T: DbInterface> DbInserter<'a, T> {
-	/// Creates a new `DbInserter` from a database and the list of all
-	/// resources.
-	pub fn new(db: &'a T, schemas: &'a AllTables<Schema>)->Result<Self> {
-		Ok(Self { db,
-		tables: schemas.map(|schema|
-			db.prepare(&schema.insert_sql("load_"))
-				.with_context(|| format!("insert statement for table '{schema}'")))?,
-		resource_count: schemas.map(|schema| any_ok((schema.name.as_ref(), 0)))?,
-		add_resref: db.prepare(
-			r#"insert or ignore into "resref_orig" values (?)"#)?,
-		add_override: db.prepare(
-			r#"insert or ignore into "override" values (?,?)"#)?,
-	}) }
-	/// Adds a new [`Resref`] to the table of original resrefs.
-	pub fn register(&mut self, resref: &Resref)->rusqlite::Result<usize> {
-		self.add_resref.execute((resref,))
-	}
-}
-impl<T: DbInterface> Drop for DbInserter<'_,T> {
-	fn drop(&mut self) {
-		self.resource_count.map(|(name, n)|
-			any_ok(info!(r#"loaded {n} entries in table "{name}""#))).unwrap();
-	}
-}
 } // mod database
 pub mod lua_api {
 //! Loads mod-supplied Lua files.
