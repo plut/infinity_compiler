@@ -532,7 +532,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			let subnode = eltype.node_ident();
 			quote!{ pub #name: #subnode::<T>, }.to_tokens(&mut node_struct);
 			quote!{ #name:
-				self.#name.recurse(&f, stringify!(#name), Some(&new_state))?, }
+				self.#name.recurse(&f, stringify!(#name), &new_state)?, }
 				.to_tokens(&mut recurse);
 			quote!{ #name:
 				self.#name.recurse_mut(&mut f, stringify!(#name), Some(&new_state))?, }
@@ -561,9 +561,9 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 		}
 		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for #node_ty<X> {
 			type To = #node_ty<Y>;
-			fn recurse<'n,S,E,F>(&self, f: F, name: &'n str, state: Option<&S>)
+			fn recurse<'n,S,E,F>(&self, f: F, name: &'n str, state: &S)
 				->Result<Self::To,E>
-			where F: Fn(&Self::Target, &'n str, Option<&S>)->Result<(S,Y),E> {
+			where F: Fn(&Self::Target, &'n str, &S)->Result<(S,Y),E> {
 				let (new_state, content) = f(&self.content, name, state)?;
 				Ok(#node_ty { #recurse content })
 			}
@@ -637,9 +637,9 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 		}
 		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for RootNode<X> {
 			type To = RootNode<Y>;
-			fn recurse<'n,A,E,F>(&self, f: F, _: &'n str, init: Option<&A>)
+			fn recurse<'n,A,E,F>(&self, f: F, _: &'n str, init: &A)
 				->Result<Self::To,E>
-			where F: Fn(&Self::Target, &'n str, Option<&A>)->Result<(A,Y),E> {
+			where F: Fn(&Self::Target, &'n str, &A)->Result<(A,Y),E> {
 				Ok(RootNode { #recurse _marker: PhantomData })
 			}
 			fn recurse_mut<'n,A,E,F>(&self, f: F, _: &'n str, init: Option<&A>)

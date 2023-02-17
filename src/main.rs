@@ -1425,9 +1425,9 @@ pub trait Recurse<Y>: DerefMut {
 	/// It should return a tuple of:
 	///  - the new state value passed to children,
 	///  - the value computed for this node.
-	fn recurse<'n,S,E,F>(&self, f: F, name: &'n str, state: Option<&S>)
+	fn recurse<'n,S,E,F>(&self, f: F, name: &'n str, state: &S)
 		->Result<Self::To,E>
-	where F: Fn(&Self::Target, &'n str, Option<&S>)->Result<(S,Y),E>;
+	where F: Fn(&Self::Target, &'n str, &S)->Result<(S,Y),E>;
 	/// Same as `recurse`, but for a `FnMut`.
 	fn recurse_mut<'n,S,E,F>(&self, f: F, name: &'n str, state: Option<&S>)
 		->Result<Self::To,E>
@@ -1436,7 +1436,7 @@ pub trait Recurse<Y>: DerefMut {
 	/// Apply a closure to each element of the tree; fallible version.
 	fn try_map<E,F>(&self, f: F)->Result<Self::To,E>
 	where F: Fn(&Self::Target)->Result<Y,E> {
-		self.recurse(|x, _, _| f(x).map(|x| ((),x)), "", None)
+		self.recurse(|x, _, _| f(x).map(|x| ((),x)), "", &())
 	}
 	/// Apply a closure to each element of the tree; fallible version.
 	fn try_map_mut<E,F>(&self, mut f: F)->Result<Self::To,E>
@@ -1526,6 +1526,11 @@ pub trait RecursiveResource: SqlRow {
 // 		unimplemented!()
 // 	}
 }
+impl<T: Debug> RootNode<T> {
+	pub fn by_name(&self, table_name: &str)->Result<T> {
+		todo!()
+	}
+}
 
 /// A helper type for building schemas for all in-game resource.
 struct SchemaBuildState {
@@ -1575,12 +1580,11 @@ pub static ALL_SCHEMAS: Lazy<RootNode<Schema>> = Lazy::new(|| {
 	// state contains: (level, "table_name", "parent_name", "root")
 	TOP_FIELDS.recurse(|(ext,fields),name,state| {
 		use crate::schemas::{TableType};
-		let new_state = SchemaBuildState::descend(state, ext, name);
+		let new_state = SchemaBuildState::descend(state.as_ref(), ext, name);
 		let schema = new_state.schema(fields);
-		infallible((new_state, schema))
-	}, "", None).unwrap()
+		infallible((Some(new_state), schema))
+	}, "", &None).unwrap()
 });
-
 /// A trait containing resource I/O functions.
 ///
 /// This is only available for top-level resources.
@@ -2776,9 +2780,9 @@ use arguments::*;
 
 fn main() -> Result<()> {
 	use crate::resources::{ALL_SCHEMAS,Recurse};
-	ALL_SCHEMAS.recurse(|x,_n,_a| {
+	ALL_SCHEMAS.recurse(|x,_n,_state| {
 		x.describe(); infallible(nothing2)
-	}, "", None)?;
+	}, "", &())?;
 // 	println!("{:?}",
 // 	*ALL_SCHEMAS);
 // 	if 1 > 0 {
@@ -2824,7 +2828,7 @@ fn main() -> Result<()> {
 		Command::Add{ target, .. } =>
 			lua_api::command_add(GameDB::open(db_file)?, &target)?,
 		Command::Schema{ table, .. } => match table {
-			None => { SCHEMAS().map(|schema| any_ok(println!("{}", schema.name)))?; },
+			None => { ALL_SCHEMAS.map(|schema| println!("{}", schema.name)); },
 			Some(s) => { SCHEMAS().by_name(&s)?.describe(); },
 		},
 		_ => todo!(),
