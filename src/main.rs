@@ -1,7 +1,7 @@
 //! Compiler between IE game files and a SQLite database.
 #![allow(
 	unused_attributes,
-	unused_imports,
+// 	unused_imports,
 // 	dead_code,
 // 	unreachable_code,
 	unused_macros,
@@ -1418,71 +1418,7 @@ use rusqlite::{ToSql,types::{FromSql}};
 use crate::sql_rows::{SqlRow,TypedRows};
 use crate::schemas::{Schema,Fields};
 use crate::gamefiles::Restype;
-use crate::restypes::{RootNode9,TOP_FIELDS,AllTables,RootForest};
-/// Values organized along a tree matching the structure of resources in
-/// the database.
-///
-/// This is a crude version of a higher-kinded type; the value is wrapped
-/// in a `DerefMut` (the type is `<Self as Deref>::Target`).
-///
-/// This type is implemented by the `Resource` derive macro.
-/// It has sub-fields matching the sub-resources for this resource,
-/// and the implementation for the `Self::recurse` method iterate over
-/// these fields.
-pub trait Recurse<Y>: DerefMut {
-	/// Result of replacing current parameter by `Y`.
-	type To;
-	// Macro-defined methods:
-	/// Recursively traverse the tree from its root,
-	/// applying the closure on each element. Used by `traverse` and `map`.
-	///
-	/// For each node in the tree, the closure `f` is invoked with:
-	///  - the content of the node,
-	///  - the name of this node (as a `&'static str`),
-	///  - the state computed for the parent (as an `Option`),
-	/// It should return a tuple of:
-	///  - the new state value passed to children,
-	///  - the value computed for this node.
-	fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
-		->Result<Self::To,E>
-	where F: Fn(&'a Self::Target, &'n str, &S)->Result<(S,Y),E>;
-	/// Same as `recurse`, but for a `FnMut`.
-	fn recurse_mut<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
-		->Result<Self::To,E>
-	where F: FnMut(&'a Self::Target, &'n str, &S)->Result<(S,Y),E>;
-	// Supplied methods:
-	/// Apply a closure to each element of the tree; fallible version.
-	fn try_map<'a,E,F>(&'a self, f: F)->Result<Self::To,E>
-	where Y: 'a, F: Fn(&'a Self::Target)->Result<Y,E> {
-		self.recurse(|x, _, _| f(x).map(|x| ((),x)), "", &())
-	}
-	/// Apply a closure to each element of the tree; fallible version.
-	fn try_map_mut<E,F>(&self, mut f: F)->Result<Self::To,E>
-	where F: FnMut(&Self::Target)->Result<Y,E> {
-		self.recurse_mut(|x, _, _| f(x).map(|x| ((),x)), "", &())
-	}
-	/// Apply a closure to each element of the tree; infallible version.
-	fn map<F>(&self, f: F)->Self::To
-	where F: Fn(&Self::Target)->Y {
-		self.try_map(|x| infallible(f(x))).unwrap()
-	}
-	/// Apply a closure to each element of the tree; mut version
-	fn map_mut<F>(&self, mut f: F)->Self::To
-	where F: FnMut(&Self::Target)->Y {
-		self.try_map_mut(|x| infallible(f(x))).unwrap()
-	}
-// 	/// Recursively apply a closure to the tree (top-down fold); fallible
-// 	/// version.
-// 	fn traverse_q<E,F>(&self, f: F, init: Option<Y>)->Result<Self::To,E>
-// 	where F: Fn(&Self::Target, &str, Option<&Y>)->Result<Y,E> {
-// 		self.recurse(f, "", init.as_ref())
-// 	}
-// 	/// Recursively apply a closure to the tree; non-fallible version.
-// 	fn traverse<F>(&self, f:F, init: Option<Y>)->Self::To
-// 	where F: Fn(&Self::Target, &str, Option<&Y>)->Y {
-// 		self.traverse_q(|x,n,i| infallible(f(x,n,i)), init).unwrap()
-// 	}
-}
+use crate::restypes::{RootNode9,AllTables,RootForest};
 pub trait ResourceTree: SqlRow {
 	/// Always `Tree<FooForest<Fields>>`.
 	type FieldsTree;
@@ -1737,6 +1673,11 @@ pub trait TreeRecurse<Y>: Forest {
 	where Y: 'a, F: Fn(&'a Self::In)->Result<Y,E> {
 		self.recurse(|x, _, _| f(x).map(|x| ((),x)), "", &())
 	}
+	/// Apply a closure to each element of the tree; fallible version.
+	fn try_map_mut<'a,E,F>(&self, mut f: F)->Result<Self::To,E>
+	where Y: 'a, F: FnMut(&Self::In)->Result<Y,E> {
+		self.recurse_mut(|x, _, _| f(x).map(|x| ((),x)), "", &())
+	}
 }
 /// A helper type for building schemas for all in-game resource.
 struct SchemaBuildState {
@@ -1782,19 +1723,8 @@ impl SchemaBuildState {
 	}
 }
 /// The definition of schemas for all in-game resources.
-pub static ALL_SCHEMAS9: Lazy<RootNode9<Schema>> = Lazy::new(|| {
-	// state contains: (level, "table_name", "parent_name", "root")
-	TOP_FIELDS.recurse(|(ext,fields),name,state| {
-		use crate::schemas::{TableType};
-		let new_state = SchemaBuildState::descend(state.as_ref(), ext, name);
-		let schema = new_state.schema(fields);
-		infallible((Some(new_state), schema))
-	}, "", &None).unwrap()
-});
-/// The definition of schemas for all in-game resources.
 pub static ALL_SCHEMAS: Lazy<Tree<RootForest<Schema>>> = Lazy::new(|| {
 	crate::restypes::Root::FIELDS_TREE.recurse(|row_data,name,state| {
-		use crate::schemas::{TableType};
 		let new_state = SchemaBuildState::descend(state.as_ref(), row_data.ext, name);
 		let schema = new_state.schema(&row_data.fields);
 		infallible((Some(new_state), schema))
@@ -1897,8 +1827,6 @@ use crate::database::{DbInterface};
 use crate::gamefiles::{GameIndex};
 use crate::pack::{Pack,PackAll};
 use crate::sql_rows::{SqlRow,FromSqlRow};
-use crate::restypes::AllTables;
-use crate::schemas::Schema;
 use macros::{Pack};
 
 #[derive(Debug,Pack)]
@@ -2050,7 +1978,7 @@ pub mod database {
 use crate::prelude::*;
 use crate::restypes::*;
 use crate::gamefiles::GameIndex;
-use crate::resources::{TopResource9,ALL_SCHEMAS,ALL_SCHEMAS9,Tree,Recurse,ResourceIO};
+use crate::resources::{TopResource9,ALL_SCHEMAS,Tree,ResourceIO};
 use crate::schemas::{Schema};
 
 /// A trivial wrapper on [`rusqlite::Connection`];
@@ -2418,8 +2346,8 @@ use rusqlite::{ToSql, types::ToSqlOutput};
 use std::collections::HashMap;
 
 use crate::prelude::*;
-use crate::resources::{ALL_SCHEMAS,ALL_SCHEMAS9,Recurse,Forest,TreeRecurse};
-use crate::restypes::{AllTables,RootNode9,RootForest};
+use crate::resources::{ALL_SCHEMAS,Forest,TreeRecurse};
+use crate::restypes::{RootForest};
 use crate::schemas::{Schema,TableType};
 use crate::sql_rows::{AsParams};
 /// Small simplification for frequent use in callbacks.
@@ -2798,7 +2726,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 	lua.scope(|scope| {
 		let simod = lua.create_table()?;
 		let lua_schema = lua.create_table()?;
-		ALL_SCHEMAS9.try_map_mut(|schema| {
+		ALL_SCHEMAS.branches.try_map_mut(|schema| {
 			let fields = lua.create_table()?;
 // 			let context = lua.create_table()?;
 			for f in schema.fields.iter() {
@@ -2816,8 +2744,9 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		})?;
 		// Step 2: build the sub-schema relations
 		// We do this in a second pass since by now all resource tables exist
-		ALL_SCHEMAS9.try_map_mut(|schema| {
+		ALL_SCHEMAS.try_map_mut(|schema| {
 			if let TableType::Sub {  .. } = schema.table_type {
+				todo!()
 			}
 			mlua_ok(())
 		})?;
@@ -2855,7 +2784,7 @@ use clap::Parser;
 use gamefiles::{GameIndex};
 use toolbox::{Progress};
 use crate::restypes::*;
-use crate::resources::{TopResource9,ALL_SCHEMAS,Recurse};
+use crate::resources::{ALL_SCHEMAS};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
@@ -2998,8 +2927,7 @@ use arguments::*;
 
 
 fn main() -> Result<()> {
-	use crate::resources::{ALL_SCHEMAS,ALL_SCHEMAS9,Recurse,ResourceTree};
-	use crate::restypes::{Root};
+	use crate::resources::{ALL_SCHEMAS,ResourceTree};
 	println!("{:?}", *ALL_SCHEMAS);
 // 	ALL_SCHEMAS9.recurse(|x,_n,_state| {
 // 		x.describe(); infallible(nothing2)

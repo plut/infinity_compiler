@@ -736,21 +736,6 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				None
 			}
 		}
-		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for #node_ty<X> {
-			type To = #node_ty<Y>;
-			fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
-				->Result<Self::To,E>
-			where F: Fn(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
-				let (new_state, content) = f(&self.content, name, state)?;
-				Ok(#node_ty { #recurse content })
-			}
-			fn recurse_mut<'a,'n,S,E,F>(&'a self, mut f: F, name: &'n str, state: &S)
-				->Result<Self::To,E>
-			where F: FnMut(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
-				let (new_state, content) = f(&self.content, name, state)?;
-				Ok(#node_ty { #recurse_mut content })
-			}
-		}
 		impl crate::resources::RecResource for #ident {
 			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
 			const FIELDS_NODE: Self::FieldNode = #node_ty {
@@ -838,21 +823,6 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 			fn by_name_mut1<'a>(&'a mut self, tail: &str)->Option<&'a mut X> {
 				#by_name_mut None }
 		}
-		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for RootNode9<X> {
-			type To = RootNode9<Y>;
-			fn recurse<'a,'n,S,E,F>(&'a self, f: F, _: &'n str, init: &S)
-				->Result<Self::To,E>
-			where F: Fn(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
-				Ok(RootNode9 { #recurse _marker: PhantomData })
-			}
-			fn recurse_mut<'a,'n,S,E,F>(&'a self, f: F, _: &'n str, init: &S)
-				->Result<Self::To,E>
-			where F: FnMut(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
-				Ok(RootNode9 { #recurse_mut _marker: PhantomData })
-			}
-		}
-		pub const TOP_FIELDS: RootNode9<(&'static str, crate::schemas::Fields)> =
-		RootNode9 { #const_def _marker: PhantomData };
 	};
 // 	println!("{}", code);
 	code.into()
