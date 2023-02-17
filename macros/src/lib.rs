@@ -561,16 +561,16 @@ impl ToTokens for DeriveResourceTree {
 			/// cut branches with a non-matching name:
 			impl<X: Debug> crate::resources::Forest for #forestname<X> {
 				type In = X;
-				fn by_name<'a>(&'a self, s: &str)->Option<&'a X> {
+				fn by_name1<'a>(&'a self, s: &str)->Option<&'a X> {
 					#(if let Some(tail) = s.strip_prefix(stringify!(#field)) {
-						return self.#field.by_name(tail)
+						return self.#field.by_name1(tail)
 					})*
 					None
 				}
 				/// Same, with mutable reference.
-				fn by_name_mut<'a>(&'a mut self, s: &str)->Option<&'a mut X> {
+				fn by_name_mut1<'a>(&'a mut self, s: &str)->Option<&'a mut X> {
 					#(if let Some(tail) = s.strip_prefix(stringify!(#field)) {
-						return self.#field.by_name_mut(tail)
+						return self.#field.by_name_mut1(tail)
 					})*
 					None
 				}

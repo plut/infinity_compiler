@@ -250,16 +250,6 @@ macro_rules! tables {
 		}
 		use crate::schemas::Schema;
 		#[allow(non_snake_case)]
-		pub fn SCHEMAS()->AllTables<Schema> {
-				AllTables {
-				$($tablename: Schema {
-					level: 0, // FIXME
-					name: stringify!($tablename).to_owned(),
-					table_type: table_type!($which($($arg)*)),
-					fields: <$ty as crate::sql_rows::SqlRow>::FIELDS9,
-				}),*
-			}
-		}
 		impl Restype {
 			pub fn from(e: &str)->Self {
 				$(table_restype!(e,$which($($arg)*)));*;

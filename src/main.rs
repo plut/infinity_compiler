@@ -2,7 +2,7 @@
 #![allow(
 	unused_attributes,
 	unused_imports,
-	dead_code,
+// 	dead_code,
 // 	unreachable_code,
 	unused_macros,
 	unused_variables,
@@ -1639,15 +1639,22 @@ impl<T: Forest> DerefMut for Tree<T> {
 	fn deref_mut(&mut self)->&mut Self::Target { &mut self.content }
 }
 impl<X: Debug, T: Forest<In=X>> Tree<T> {
-	pub fn by_name<'a>(&'a self, s: &str)->Option<&'a X> {
+	pub fn by_name1<'a>(&'a self, s: &str)->Option<&'a X> {
 		if s.is_empty() { return Some(&self.content) }
 		if s.as_bytes()[0] != b'_' { return None }
-		self.branches.by_name(&s[1..])
+		self.branches.by_name1(&s[1..])
 	}
-	pub fn by_name_mut<'a>(&'a mut self, s: &str)->Option<&'a mut X> {
+	pub fn by_name_mut1<'a>(&'a mut self, s: &str)->Option<&'a mut X> {
 		if s.is_empty() { return Some(&mut self.content) }
 		if s.as_bytes()[0] != b'_' { return None }
-		self.branches.by_name_mut(&s[1..])
+		self.branches.by_name_mut1(&s[1..])
+	}
+	pub fn by_name<'a>(&'a self, target: &str)->Result<&'a X> {
+		self.by_name1(target).ok_or(Error::UnknownTable(target.into()).into())
+	}
+	/// Same, with mutable reference.
+	pub fn by_name_mut<'a>(&'a mut self, target: &str)->Result<&'a mut X> {
+		self.by_name_mut1(target).ok_or(Error::UnknownTable(target.into()).into())
 	}
 	/// Recursively traverse the tree from its root,
 	/// applying the closure on each element. Used by `traverse` and `map`.
@@ -1686,6 +1693,11 @@ impl<X: Debug, T: Forest<In=X>> Tree<T> {
 	where Y: Debug, T: TreeRecurse<Y>, F: FnMut(&X)->Result<Y,E> {
 		self.recurse_mut(|x, _, _| f(x).map(|x| ((),x)), "", &())
 	}
+	/// Apply a closure to each element of the tree; infallible version.
+	pub fn map<F,Y>(&self, f: F)->Tree<T::To>
+	where Y: Debug, T: TreeRecurse<Y>, F: Fn(&X)->Y {
+		self.try_map(|x| infallible(f(x))).unwrap()
+	}
 	/// Apply a closure to each element of the tree; mut version
 	pub fn map_mut<F,Y>(&self, mut f: F)->Tree<T::To>
 	where Y: Debug, T: TreeRecurse<Y>, F: FnMut(&X)->Y {
@@ -1695,8 +1707,19 @@ impl<X: Debug, T: Forest<In=X>> Tree<T> {
 /// Impl of this trait is produced by macro
 pub trait Forest {
 	type In;
-	fn by_name<'a>(&'a self, target: &str)->Option<&'a Self::In>;
-	fn by_name_mut<'a>(&'a mut self, target: &str)->Option<&'a mut Self::In>;
+	fn by_name1<'a>(&'a self, target: &str)->Option<&'a Self::In>;
+	fn by_name_mut1<'a>(&'a mut self, target: &str)->Option<&'a mut Self::In>;
+	/// Runtime search in the tree.
+	/// this would be a bit hard to do with `recurse` — the lifetimes are
+	/// a mess, and we want to interrupt search as soon as we find *and*
+	/// cut branches with a non-matching name:
+	fn by_name<'a>(&'a self, target: &str)->Result<&'a Self::In> {
+		self.by_name1(target).ok_or(Error::UnknownTable(target.into()).into())
+	}
+	/// Same, with mutable reference.
+	fn by_name_mut<'a>(&'a mut self, target: &str)->Result<&'a mut Self::In> {
+		self.by_name_mut1(target).ok_or(Error::UnknownTable(target.into()).into())
+	}
 }
 /// Trait containing the basic recursion function for forests.
 /// Implemented by the derive macro for forests deduced from resource
@@ -2391,7 +2414,7 @@ use std::collections::HashMap;
 
 use crate::prelude::*;
 use crate::resources::{ALL_SCHEMAS9,Recurse};
-use crate::restypes::{AllTables,SCHEMAS,RootNode9};
+use crate::restypes::{AllTables,RootNode9};
 use crate::schemas::{Schema,TableType};
 use crate::sql_rows::{AsParams};
 /// Small simplification for frequent use in callbacks.
@@ -2827,7 +2850,7 @@ use clap::Parser;
 use gamefiles::{GameIndex};
 use toolbox::{Progress};
 use crate::restypes::*;
-use crate::resources::{TopResource9,ALL_SCHEMAS9,Recurse};
+use crate::resources::{TopResource9,ALL_SCHEMAS,Recurse};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
@@ -2840,7 +2863,7 @@ fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
 	gamestrings::save(db, game)?;
 	pb.inc(1);
-	let mut tables = ALL_SCHEMAS9.try_map(|schema|
+	let mut tables = ALL_SCHEMAS.try_map(|schema|
 		db.prepare(schema.select_dirty_sql())
 	)?;
 // 	let mut tables = SCHEMAS().map(|schema| db.prepare(format!(
@@ -3019,9 +3042,9 @@ fn main() -> Result<()> {
 		Command::Add{ target, .. } =>
 			lua_api::command_add(GameDB::open(db_file)?, &target)?,
 		Command::Schema{ table, .. } => match table {
-			None => { ALL_SCHEMAS9.map(|schema| println!("{}", schema.name)); },
+			None => { ALL_SCHEMAS.map(|schema| println!("{}", schema.name)); },
 			Some(s) => {
-				ALL_SCHEMAS9.by_name(&s)?.describe(); },
+				ALL_SCHEMAS.by_name(&s)?.describe(); },
 		},
 		_ => todo!(),
 	};
