@@ -575,7 +575,7 @@ impl ToTokens for DeriveResourceTree {
 					None
 				}
 			}
-			impl<X: Debug, Y:Debug> crate::resources::TreeRecurse<Y> for #forestname<X> {
+			impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for #forestname<X> {
 				type To = #forestname<Y>;
 				fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 					->Result<Self::To,E>

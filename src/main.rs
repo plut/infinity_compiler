@@ -1504,20 +1504,21 @@ pub struct Tree<T: ByName> {
 	pub content: T::In,
 	pub branches: T,
 }
-impl<X: Debug, T: ByName<In=X>> ByName for Tree<T> {
-	type In = X;
-	fn by_name1<'a>(&'a self, s: &str)->Option<&'a X> {
+impl<T: ByName> ByName for Tree<T> {
+	type In = T::In;
+	fn by_name1<'a>(&'a self, s: &str)->Option<&'a Self::In> {
 		if s.is_empty() { return Some(&self.content) }
 		if s.as_bytes()[0] != b'_' { return None }
 		self.branches.by_name1(&s[1..])
 	}
-	fn by_name_mut1<'a>(&'a mut self, s: &str)->Option<&'a mut X> {
+	fn by_name_mut1<'a>(&'a mut self, s: &str)->Option<&'a mut Self::In> {
 		if s.is_empty() { return Some(&mut self.content) }
 		if s.as_bytes()[0] != b'_' { return None }
 		self.branches.by_name_mut1(&s[1..])
 	}
 }
-impl<X: Debug, T: ByName<In=X>> Tree<T> {
+impl<X: Debug, Y: Debug, T: ByName<In=X>+Recurse<Y>> Recurse<Y> for Tree<T> {
+	type To = Tree<T::To>;
 	/// Recursively traverse the tree from its root,
 	/// applying the closure on each element. Used by `traverse` and `map`.
 	///
@@ -1528,42 +1529,20 @@ impl<X: Debug, T: ByName<In=X>> Tree<T> {
 	/// It should return a tuple of:
 	///  - the new state value passed to children,
 	///  - the value computed for this node.
-	pub fn recurse<'a,'n,S,E,F,Y>(&'a self, f: F, name: &'n str, state: &S)
+	fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 		->Result<Tree<T::To>,E>
-	where X: 'a, Y: Debug, T: TreeRecurse<Y>,
-		F: Fn(&'a X, &'n str, &S)->Result<(S,Y),E>
+	where X: 'a, F: Fn(&'a X, &'n str, &S)->Result<(S,Y),E>
 	{
 		let (new_state, content) = f(&self.content, name, state)?;
 		Ok(Tree { content, branches: self.branches.recurse(f, name, &new_state)? })
 	}
 	/// Same as `recurse`, but for a `FnMut`.
-	pub fn recurse_mut<'a,'n,S,E,F,Y>(&'a self, mut f: F, name: &'n str, state: &S)
+	fn recurse_mut<'a,'n,S,E,F>(&'a self, mut f: F, name: &'n str, state: &S)
 		->Result<Tree<T::To>,E>
-	where X: 'a, Y: Debug, T: TreeRecurse<Y>,
-		F: FnMut(&'a X, &'n str, &S)->Result<(S,Y),E>
+	where X: 'a, F: FnMut(&'a X, &'n str, &S)->Result<(S,Y),E>
 	{
 		let (new_state, content) = f(&self.content, name, state)?;
 		Ok(Tree { content, branches: self.branches.recurse_mut(f, name, &new_state)? })
-	}
-	/// Apply a closure to each element of the tree; fallible version.
-	pub fn try_map<'a,E,F,Y>(&'a self, f: F)->Result<Tree<T::To>,E>
-	where X: 'a, Y: Debug, T: TreeRecurse<Y>, F: Fn(&'a X)->Result<Y,E> {
-		self.recurse(|x, _, _| f(x).map(|x| ((),x)), "", &())
-	}
-	/// Apply a closure to each element of the tree; fallible version.
-	pub fn try_map_mut<E,F,Y>(&self, mut f: F)->Result<Tree<T::To>,E>
-	where Y: Debug, T: TreeRecurse<Y>, F: FnMut(&X)->Result<Y,E> {
-		self.recurse_mut(|x, _, _| f(x).map(|x| ((),x)), "", &())
-	}
-	/// Apply a closure to each element of the tree; infallible version.
-	pub fn map<F,Y>(&self, f: F)->Tree<T::To>
-	where Y: Debug, T: TreeRecurse<Y>, F: Fn(&X)->Y {
-		self.try_map(|x| infallible(f(x))).unwrap()
-	}
-	/// Apply a closure to each element of the tree; mut version
-	pub fn map_mut<F,Y>(&self, mut f: F)->Tree<T::To>
-	where Y: Debug, T: TreeRecurse<Y>, F: FnMut(&X)->Y {
-		self.try_map_mut(|x| infallible(f(x))).unwrap()
 	}
 }
 /// Impl of this trait is produced by macro
@@ -1586,14 +1565,14 @@ pub trait ByName {
 /// Trait containing the basic recursion function for forests.
 /// Implemented by the derive macro for forests deduced from resource
 /// types.
-pub trait TreeRecurse<Y>: ByName {
+pub trait Recurse<Y>: ByName {
 	type To: ByName<In=Y>;
 	fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 		->Result<Self::To,E>
-	where F: Fn(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;
+	where Self::In: 'a, F: Fn(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;
 	fn recurse_mut<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 		->Result<Self::To,E>
-	where F: FnMut(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;
+	where Self::In: 'a, F: FnMut(&'a Self::In, &'n str, &S)->Result<(S,Y),E>;
 	/// Apply a closure to each element of the tree; fallible version.
 	fn try_map<'a,E,F>(&'a self, f: F)->Result<Self::To,E>
 	where Y: 'a, F: Fn(&'a Self::In)->Result<Y,E> {
@@ -1603,6 +1582,14 @@ pub trait TreeRecurse<Y>: ByName {
 	fn try_map_mut<'a,E,F>(&self, mut f: F)->Result<Self::To,E>
 	where Y: 'a, F: FnMut(&Self::In)->Result<Y,E> {
 		self.recurse_mut(|x, _, _| f(x).map(|x| ((),x)), "", &())
+	}
+	/// Apply a closure to each element of the tree; infallible version.
+	fn map<F>(&self, f: F)->Self::To where F: Fn(&Self::In)->Y {
+		self.try_map(|x| infallible(f(x))).unwrap()
+	}
+	/// Apply a closure to each element of the tree; mut version
+	fn map_mut<F>(&self, mut f: F)->Self::To where F: FnMut(&Self::In)->Y {
+		self.try_map_mut(|x| infallible(f(x))).unwrap()
 	}
 }
 /// A helper type for building schemas for all in-game resource.
@@ -1846,7 +1833,7 @@ pub mod database {
 use crate::prelude::*;
 use crate::restypes::*;
 use crate::gamefiles::GameIndex;
-use crate::resources::{ALL_SCHEMAS,Tree,ResourceIO};
+use crate::resources::{ALL_SCHEMAS,Tree,ResourceIO,Recurse};
 use crate::schemas::{Schema};
 
 /// A trivial wrapper on [`rusqlite::Connection`];
@@ -2214,7 +2201,7 @@ use rusqlite::{ToSql, types::ToSqlOutput};
 use std::collections::HashMap;
 
 use crate::prelude::*;
-use crate::resources::{ALL_SCHEMAS,ByName,TreeRecurse};
+use crate::resources::{ALL_SCHEMAS,ByName,Recurse};
 use crate::restypes::{RootForest};
 use crate::schemas::{Schema,TableType};
 use crate::sql_rows::{AsParams};
@@ -2652,7 +2639,7 @@ use clap::Parser;
 use gamefiles::{GameIndex};
 use toolbox::{Progress};
 use crate::restypes::*;
-use crate::resources::{ALL_SCHEMAS,ByName};
+use crate::resources::{ALL_SCHEMAS,ByName,Recurse};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
