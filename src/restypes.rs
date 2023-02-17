@@ -168,48 +168,6 @@ impl TopResource9 for Item {
 	const EXTENSION: &'static str = "itm";
 	const RESTYPE: Restype = Restype(0x03ed);
 	type Subresources = (Vec<(ItemAbility,Vec<ItemEffect>)>, Vec<ItemEffect>);
-	/// load an item from cursor
-	fn load(tables: &mut AllTables<Statement<'_>>, db: &impl DbInterface, mut cursor: impl Read+Seek, resref: Resref) -> Result<()> {
-		let item = Item::unpack(&mut cursor)
-			.context("cannot unpack Item main struct")?;
-		let n = item.bind_execute1(&mut tables.items, resref)
-			.context("inserting into 'items'")?;
-		if n == 0 {
-			warn!("skipped inserting item {resref}");
-			return Ok(())
-		}
-		cursor.seek(SeekFrom::Start(item.abilities_offset as u64))?;
-
-		let mut ab_info = Vec::<(u16,i64)>::
-			with_capacity(item.abilities_count as usize);
-		for ab_index in 1..1+item.abilities_count {
-			let ability = ItemAbility::unpack(&mut cursor)
-				.with_context(|| format!("cannot unpack item ability {}/{}",
-					ab_index, item.abilities_count))?;
-
-			ability.bind_execute2(&mut tables.item_abilities, resref, ab_index)
-				.context("inserting into 'item_abilities'")?;
-			ab_info.push((ability.effect_count, db.last_insert_rowid()));
-		}
-		trace!("inserting item {resref}; abilities have {ab_info:?} effects");
-		cursor.seek(SeekFrom::Start(item.effect_offset as u64))?;
-		for j in 1..1+item.equip_effect_count { // on-equip effects
-			let effect = ItemEffect::unpack(&mut cursor)
-				.with_context(|| format!("cannot unpack global item effect {}/{}",
-					j+1, item.equip_effect_count))?;
-			effect.bind_execute2(&mut tables.item_effects, resref, j)
-				.context("inserting into 'item_effects'")?;
-		}
-		for (n, ab_id) in ab_info.iter() {
-			for j in 1..(1+*n) {
-				let effect = ItemEffect::unpack(&mut cursor)
-					.with_context(|| format!("cannot unpack item effect {}/{} for ability {}", j+1, n, ab_id))?;
-				effect.bind_execute2(&mut tables.item_ability_effects, ab_id, j)
-					.context("inserting into 'item_ability_effects'")?;
-			}
-		}
-	Ok(())
-	}
 	fn save9(&mut self, mut file: impl Write+Seek+Debug, (abilities, effects): &Self::Subresources) ->Result<()> {
 		trace!("saving item with {} abilities and {} effects",
 			abilities.len(), effects.len());
@@ -295,6 +253,7 @@ macro_rules! tables {
 		pub fn SCHEMAS()->AllTables<Schema> {
 				AllTables {
 				$($tablename: Schema {
+					level: 0, // FIXME
 					name: stringify!($tablename).to_owned(),
 					table_type: table_type!($which($($arg)*)),
 					fields: <$ty as crate::sql_rows::SqlRow>::FIELDS,

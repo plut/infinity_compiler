@@ -1155,6 +1155,8 @@ pub enum TableType {
 /// resource, and it is compiled by the [`SqlRow`] derive macro.
 #[derive(Debug)]
 pub struct Schema {
+	/// The nesting level for this resource (0 for top-level resources).
+	pub level: usize,
 	/// Name of the SQL table mapped to this data.
 	pub name: String,
 	/// Position of the schema in the arborescence.
@@ -1426,16 +1428,30 @@ pub trait Recurse<Y>: DerefMut {
 	fn recurse<'n,S,E,F>(&self, f: F, name: &'n str, state: Option<&S>)
 		->Result<Self::To,E>
 	where F: Fn(&Self::Target, &'n str, Option<&S>)->Result<(S,Y),E>;
+	/// Same as `recurse`, but for a `FnMut`.
+	fn recurse_mut<'n,S,E,F>(&self, f: F, name: &'n str, state: Option<&S>)
+		->Result<Self::To,E>
+	where F: FnMut(&Self::Target, &'n str, Option<&S>)->Result<(S,Y),E>;
 	// Supplied methods:
 	/// Apply a closure to each element of the tree; fallible version.
 	fn try_map<E,F>(&self, f: F)->Result<Self::To,E>
 	where F: Fn(&Self::Target)->Result<Y,E> {
 		self.recurse(|x, _, _| f(x).map(|x| ((),x)), "", None)
 	}
+	/// Apply a closure to each element of the tree; fallible version.
+	fn try_map_mut<E,F>(&self, mut f: F)->Result<Self::To,E>
+	where F: FnMut(&Self::Target)->Result<Y,E> {
+		self.recurse_mut(|x, _, _| f(x).map(|x| ((),x)), "", None)
+	}
 	/// Apply a closure to each element of the tree; infallible version.
 	fn map<F>(&self, f: F)->Self::To
 	where F: Fn(&Self::Target)->Y {
-		self.try_map(|x| Ok::<_,Infallible>(f(x))).unwrap()
+		self.try_map(|x| infallible(f(x))).unwrap()
+	}
+	/// Apply a closure to each element of the tree; mut
+	fn map_mut<F>(&self, mut f: F)->Self::To
+	where F: FnMut(&Self::Target)->Y {
+		self.try_map_mut(|x| Ok::<_,Infallible>(f(x))).unwrap()
 	}
 // 	/// Recursively apply a closure to the tree (top-down fold); fallible
 // 	/// version.
@@ -1547,6 +1563,7 @@ impl SchemaBuildState {
 	}
 	fn schema(&self, fields: &Fields)->Schema {
 		Schema {
+			level: self.level,
 			table_type: self.table_type.clone(),
 			fields: *fields,
 			name: self.table_name.clone(),
@@ -1608,8 +1625,6 @@ pub trait TopResource9: SqlRow {
 	/// Which subresources do we need to collect from the database.
 	type Subresources;
 
-	/// Loads a resource from filesystem directly into database.
-	fn load(tables: &mut AllTables<Statement<'_>>, db: &impl DbInterface, cursor: impl Read+Seek, resref: Resref) -> Result<()>;
 	/// Saves a resource (from struct + subresources) to filesystem.
 	fn save9(&mut self, file: impl Write+Seek+Debug, subresources: &Self::Subresources) ->Result<()>;
 	/// Selects subresources from database.
@@ -1892,7 +1907,7 @@ create index "strref_dict_reverse" on "strref_dict" ("strref");
 				debug!("  creating tables for resource '{schema}'");
 				schema.create_tables_and_views(|s| db.exec(s))
 			}).context("cannot create main tables and views")?;
-			SCHEMAS().create_new_strings(|s| db.exec(s))?;
+			ALL_SCHEMAS.create_new_strings(|s| db.exec(s))?;
 			Ok(())
 		}).context("creating global tables")?;
 		db.create_language_tables(game).context("cannot create language tables")?;
@@ -1936,8 +1951,7 @@ from "new_strings"
 		pb.inc(1);
 		debug!("loading game resources");
 		self.transaction(|db| {
-			let schemas = SCHEMAS();
-			let mut statements = ALL_SCHEMAS.try_map(|schema|
+			let mut tables = ALL_SCHEMAS.try_map(|schema|
 				db.prepare(&schema.insert_sql("load_"))
 					.with_context(|| format!("insert statement for table '{schema}'")))?;
 			game.for_each(move |restype, handle| {
@@ -1946,7 +1960,8 @@ from "new_strings"
 // 					.with_context(|| format!("could not register resref:{resref}"))?;
 				#[allow(clippy::single_match)]
 				match restype {
-				Item::RESTYPE => Item::load_and_insert((db, &mut statements.items), handle)?,
+				Item::RESTYPE =>
+					Item::load_and_insert((db, &mut tables.items), handle)?,
 				_ => (),
 				};
 				Ok(())
@@ -2059,7 +2074,7 @@ update "new_strings" set "strref"=-1 where "strref" is null"#))
 	/// Deletes from current directory all resources marked as 'orphan' in
 	/// the database. This also clears the list of orphan resources.
 	fn clear_orphan_resources(&self)->Result<()> {
-		SCHEMAS().map(|schema| {
+		ALL_SCHEMAS.try_map(|schema| {
 			let extension = match schema.table_type {
 				crate::schemas::TableType::Top { extension, .. } => extension,
 				_ => return any_ok(())
@@ -2086,7 +2101,7 @@ update "new_strings" set "strref"=-1 where "strref" is null"#))
 	}
 	/// Cleans the dirty bit from all resources after saving.
 	fn unmark_dirty_resources(&self)->Result<()> {
-		SCHEMAS().map(|schema| {
+		ALL_SCHEMAS.try_map(|schema| {
 			if matches!(schema.table_type, crate::schemas::TableType::Top { .. }) {
 				self.exec(format!(r#"delete from "dirty_{schema}""#))?;
 				self.exec(format!(r#"delete from "orphan_{schema}""#))?;
@@ -2100,7 +2115,7 @@ impl<T: Deref<Target=Connection>>  DbInterface for T {
 	fn db(&self)->&Connection { self.deref() }
 }
 
-impl AllTables<Schema> {
+impl RootNode<Schema> {
 	/// Builds the SQL statement creating the `new_strings` view.
 	///
 	/// This also builds a few triggers which mark resources as dirty
@@ -2116,8 +2131,7 @@ begin"#);
 		self.map_mut(|schema| {
 			schema.append_new_strings_schema(&mut create, &mut is_first);
 			schema.append_new_strings_trigger(&mut trigger);
-			any_ok(())
-		})?;
+		});
 		write!(&mut create, r#") as "a"
 	left join "strref_dict" as "b" on "a"."native" = "b"."native"
 	where typeof("a"."native") = 'text'"#)?;
@@ -2184,7 +2198,7 @@ use rusqlite::{ToSql, types::ToSqlOutput};
 use std::collections::HashMap;
 
 use crate::prelude::*;
-use crate::resources::{ALL_SCHEMAS};
+use crate::resources::{ALL_SCHEMAS,Recurse};
 use crate::restypes::{AllTables,SCHEMAS};
 use crate::schemas::{Schema,TableType};
 use crate::sql_rows::{AsParams};
@@ -2192,6 +2206,7 @@ use crate::sql_rows::{AsParams};
 macro_rules! fail {
 	($($a:tt)+) => { return Err(Error::$($a)+.into()) }
 }
+fn mlua_ok<T>(a: T)->mlua::Result<T> { Ok::<_,mlua::Error>(a) }
 #[ext]
 impl<'lua> Value<'lua> {
 	/// Conversion to SQL.
@@ -2563,7 +2578,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 	lua.scope(|scope| {
 		let simod = lua.create_table()?;
 		let lua_schema = lua.create_table()?;
-		SCHEMAS().map_mut(|schema| {
+		ALL_SCHEMAS.try_map_mut(|schema| {
 			let fields = lua.create_table()?;
 // 			let context = lua.create_table()?;
 			for f in schema.fields.iter() {
@@ -2577,14 +2592,14 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 // 			res_schema.set("context", context)?;
 // 			res_schema.set("primary", schema.primary().fname)?;
 			lua_schema.set(schema.to_string(), res_schema)?;
-			Ok::<_,mlua::Error>(())
+			mlua_ok(())
 		})?;
 		// Step 2: build the sub-schema relations
 		// We do this in a second pass since by now all resource tables exist
-		SCHEMAS().map_mut(|schema| {
+		ALL_SCHEMAS.try_map_mut(|schema| {
 			if let TableType::Sub {  .. } = schema.table_type {
 			}
-			Ok::<_,mlua::Error>(())
+			mlua_ok(())
 		})?;
 		simod.set("schema", lua_schema)?;
 		simod.set("dump", scope.create_function(
@@ -2595,7 +2610,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 			while let Some(row) = rows.next().unwrap() {
 				row.dump();
 			}
-			Ok::<_,mlua::Error>(())
+			mlua_ok(())
 		})?)?;
 		statements.list_keys.install_callback(scope, &simod, "list")?;
 // 		statements.select_row.install_callback(scope, &simod, "select")?;
@@ -2702,27 +2717,34 @@ fn command_restore(game: &GameIndex)->Result<()> {
 			game.backup_dir))
 }
 
+mod arguments {
+//! A tiny wrapper for command-line arguments.
+//! Mainly serves to prevent useless warnings from
+//! `unused_qualifications`.
+	#![allow(unused_qualifications)]
+use crate::prelude::*;
 /// The runtime options parser for `clap` crate.
 #[derive(clap::Parser,Debug)]
 #[command(version,about=r#"Exposes Infinity Engine game data as a SQLite database."#)]
-struct RuntimeOptions {
+pub struct RuntimeOptions {
 	#[arg(short='G',long,help="sets the game directory (containing chitin.key)", default_value=".")]
-	gamedir: PathBuf,
+	pub gamedir: PathBuf,
 	#[arg(short='F',long,help="sets the sqlite file")]
-	database: Option<PathBuf>,
+	pub database: Option<PathBuf>,
 	#[arg(short='O',long,help="sets log output",default_value="simod.log")]
-	log_output: String,
-	#[arg(short='L',long,help="sets log level")]
-	log_level: i32,
+	pub log_output: String,
+	#[arg(short='L',long,default_value_t=0,help="sets log level")]
+	pub log_level: i32,
 	#[command(subcommand)]
-	command: Command,
+	pub command: Command,
 }
 /// Subcommands passed to the executable.
 #[derive(clap::Subcommand,Debug)]
-enum Command {
+#[allow(unused_qualifications)]
+pub enum Command {
 	/// Initializes the database from the game installation.
 	Init {
-#[arg(short='B',help="Don't abort even if backup fails.")]
+#[arg(short='B',default_value_t=false,help="Don't abort even if backup fails.")]
 		ignore_backup_fail: bool,
 	},
 	/// Saves the database to the game installation (differential save).
@@ -2748,6 +2770,8 @@ enum Command {
 		table: Option<String>,
 	},
 }
+}
+use arguments::*;
 
 
 fn main() -> Result<()> {

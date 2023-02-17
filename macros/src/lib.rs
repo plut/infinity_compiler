@@ -505,6 +505,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let fields = Fields::from(data);
 	let mut node_struct = quote!{};
 	let mut recurse = quote!{};
+	let mut recurse_mut = quote!{};
 	let mut fields_node = quote!{};
 	let mut primary = quote!{ i64 };
 	let mut insert_sub = quote!{};
@@ -533,6 +534,9 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			quote!{ #name:
 				self.#name.recurse(&f, stringify!(#name), Some(&new_state))?, }
 				.to_tokens(&mut recurse);
+			quote!{ #name:
+				self.#name.recurse_mut(&mut f, stringify!(#name), Some(&new_state))?, }
+				.to_tokens(&mut recurse_mut);
 			quote!{ #name: <#eltype as crate::resources::RecursiveResource>::FIELDS_NODE, }
 				.to_tokens(&mut fields_node);
 			quote!{ for (index, sub) in self.#name.iter().enumerate() {
@@ -562,6 +566,12 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			where F: Fn(&Self::Target, &'n str, Option<&S>)->Result<(S,Y),E> {
 				let (new_state, content) = f(&self.content, name, state)?;
 				Ok(#node_ty { #recurse content })
+			}
+			fn recurse_mut<'n,S,E,F>(&self, mut f: F, name: &'n str, state: Option<&S>)
+				->Result<Self::To,E>
+			where F: FnMut(&Self::Target, &'n str, Option<&S>)->Result<(S,Y),E> {
+				let (new_state, content) = f(&self.content, name, state)?;
+				Ok(#node_ty { #recurse_mut content })
 			}
 		}
 		impl crate::resources::RecursiveResource for #ident {
@@ -595,6 +605,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 pub fn top_resources(_: TokenStream)->TokenStream {
 	let mut data = quote!{};
 	let mut recurse = quote!{};
+	let mut recurse_mut = quote!{};
 	let mut const_def = quote!{};
 	TOP.with(|v| {
 		for TopResource { type_name, table_name, ext: _ext, resref: _res }
@@ -605,6 +616,8 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 			quote!{ pub #field: #subnode<X>, }.to_tokens(&mut data);
 			quote!{ #field: self.#field.recurse(f, stringify!(#field), init)?, }
 				.to_tokens(&mut recurse);
+			quote!{ #field: self.#field.recurse_mut(f, stringify!(#field), init)?, }
+				.to_tokens(&mut recurse_mut);
 			quote!{
 				#field: <#ty as crate::resources::RecursiveResource>::FIELDS_NODE,
 			}.to_tokens(&mut const_def);
@@ -628,6 +641,11 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 				->Result<Self::To,E>
 			where F: Fn(&Self::Target, &'n str, Option<&A>)->Result<(A,Y),E> {
 				Ok(RootNode { #recurse _marker: PhantomData })
+			}
+			fn recurse_mut<'n,A,E,F>(&self, f: F, _: &'n str, init: Option<&A>)
+				->Result<Self::To,E>
+			where F: FnMut(&Self::Target, &'n str, Option<&A>)->Result<(A,Y),E> {
+				Ok(RootNode { #recurse_mut _marker: PhantomData })
 			}
 		}
 		pub const TOP_FIELDS: RootNode<(&'static str, crate::schemas::Fields)> =
