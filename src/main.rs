@@ -1549,9 +1549,10 @@ pub struct RecursiveRows<'stmt, T: RecursiveResource> {
 }
 impl<'a,T: RecursiveResource> RecursiveRows<'a,T> {
 	fn new(node: &'a mut T::StatementNode<'a>, params: impl rusqlite::Params)->Result<Self> {
-		let stmt = node.deref_mut();
-		let rows = stmt.query(params)?;
-		Ok(Self { rows: rows.into(), node })
+		todo!()
+// 		let stmt = node.deref_mut();
+// 		let rows = stmt.query(params)?;
+// 		Ok(Self { rows: rows.into(), node })
 	}
 }
 impl<T: RecursiveResource> Iterator for RecursiveRows<'_,T> {
@@ -1561,7 +1562,7 @@ impl<T: RecursiveResource> Iterator for RecursiveRows<'_,T> {
 			None => None,
 			Some(Err(e)) => Some(Err(e)),
 			Some(Ok((primary, mut resource))) =>
-				match resource.select_subresources(&mut self.node, primary) {
+				match resource.select_subresources(self.node, primary) {
 					Err(e) => Some(Err(e)),
 					_ => Some(Ok((primary, resource))),
 			}
