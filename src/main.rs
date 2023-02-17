@@ -781,19 +781,19 @@ impl BifFile {
 	/// Lazily opens a BIF file.
 	pub fn new(path: PathBuf)->Self { Self { contents: None, path } }
 }
-/// A (lazy) accessor to a game resource.
+/// A (lazy) file descriptor of a game reosurce.
 ///
 /// This encapsulates both the case of an override game resource and a
 /// BIF game resource. In the second case, access to the BIF file is
-/// lazy: this file is loaded only when [`ResHandle::open`] is called.
+/// lazy: this file is loaded only when [`ResReader::open`] is called.
 #[derive(Debug)]
-pub enum ResHandle<'a> {
+pub enum ResReader<'a> {
 	/// A resource stored at some position inside a BIF file.
 	Bif(&'a mut BifFile, BifIndex, Restype),
 	/// A resource stored in its own file.
 	Override(&'a Path),
 }
-impl ResHandle<'_> {
+impl ResReader<'_> {
 	/// Tests where the resource is stored.
 	pub fn is_override(&self)->bool { matches!(self, Self::Override(_)) }
 	/// Opens the file and returns a [`Cursor`] pointing to the data.
@@ -805,6 +805,16 @@ impl ResHandle<'_> {
 				.with_context(|| format!("cannot open override file: {path:?}"))?)),
 		}
 	}
+}
+/// A (lazy) accessor to a game resource.
+#[derive(Debug)]
+pub struct ResHandle<'a> {
+	/// The name attached to this resource.
+	pub resref: Resref,
+	reader: ResReader<'a>,
+}
+impl ResHandle<'_> {
+	pub fn open(&mut self)->Result<Cursor<Vec<u8>>> { self.reader.open() }
 }
 /// The main structure accessing game files.
 #[derive(Debug)]
@@ -918,7 +928,7 @@ impl GameIndex {
 	/// statement) allows ignoring of BIF resources masked by an override
 	/// file.
 	pub fn for_each<F>(&self, mut f: F)->Result<()>
-	where F: (FnMut(Restype, Resref, ResHandle<'_>)->Result<()>)
+	where F: (FnMut(Restype, ResHandle<'_>)->Result<()>)
 	{
 		let pb = Progress::new(self.resources.len(), "resources");
 		let over_dir = self.root.join("override"); // "override" is a reserved kw
@@ -932,11 +942,13 @@ impl GameIndex {
 					Ok(s) => s };
 				let pos = match name.find('.') { None => continue, Some(p) => p };
 				if pos > 8 { continue }
-				let resref = Resref(StaticString::<8>::from(&name[..pos]));
+				let resref = Resref(name[..pos].into());
 				let ext = &name[pos+1..];
 				let restype = Restype::from(ext);
 				trace!("reading override file: {name}; restype={restype:?}");
-				f(restype, resref, ResHandle::Override(&entry.path()))?
+				let path = entry.path();
+				let handle = ResHandle { resref, reader: ResReader::Override(&path) };
+				f(restype, handle)?
 			}
 		}
 		scope_trace!("iterating over game resources from BIF");
@@ -946,10 +958,11 @@ impl GameIndex {
 			let pb1 = Progress::new(self.resources.len(), filename);
 			for res in &self.resources {
 				if res.location.sourcefile() != sourcefile { continue }
-				let rread = ResHandle::Bif(&mut bif, res.location, res.restype,);
+				let handle = ResHandle { resref: res.resref,
+					reader: ResReader::Bif(&mut bif, res.location, res.restype,) };
 				pb.inc(1);
 				pb1.inc(1);
-				f(res.restype, res.resref, rread)?
+				f(res.restype, handle)?
 			}
 		}
 		Ok(())
@@ -1564,11 +1577,12 @@ pub trait ResourceIO: RecursiveResource<Primary=Resref> {
 	// Provided methods
 }
 impl<T: RecursiveResource<Primary=Resref>+ResourceIO> crate::database::LoadResource for T {
-	type DbHandle<'db:'b,'b> = (&'db Connection, &'b mut T::StatementNode<'db>);
-	fn load_and_insert<'db:'b,'b>((db, node): Self::DbHandle<'db,'b>, resref: Resref,
+	type InsertHandle<'db:'b,'b> = (&'db Connection, &'b mut T::StatementNode<'db>);
+	#[allow(single_use_lifetimes)] // clippy over-optimistic here
+	fn load_and_insert<'db:'b,'b>((db, node): Self::InsertHandle<'db,'b>, 
 			mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
 		let resource = T::load(handle.open()?)?;
-		resource.insert_as_topresource(db, node, resref)?;
+		resource.insert_as_topresource(db, node, handle.resref)?;
 		// TODO: mark resource as override
 		// TODO: increase counter if possible
 		Ok(())
@@ -1605,7 +1619,7 @@ pub trait TopResource9: SqlRow {
 	/// Loads a resource from filesystem to database.
 	/// Main entry point for the `init` command.
 	fn load_from_handle9<T: DbInterface>(db: &mut DbInserter<'_,T>, resref: Resref,
-			mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
+			mut handle: crate::gamefiles::ResReader<'_>)->Result<()> {
 		Self::load(&mut db.tables, db.db, handle.open()?, resref)?;
 		if handle.is_override() {
 			db.add_override.execute((resref, Self::EXTENSION))?;
@@ -1936,20 +1950,16 @@ from "new_strings"
 		debug!("loading game resources");
 		self.transaction(|db| {
 			let schemas = SCHEMAS();
-// 			let mut base = DbInserter::new(db, &schemas)?;
 			let mut statements = ALL_SCHEMAS.try_map(|schema|
 				db.prepare(&schema.insert_sql("load_"))
 					.with_context(|| format!("insert statement for table '{schema}'")))?;
-// 	/// the insert statements for all tables
-// 	pub statements: RootNode<Statement<'a>>,
-			game.for_each(move |restype, resref, handle| {
-				trace!("found resource {}.{:#04x}", resref, restype.0);
+			game.for_each(move |restype, handle| {
+				trace!("found resource {}.{:#04x}", handle.resref, restype.0);
 // 				base.register(&resref)
 // 					.with_context(|| format!("could not register resref:{resref}"))?;
 				#[allow(clippy::single_match)]
 				match restype {
-				Item::RESTYPE => Item::load_and_insert((db, &mut statements.items), resref, handle)?,
-// 				Item::RESTYPE => Item::load_from_handle9(&mut base, resref, handle)?,
+				Item::RESTYPE => Item::load_and_insert((db, &mut statements.items), handle)?,
 				_ => (),
 				};
 				Ok(())
@@ -2147,8 +2157,9 @@ begin"#);
 /// A trait describing how to insert a top-level resource into the
 /// database.
 pub trait LoadResource {
-	type DbHandle<'db:'b,'b>;
-	fn load_and_insert<'db:'b,'b>(db_handle: Self::DbHandle<'db,'b>, resref: Resref,
+	type InsertHandle<'db:'b,'b>;
+	#[allow(single_use_lifetimes)] // clippy over-optimistic here
+	fn load_and_insert<'db:'b,'b>(db_handle: Self::InsertHandle<'db,'b>,
 		handle: crate::gamefiles::ResHandle<'_>)->Result<()>;
 }
 
