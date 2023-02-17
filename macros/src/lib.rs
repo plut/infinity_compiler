@@ -503,7 +503,11 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	}
 	let code = quote! {
 		impl crate::sql_rows::SqlRow for #ident {
-			const FIELDS: crate::schemas::Fields =
+			const FIELDS: crate::sql_rows::SqlRowData = crate::sql_rows::SqlRowData {
+				fields: crate::schemas::Fields(&[ #fields_def ]),
+				ext: ""
+			};
+			const FIELDS9: crate::schemas::Fields =
 				crate::schemas::Fields(&[ #fields_def ]);
 			fn bind_at(&self, s: &mut Statement<'_>, offset: usize)->Result<()> {
 				#bind_at
@@ -593,7 +597,7 @@ impl ToTokens for DeriveResourceTree {
 				}
 			}
 			impl crate::resources::ResourceTree for #ident {
-				type FieldsTree = crate::resources::Tree<#forestname<crate::schemas::Fields>>;
+				type FieldsTree = crate::resources::Tree<#forestname<crate::sql_rows::SqlRowData>>;
 				const FIELDS_TREE: Self::FieldsTree = Self::FieldsTree {
 					content: <Self as crate::sql_rows::SqlRow>::FIELDS,
 					branches: #forestname {
@@ -677,7 +681,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
 			const FIELDS_NODE: Self::FieldNode = #node_ty {
 				#fields_node
-				content: (#ext, <Self as crate::sql_rows::SqlRow>::FIELDS)
+				content: (#ext, <Self as crate::sql_rows::SqlRow>::FIELDS9)
 			};
 			type Primary = #primary;
 			type StatementNode<'a> = #node_ty<Statement<'a>>;
@@ -742,7 +746,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
 			const FIELDS_NODE: Self::FieldNode = #node_ty {
 				#fields_node
-				content: (#ext, <Self as crate::sql_rows::SqlRow>::FIELDS)
+				content: (#ext, <Self as crate::sql_rows::SqlRow>::FIELDS9)
 			};
 			type Primary = #primary;
 			type StatementNode<'a> = #node_ty<Statement<'a>>;

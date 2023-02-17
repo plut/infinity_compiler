@@ -256,7 +256,7 @@ macro_rules! tables {
 					level: 0, // FIXME
 					name: stringify!($tablename).to_owned(),
 					table_type: table_type!($which($($arg)*)),
-					fields: <$ty as crate::sql_rows::SqlRow>::FIELDS,
+					fields: <$ty as crate::sql_rows::SqlRow>::FIELDS9,
 				}),*
 			}
 		}
@@ -295,4 +295,8 @@ tables! {
 // trace_macros!(true);
 top_resources!();
 // trace_macros!(false);
-//
+
+#[derive(Debug,SqlRow,ResourceTree)]
+pub struct Base {
+	items: Vec::<Item>,
+}
