@@ -8,7 +8,7 @@ use crate::pack::{Pack,PackAll};
 use crate::gamefiles::{Restype};
 use crate::sql_rows::{SqlRow};
 use crate::database::{DbInterface};
-use crate::resources::{TopResource9,SubResource,ResourceIO};
+use crate::resources::{ResourceIO};
 use macros::{ResourceTree};
 
 /// An effect inside a .itm file (either global or in an ability).
@@ -122,6 +122,8 @@ pub struct Item {
 }
 
 impl ResourceIO for Item {
+	const EXTENSION: &'static str = "itm";
+	const RESTYPE: Restype = Restype(0x03ed);
 	/// load an item from cursor
 	fn load(mut io: impl Read+Seek)->Result<Self> {
 		let mut item = Item::unpack(&mut io)
@@ -164,46 +166,6 @@ impl ResourceIO for Item {
 		Ok(())
 	}
 }
-impl TopResource9 for Item {
-	const EXTENSION: &'static str = "itm";
-	const RESTYPE: Restype = Restype(0x03ed);
-	type Subresources = (Vec<(ItemAbility,Vec<ItemEffect>)>, Vec<ItemEffect>);
-	fn save9(&mut self, mut file: impl Write+Seek+Debug, (abilities, effects): &Self::Subresources) ->Result<()> {
-		trace!("saving item with {} abilities and {} effects",
-			abilities.len(), effects.len());
-		self.pack(&mut file)?;
-		// pack abilities:
-		abilities.iter().map(|(a,_)| a).pack_all(&mut file)?;
-		// pack global effects:
-		effects.pack_all(&mut file)?;
-		// pack per-ability effects:
-		for (_, effects) in abilities.iter() {
-			effects.pack_all(&mut file)?;
-		}
-		Ok(())
-	}
-	fn select_subresources(&mut self, tables: &mut AllTables<Statement<'_>>, itemref: Resref)->Result<Self::Subresources> {
-		debug!("reading item: {}", itemref);
-		let mut abilities = Vec::<(ItemAbility,Vec<ItemEffect>)>::new();
-		let item_effects = ItemEffect::collect_rows9(&mut tables.item_effects, (itemref,))?;
-		self.equip_effect_count = item_effects.len() as u16;
-		let mut current_effect_idx = self.equip_effect_count;
-		for x in ItemAbility::iter_rows9(&mut tables.item_abilities, (itemref,))? {
-			let (ab_id, mut ability) = x?;
-			let ab_effects = ItemEffect::collect_rows9(&mut tables.item_ability_effects, (ab_id,))?;
-			ability.effect_count = ab_effects.len() as u16;
-			ability.effect_index = current_effect_idx;
-			current_effect_idx+= ability.effect_count;
-			abilities.push((ability, ab_effects));
-		}
-		self.abilities_count = abilities.len() as u16;
-		self.abilities_offset = 114;
-		self.effect_offset = 114 + 56*(self.abilities_count as u32);
-		Ok((abilities, item_effects))
-	}
-}
-impl SubResource for ItemAbility { }
-impl SubResource for ItemEffect { }
 
 /// Builds the full list of schemas for all resource tables.
 ///
@@ -222,33 +184,6 @@ impl SubResource for ItemEffect { }
 ///  `macro_rules!` is not too practical for walking in trees).
 macro_rules! tables {
 	($($tablename:ident: $ty:ty = $which:ident ($($arg:tt)*));*$(;)?) => {
-		#[derive(Debug)]
-		pub struct AllTables<X: Debug> {
-			$(pub $tablename: X,)*
-		}
-		impl<X: Debug> AllTables<X> {
-			pub fn map<'a,Y,E,F>(&'a self, f: F)->Result<AllTables<Y>,E>
-			where Y: Debug+'a, F: Fn(&'a X)->Result<Y,E> {
-				Ok(AllTables::<Y> { $($tablename: f(&self.$tablename)?,)* })
-			}
-			pub fn map_mut<Y,E,F>(&self, mut f: F)->Result<AllTables<Y>,E>
-			where Y: Debug, F: FnMut(&X)->Result<Y,E> {
-				Ok(AllTables::<Y> { $($tablename: f(&self.$tablename)?,)* })
-			}
-			pub fn by_name(&self, table_name: &str)->Result<&X> {
-				match table_name {
-					$(stringify!($tablename) => Ok(&self.$tablename)),*,
-				_ => Err(Error::UnknownTable(table_name.to_owned()).into())
-				}
-			}
-			pub fn by_name_mut(&mut self, table_name: &str)->Result<&mut X> {
-				match table_name {
-					$(stringify!($tablename) => Ok(&mut self.$tablename)),*,
-				_ => Err(Error::UnknownTable(table_name.to_owned()).into())
-				}
-			}
-		}
-		use crate::schemas::Schema;
 		#[allow(non_snake_case)]
 		impl Restype {
 			pub fn from(e: &str)->Self {

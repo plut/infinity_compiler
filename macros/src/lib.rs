@@ -630,15 +630,7 @@ impl ToTokens for DeriveResourceTree {
 pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let DeriveInput{ ident, data, attrs,.. } = parse_macro_input!(tokens);
 	let fields = Fields::from(data);
-	let mut node_struct = quote!{};
-	let mut recurse = quote!{};
-	let mut recurse_mut = quote!{};
-	let mut by_name = quote!{};
-	let mut by_name_mut = quote!{};
-	let mut fields_node = quote!{};
 	let mut primary = quote!{ i64 };
-	let mut insert_sub = quote!{};
-	let mut select_sub = quote!{};
 	let mut ext = String::new();
 	for (name, args) in attrs.iter().map(parse_attr) {
 		match name.as_str() {
@@ -660,106 +652,11 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 // 			} // match
 // 		} // for
 		if let Some(eltype) = ty.vec_eltype() {
-			derive_forest.push(&name.ident(), eltype);
-			let subnode = eltype.extend("Node");
-			quote!{ pub #name: #subnode::<T>, }.to_tokens(&mut node_struct);
-			quote!{ #name:
-				self.#name.recurse(&f, stringify!(#name), &new_state)?, }
-				.to_tokens(&mut recurse);
-			quote!{ #name:
-				self.#name.recurse_mut(&mut f, stringify!(#name), &new_state)?, }
-				.to_tokens(&mut recurse_mut);
-			quote!{ #name: <#eltype as crate::resources::RecResource>::FIELDS_NODE, }
-				.to_tokens(&mut fields_node);
-			quote!{ for (index, sub) in self.#name.iter().enumerate() {
-					sub.insert_as_subresource9(db, &mut node.#name, primary, index)?;
-				}
-			}.to_tokens(&mut insert_sub);
-			quote!{ self.#name = #eltype::collect_all9(&mut node.#name, (primary,))?; }
-				.to_tokens(&mut select_sub);
-			quote!{
-				if let Some(new_target) = tail.strip_prefix(stringify!(#name)) {
-					return self.#name.by_name(new_target)
-				}
-			}.to_tokens(&mut by_name);
-			quote!{
-				if let Some(new_target) = tail.strip_prefix(stringify!(#name)) {
-					return self.#name.by_name_mut(new_target)
-				}
-			}.to_tokens(&mut by_name_mut);
+			derive_forest.push(name.ident(), eltype);
 		}
 	}
 	let node_ty = ident.extend("Node");
-	let _code0 = quote!{
-		impl crate::resources::RecResource for #ident {
-			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
-			const FIELDS_NODE: Self::FieldNode = #node_ty {
-				#fields_node
-				content: (#ext, <Self as crate::sql_rows::SqlRow>::FIELDS9)
-			};
-			type Primary9 = #primary;
-			type StatementNode<'a> = #node_ty<Statement<'a>>;
-			fn insert_subresources9(&self, db: &Connection, node: &mut #node_ty<Statement<'_>>,
-				primary: impl rusqlite::ToSql+Copy)->Result<()> { #insert_sub Ok(()) }
-			fn select_subresources9(&mut self, node: &mut #node_ty<Statement<'_>>,
-				primary: #primary)->Result<()> { #select_sub Ok(()) }
-		}
-// 		impl<T: Debug> Node<T> for #ident {
-// 			type Output = #node_ty<T>
-// 		}
-	};
-// 	println!("{}", code);
-	let code = quote! { #derive_forest
-		/// A `Node` impl. derived by `derive(ResourceTree)`.
-		#[derive(Debug)]
-		pub struct #node_ty<T: Debug> { #node_struct content: T }
-		impl<X: Debug> Deref for #node_ty<X> {
-			type Target = X;
-			fn deref(&self)->&X { &self.content }
-		}
-		impl<X: Debug> DerefMut for #node_ty<X> {
-			fn deref_mut(&mut self)->&mut X { &mut self.content }
-		}
-		/// Runtime search in the tree.
-		/// this would be a bit hard to do with `recurse` — the lifetimes are
-		/// a mess, and we want to interrupt search as soon as we find *and*
-		/// cut branches with a non-matching name:
-		impl<X: Debug> #node_ty<X> {
-			pub fn by_name<'a>(&'a self, target: &str)->Option<&'a X> {
-				if target.is_empty() { return Some(&self.content) }
-				if target.as_bytes()[0] != b'_' { return None }
-				let tail = &target[1..];
-				#by_name
-				None
-			}
-			/// Same, with mutable reference.
-			pub fn by_name_mut<'a>(&'a mut self, target: &str)->Option<&'a mut X> {
-				if target.is_empty() { return Some(&mut self.content) }
-				if target.as_bytes()[0] != b'_' { return None }
-				let tail = &target[1..];
-				#by_name_mut
-				None
-			}
-		}
-		impl crate::resources::RecResource for #ident {
-			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
-			const FIELDS_NODE: Self::FieldNode = #node_ty {
-				#fields_node
-				content: (#ext, <Self as crate::sql_rows::SqlRow>::FIELDS9)
-			};
-			type Primary9 = #primary;
-			type StatementNode<'a> = #node_ty<Statement<'a>>;
-			fn insert_subresources9(&self, db: &Connection, node: &mut #node_ty<Statement<'_>>,
-				primary: impl rusqlite::ToSql+Copy)->Result<()> { #insert_sub Ok(()) }
-			fn select_subresources9(&mut self, node: &mut #node_ty<Statement<'_>>,
-				primary: #primary)->Result<()> { #select_sub Ok(()) }
-		}
-// 		impl<T: Debug> Node<T> for #ident {
-// 			type Output = #node_ty<T>
-// 		}
-	};
-// 	println!("{code}");
-	code.into()
+	quote!{ #derive_forest }.into()
 }
 
 // #[proc_macro]
