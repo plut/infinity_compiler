@@ -520,12 +520,12 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 
 /// The structure that does the work of producing the `FooNode` code.
 #[derive(Debug)]
-struct DeriveForest {
+struct DeriveResourceTree {
 	ident: syn::Ident,
 	field: Vec<syn::Ident>,
 	ty: Vec<syn::Type>,
 }
-impl DeriveForest {
+impl DeriveResourceTree {
 	fn new(ident: &syn::Ident)->Self {
 		Self {
 			ident: ident.clone(),
@@ -538,14 +538,14 @@ impl DeriveForest {
 		self.ty.push(ft.clone());
 	}
 }
-impl ToTokens for DeriveForest {
+impl ToTokens for DeriveResourceTree {
 	fn to_tokens(&self, dest: &mut TS) {
 		let Self { ident, field, ty } = self;
 		let forestname = ident.extend("Forest");
 		let subforest = ty.iter().map(|x| x.extend("Forest"))
 			.collect::<Vec<_>>();
 		quote! {
-			/// A `Node` impl. derived by `derive(Forest)`.
+			/// A `Node` impl. derived by `derive(ResourceTree)`.
 			#[derive(Debug)]
 			pub struct #forestname<X: Debug> {
 				#(pub #field: crate::resources::Tree<#subforest::<X>>,)*
@@ -608,7 +608,7 @@ impl ToTokens for DeriveForest {
 }
 
 /// The macro deriving `Resource`.
-#[proc_macro_derive(Forest,attributes(topresource))]
+#[proc_macro_derive(ResourceTree,attributes(topresource))]
 pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let DeriveInput{ ident, data, attrs,.. } = parse_macro_input!(tokens);
 	let fields = Fields::from(data);
@@ -633,7 +633,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			_ => ()
 		}
 	}
-	let mut derive_forest = DeriveForest::new(&ident);
+	let mut derive_forest = DeriveResourceTree::new(&ident);
 	for FieldRef { name, ty, .. } in fields.iter() {
 		// Read attributes for this field
 // 		for (name, mut _args) in attrs.iter().map(parse_attr) {
@@ -692,7 +692,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	};
 // 	println!("{}", code);
 	let code = quote! { #derive_forest
-		/// A `Node` impl. derived by `derive(Forest)`.
+		/// A `Node` impl. derived by `derive(ResourceTree)`.
 		#[derive(Debug)]
 		pub struct #node_ty<T: Debug> { #node_struct content: T }
 		impl<X: Debug> Deref for #node_ty<X> {
@@ -767,7 +767,7 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 	let mut by_name = quote!{};
 	let mut by_name_mut = quote!{};
 	let mut const_def = quote!{};
-	let mut derive_root = DeriveForest::new(&syn::Ident::new("RootNode", Span::call_site()));
+	let mut derive_root = DeriveResourceTree::new(&syn::Ident::new("RootNode", Span::call_site()));
 	TOP.with(|v| {
 		for TopResource { type_name, table_name, ext: _ext, resref: _res }
 				in v.borrow().iter() {
@@ -797,7 +797,7 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 		}
 	});
 	let code = quote!{
-		/// A `Node` impl. derived by `derive(Forest)`.
+		/// A `Node` impl. derived by `derive(ResourceTree)`.
 		#[derive(Debug)] pub struct RootNode<X: Debug> { #data
 			_marker: PhantomData<X>
 		}
