@@ -1504,13 +1504,6 @@ pub struct Tree<T: Forest> {
 	pub content: T::In,
 	pub branches: T,
 }
-impl<T: Forest> Deref for Tree<T> {
-	type Target = T::In;
-	fn deref(&self)->&Self::Target { &self.content }
-}
-impl<T: Forest> DerefMut for Tree<T> {
-	fn deref_mut(&mut self)->&mut Self::Target { &mut self.content }
-}
 impl<X: Debug, T: Forest<In=X>> Tree<T> {
 	pub fn by_name1<'a>(&'a self, s: &str)->Option<&'a X> {
 		if s.is_empty() { return Some(&self.content) }
@@ -2806,14 +2799,12 @@ use arguments::*;
 
 
 fn main() -> Result<()> {
-	use crate::resources::{ALL_SCHEMAS,ResourceTree};
-	println!("{:?}", *ALL_SCHEMAS);
+// 	use crate::resources::{ALL_SCHEMAS,ResourceTree};
+// 	println!("{:?}", *ALL_SCHEMAS);
 // 	ALL_SCHEMAS9.recurse(|x,_n,_state| {
 // 		x.describe(); infallible(nothing2)
 // 	}, "", &())?;
-	if 1 > 0 {
-	return Ok(nothing)
-	}
+// 	if 1 > 0 { return Ok(nothing) }
 	let mut options = RuntimeOptions::parse();
 	if options.database.is_none() {
 		options.database = Some(Path::new("game.sqlite").into());
