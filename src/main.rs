@@ -1569,7 +1569,10 @@ impl<T: RecursiveResource> Iterator for RecursiveRows<'_,T> {
 		}
 	}
 }
-
+struct Node<X,T> {
+	content: X,
+	tree: T,
+}
 /// A helper type for building schemas for all in-game resource.
 struct SchemaBuildState {
 	level: usize,

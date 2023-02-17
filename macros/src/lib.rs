@@ -540,28 +540,28 @@ impl DeriveNode {
 impl ToTokens for DeriveNode {
 	fn to_tokens(&self, dest: &mut TS) {
 		let Self { ident, field, ty } = self;
-		let nodename = ident.extend("Node");
+		let treename = ident.extend("Tree");
 		let subnode = ty.iter().map(|x| x.extend("Node"))
 			.collect::<Vec<_>>();
 		quote! {
 			/// A `Node` impl. derived by `derive(RecursiveResource)`.
 			#[derive(Debug)]
-			pub struct #nodename<X: Debug> {
-				content: X,
+			pub struct #treename<X: Debug> {
 				#(pub #field: #subnode::<X>,)*
+				_marker: PhantomData<X>
 			}
-			impl<X: Debug> Deref for #nodename<X> {
+			impl<X: Debug> Deref for #treename<X> {
 				type Target = X;
 				fn deref(&self)->&X { &self.content }
 			}
-			impl<X: Debug> DerefMut for #nodename<X> {
+			impl<X: Debug> DerefMut for #treename<X> {
 				fn deref_mut(&mut self)->&mut X { &mut self.content }
 			}
 			/// Runtime search in the tree.
 			/// this would be a bit hard to do with `recurse` — the lifetimes are
 			/// a mess, and we want to interrupt search as soon as we find *and*
 			/// cut branches with a non-matching name:
-			impl<X: Debug> #nodename<X> {
+			impl<X: Debug> #treename<X> {
 				pub fn by_name<'a>(&'a self, target: &str)->Option<&'a X> {
 					if target.is_empty() { return Some(&self.content) }
 					if target.as_bytes()[0] != b'_' { return None }
@@ -582,13 +582,13 @@ impl ToTokens for DeriveNode {
 					None
 				}
 			}
-			impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for #nodename<X> {
-				type To = #nodename<Y>;
+			impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for #treename<X> {
+				type To = #treename<Y>;
 				fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 					->Result<Self::To,E>
 				where F: Fn(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
 					let (new_state, content) = f(&self.content, name, state)?;
-					Ok(#nodename {
+					Ok(#treename {
 					#(#field:
 						self.#field.recurse(&f, stringify!(#field), &new_state)?,)*
 					content })
@@ -597,7 +597,7 @@ impl ToTokens for DeriveNode {
 					->Result<Self::To,E>
 				where F: FnMut(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
 					let (new_state, content) = f(&self.content, name, state)?;
-					Ok(#nodename {
+					Ok(#treename {
 						#(#field: self.#field.recurse_mut(&mut f,
 							stringify!(#field), &new_state)?,)*
 					content })
@@ -613,6 +613,11 @@ impl ToTokens for DeriveNode {
 pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let DeriveInput{ ident, data, attrs,.. } = parse_macro_input!(tokens);
 	let fields = Fields::from(data);
+	let mut node_struct = quote!{};
+	let mut recurse = quote!{};
+	let mut recurse_mut = quote!{};
+	let mut by_name = quote!{};
+	let mut by_name_mut = quote!{};
 	let mut fields_node = quote!{};
 	let mut primary = quote!{ i64 };
 	let mut insert_sub = quote!{};
@@ -639,6 +644,14 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 // 		} // for
 		if let Some(eltype) = ty.vec_eltype() {
 			derive_node.push(&name.ident(), eltype);
+			let subnode = eltype.extend("Node");
+			quote!{ pub #name: #subnode::<T>, }.to_tokens(&mut node_struct);
+			quote!{ #name:
+				self.#name.recurse(&f, stringify!(#name), &new_state)?, }
+				.to_tokens(&mut recurse);
+			quote!{ #name:
+				self.#name.recurse_mut(&mut f, stringify!(#name), &new_state)?, }
+				.to_tokens(&mut recurse_mut);
 			quote!{ #name: <#eltype as crate::resources::RecursiveResource>::FIELDS_NODE, }
 				.to_tokens(&mut fields_node);
 			quote!{ for (index, sub) in self.#name.iter().enumerate() {
@@ -647,10 +660,20 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			}.to_tokens(&mut insert_sub);
 			quote!{ self.#name = #eltype::collect_all(&mut node.#name, (primary,))?; }
 				.to_tokens(&mut select_sub);
+			quote!{
+				if let Some(new_target) = tail.strip_prefix(stringify!(#name)) {
+					return self.#name.by_name(new_target)
+				}
+			}.to_tokens(&mut by_name);
+			quote!{
+				if let Some(new_target) = tail.strip_prefix(stringify!(#name)) {
+					return self.#name.by_name_mut(new_target)
+				}
+			}.to_tokens(&mut by_name_mut);
 		}
 	}
 	let node_ty = ident.extend("Node");
-	let code = quote!{ #derive_node
+	let code0 = quote!{ #derive_node
 		impl crate::resources::RecursiveResource for #ident {
 			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
 			const FIELDS_NODE: Self::FieldNode = #node_ty {
@@ -669,6 +692,70 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 // 		}
 	};
 // 	println!("{}", code);
+	let code = quote! {
+		/// A `Node` impl. derived by `derive(RecursiveResource)`.
+		#[derive(Debug)]
+		pub struct #node_ty<T: Debug> { #node_struct content: T }
+		impl<X: Debug> Deref for #node_ty<X> {
+			type Target = X;
+			fn deref(&self)->&X { &self.content }
+		}
+		impl<X: Debug> DerefMut for #node_ty<X> {
+			fn deref_mut(&mut self)->&mut X { &mut self.content }
+		}
+		/// Runtime search in the tree.
+		/// this would be a bit hard to do with `recurse` — the lifetimes are
+		/// a mess, and we want to interrupt search as soon as we find *and*
+		/// cut branches with a non-matching name:
+		impl<X: Debug> #node_ty<X> {
+			pub fn by_name<'a>(&'a self, target: &str)->Option<&'a X> {
+				if target.is_empty() { return Some(&self.content) }
+				if target.as_bytes()[0] != b'_' { return None }
+				let tail = &target[1..];
+				#by_name
+				None
+			}
+			/// Same, with mutable reference.
+			pub fn by_name_mut<'a>(&'a mut self, target: &str)->Option<&'a mut X> {
+				if target.is_empty() { return Some(&mut self.content) }
+				if target.as_bytes()[0] != b'_' { return None }
+				let tail = &target[1..];
+				#by_name_mut
+				None
+			}
+		}
+		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for #node_ty<X> {
+			type To = #node_ty<Y>;
+			fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
+				->Result<Self::To,E>
+			where F: Fn(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
+				let (new_state, content) = f(&self.content, name, state)?;
+				Ok(#node_ty { #recurse content })
+			}
+			fn recurse_mut<'a,'n,S,E,F>(&'a self, mut f: F, name: &'n str, state: &S)
+				->Result<Self::To,E>
+			where F: FnMut(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
+				let (new_state, content) = f(&self.content, name, state)?;
+				Ok(#node_ty { #recurse_mut content })
+			}
+		}
+		impl crate::resources::RecursiveResource for #ident {
+			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
+			const FIELDS_NODE: Self::FieldNode = #node_ty {
+				#fields_node
+				content: (#ext, <Self as crate::sql_rows::SqlRow>::FIELDS)
+			};
+			type Primary = #primary;
+			type StatementNode<'a> = #node_ty<Statement<'a>>;
+			fn insert_subresources(&self, db: &Connection, node: &mut #node_ty<Statement<'_>>,
+				primary: impl rusqlite::ToSql+Copy)->Result<()> { #insert_sub Ok(()) }
+			fn select_subresources(&mut self, node: &mut #node_ty<Statement<'_>>,
+				primary: #primary)->Result<()> { #select_sub Ok(()) }
+		}
+// 		impl<T: Debug> Node<T> for #ident {
+// 			type Output = #node_ty<T>
+// 		}
+	};
 	code.into()
 }
 
