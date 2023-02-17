@@ -297,6 +297,6 @@ top_resources!();
 // trace_macros!(false);
 
 #[derive(Debug,SqlRow,ResourceTree)]
-pub struct Base {
+pub struct Root {
 	items: Vec::<Item>,
 }

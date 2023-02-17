@@ -771,7 +771,7 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 	let mut by_name = quote!{};
 	let mut by_name_mut = quote!{};
 	let mut const_def = quote!{};
-	let mut derive_root = DeriveResourceTree::new(&syn::Ident::new("RootNode", Span::call_site()));
+	let mut derive_root = DeriveResourceTree::new(&syn::Ident::new("RootNode9", Span::call_site()));
 	TOP.with(|v| {
 		for TopResource { type_name, table_name, ext: _ext, resref: _res }
 				in v.borrow().iter() {
@@ -802,17 +802,17 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 	});
 	let code = quote!{
 		/// A `Node` impl. derived by `derive(ResourceTree)`.
-		#[derive(Debug)] pub struct RootNode<X: Debug> { #data
+		#[derive(Debug)] pub struct RootNode9<X: Debug> { #data
 			_marker: PhantomData<X>
 		}
-		impl<X: Debug> Deref for RootNode<X> {
+		impl<X: Debug> Deref for RootNode9<X> {
 			type Target = X;
 			fn deref(&self)->&X { unimplemented!() }
 		}
-		impl<X: Debug> DerefMut for RootNode<X> {
+		impl<X: Debug> DerefMut for RootNode9<X> {
 			fn deref_mut(&mut self)->&mut X { unimplemented!() }
 		}
-		impl<X: Debug> RootNode<X> {
+		impl<X: Debug> RootNode9<X> {
 			/// Runtime search in the tree.
 			/// this would be a bit hard to do with `recurse` — the lifetimes are
 			/// a mess, and we want to interrupt search as soon as we find *and*
@@ -829,21 +829,21 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 			fn by_name_mut1<'a>(&'a mut self, tail: &str)->Option<&'a mut X> {
 				#by_name_mut None }
 		}
-		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for RootNode<X> {
-			type To = RootNode<Y>;
+		impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for RootNode9<X> {
+			type To = RootNode9<Y>;
 			fn recurse<'a,'n,S,E,F>(&'a self, f: F, _: &'n str, init: &S)
 				->Result<Self::To,E>
 			where F: Fn(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
-				Ok(RootNode { #recurse _marker: PhantomData })
+				Ok(RootNode9 { #recurse _marker: PhantomData })
 			}
 			fn recurse_mut<'a,'n,S,E,F>(&'a self, f: F, _: &'n str, init: &S)
 				->Result<Self::To,E>
 			where F: FnMut(&'a Self::Target, &'n str, &S)->Result<(S,Y),E> {
-				Ok(RootNode { #recurse_mut _marker: PhantomData })
+				Ok(RootNode9 { #recurse_mut _marker: PhantomData })
 			}
 		}
-		pub const TOP_FIELDS: RootNode<(&'static str, crate::schemas::Fields)> =
-		RootNode { #const_def _marker: PhantomData };
+		pub const TOP_FIELDS: RootNode9<(&'static str, crate::schemas::Fields)> =
+		RootNode9 { #const_def _marker: PhantomData };
 	};
 // 	println!("{}", code);
 	code.into()

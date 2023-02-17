@@ -1418,7 +1418,7 @@ use rusqlite::{ToSql,types::{FromSql}};
 use crate::sql_rows::{SqlRow,TypedRows};
 use crate::schemas::{Schema,Fields};
 use crate::gamefiles::Restype;
-use crate::restypes::{RootNode,TOP_FIELDS,AllTables,BaseForest};
+use crate::restypes::{RootNode9,TOP_FIELDS,AllTables,RootForest};
 /// Values organized along a tree matching the structure of resources in
 /// the database.
 ///
@@ -1635,6 +1635,21 @@ impl<X: Debug, T: Forest<In=X>> Tree<T> {
 		let (new_state, content) = f(&self.content, name, state)?;
 		Ok(Tree { content, branches: self.branches.recurse_mut(f, name, &new_state)? })
 	}
+	/// Apply a closure to each element of the tree; fallible version.
+	pub fn try_map<'a,E,F,Y>(&'a self, f: F)->Result<Tree<T::To>,E>
+	where X: 'a, Y: Debug, T: TreeRecurse<Y>, F: Fn(&'a X)->Result<Y,E> {
+		self.recurse(|x, _, _| f(x).map(|x| ((),x)), "", &())
+	}
+	/// Apply a closure to each element of the tree; fallible version.
+	pub fn try_map_mut<E,F,Y>(&self, mut f: F)->Result<Tree<T::To>,E>
+	where Y: Debug, T: TreeRecurse<Y>, F: FnMut(&X)->Result<Y,E> {
+		self.recurse_mut(|x, _, _| f(x).map(|x| ((),x)), "", &())
+	}
+	/// Apply a closure to each element of the tree; mut version
+	pub fn map_mut<F,Y>(&self, mut f: F)->Tree<T::To>
+	where Y: Debug, T: TreeRecurse<Y>, F: FnMut(&X)->Y {
+		self.try_map_mut(|x| infallible(f(x))).unwrap()
+	}
 }
 /// Impl of this trait is produced by macro
 pub trait Forest {
@@ -1698,7 +1713,7 @@ impl SchemaBuildState {
 	}
 }
 /// The definition of schemas for all in-game resources.
-pub static ALL_SCHEMAS9: Lazy<RootNode<Schema>> = Lazy::new(|| {
+pub static ALL_SCHEMAS9: Lazy<RootNode9<Schema>> = Lazy::new(|| {
 	// state contains: (level, "table_name", "parent_name", "root")
 	TOP_FIELDS.recurse(|(ext,fields),name,state| {
 		use crate::schemas::{TableType};
@@ -1708,8 +1723,8 @@ pub static ALL_SCHEMAS9: Lazy<RootNode<Schema>> = Lazy::new(|| {
 	}, "", &None).unwrap()
 });
 /// The definition of schemas for all in-game resources.
-pub static ALL_SCHEMAS: Lazy<Tree<BaseForest<Schema>>> = Lazy::new(|| {
-	crate::restypes::Base::FIELDS_TREE.recurse(|row_data,name,state| {
+pub static ALL_SCHEMAS: Lazy<Tree<RootForest<Schema>>> = Lazy::new(|| {
+	crate::restypes::Root::FIELDS_TREE.recurse(|row_data,name,state| {
 		use crate::schemas::{TableType};
 		let new_state = SchemaBuildState::descend(state.as_ref(), row_data.ext, name);
 		let schema = new_state.schema(&row_data.fields);
@@ -1966,7 +1981,7 @@ pub mod database {
 use crate::prelude::*;
 use crate::restypes::*;
 use crate::gamefiles::GameIndex;
-use crate::resources::{TopResource9,ALL_SCHEMAS9,Recurse,ResourceIO};
+use crate::resources::{TopResource9,ALL_SCHEMAS,ALL_SCHEMAS9,Tree,Recurse,ResourceIO};
 use crate::schemas::{Schema};
 
 /// A trivial wrapper on [`rusqlite::Connection`];
@@ -2039,11 +2054,11 @@ create table "resref_dict" ("key" text not null primary key on conflict ignore, 
 create table "strref_dict" ("native" text not null primary key, "strref" integer unique);
 create index "strref_dict_reverse" on "strref_dict" ("strref");
 			"#).context("create strings tables")?;
-			ALL_SCHEMAS9.try_map(|schema| {
+			ALL_SCHEMAS.try_map(|schema| {
 				debug!("  creating tables for resource '{schema}'");
 				schema.create_tables_and_views(|s| db.exec(s))
 			}).context("cannot create main tables and views")?;
-			ALL_SCHEMAS9.create_new_strings(|s| db.exec(s))?;
+			ALL_SCHEMAS.create_new_strings(|s| db.exec(s))?;
 			Ok(())
 		}).context("creating global tables")?;
 		db.create_language_tables(game).context("cannot create language tables")?;
@@ -2210,7 +2225,7 @@ update "new_strings" set "strref"=-1 where "strref" is null"#))
 	/// Deletes from current directory all resources marked as 'orphan' in
 	/// the database. This also clears the list of orphan resources.
 	fn clear_orphan_resources(&self)->Result<()> {
-		ALL_SCHEMAS9.try_map(|schema| {
+		ALL_SCHEMAS.try_map(|schema| {
 			let extension = match schema.table_type {
 				crate::schemas::TableType::Top { extension, .. } => extension,
 				_ => return any_ok(())
@@ -2237,7 +2252,7 @@ update "new_strings" set "strref"=-1 where "strref" is null"#))
 	}
 	/// Cleans the dirty bit from all resources after saving.
 	fn unmark_dirty_resources(&self)->Result<()> {
-		ALL_SCHEMAS9.try_map(|schema| {
+		ALL_SCHEMAS.try_map(|schema| {
 			if matches!(schema.table_type, crate::schemas::TableType::Top { .. }) {
 				self.exec(format!(r#"delete from "dirty_{schema}""#))?;
 				self.exec(format!(r#"delete from "orphan_{schema}""#))?;
@@ -2251,7 +2266,7 @@ impl<T: Deref<Target=Connection>>  DbInterface for T {
 	fn db(&self)->&Connection { self.deref() }
 }
 
-impl RootNode<Schema> {
+impl Tree<RootForest<Schema>> {
 	/// Builds the SQL statement creating the `new_strings` view.
 	///
 	/// This also builds a few triggers which mark resources as dirty
@@ -2335,7 +2350,7 @@ use std::collections::HashMap;
 
 use crate::prelude::*;
 use crate::resources::{ALL_SCHEMAS9,Recurse};
-use crate::restypes::{AllTables,SCHEMAS,RootNode};
+use crate::restypes::{AllTables,SCHEMAS,RootNode9};
 use crate::schemas::{Schema,TableType};
 use crate::sql_rows::{AsParams};
 /// Small simplification for frequent use in callbacks.
@@ -2632,7 +2647,7 @@ impl<'a> Callback<'a> for DeleteRow<'a> {
 /// table is run.
 #[ext]
 */
-impl<'a, T: Callback<'a> + Debug+'a> RootNode<T> {
+impl<'a, T: Callback<'a> + Debug+'a> RootNode9<T> {
 	fn prepare(db: &'a impl DbInterface)->Result<Self> where Self: Sized {
 		ALL_SCHEMAS9.try_map(|s| T::prepare(db, s))
 	}
@@ -2675,7 +2690,7 @@ struct LuaStatements<'a> {
 // 	/// We keep an owned copy of the original table schemas.
 // 	schemas: AllResources<Schema>,
 	/// Prepared statements for `simod.list`.
-	list_keys: RootNode<ListKeys<'a>>,
+	list_keys: RootNode9<ListKeys<'a>>,
 // 	select_row: AllTables<SelectRow<'a>>,
 // 	insert_row: AllTables<InsertRow<'a>>,
 // 	update_row: AllTables<InsertRow<'a>>,
@@ -2685,7 +2700,7 @@ impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface)->Result<Self> {
 		Ok(Self {
 // 			schemas,
-			list_keys: RootNode::<_>::prepare(db)?,
+			list_keys: RootNode9::<_>::prepare(db)?,
 // 			select_row: AllTables::<_>::prepare(db, schemas)?,
 // 			insert_row: AllTables::<_>::prepare(db, schemas)?,
 // 			update_row: AllTables::<_>::prepare(db, schemas)?,
@@ -2915,7 +2930,7 @@ use arguments::*;
 
 fn main() -> Result<()> {
 	use crate::resources::{ALL_SCHEMAS,ALL_SCHEMAS9,Recurse,ResourceTree};
-	use crate::restypes::{Base};
+	use crate::restypes::{Root};
 	println!("{:?}", *ALL_SCHEMAS);
 // 	ALL_SCHEMAS9.recurse(|x,_n,_state| {
 // 		x.describe(); infallible(nothing2)
