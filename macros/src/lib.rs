@@ -526,15 +526,15 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 #[derive(Debug)]
 struct DeriveResourceTree {
 	ident: syn::Ident,
+	primary: TS,
 	field: Vec<syn::Ident>,
 	ty: Vec<syn::Type>,
 }
 impl DeriveResourceTree {
-	fn new(ident: &syn::Ident)->Self {
+	fn new(ident: &syn::Ident, primary: &TS)->Self {
 		Self {
-			ident: ident.clone(),
-			field: Vec::new(),
-			ty: Vec::new(),
+			ident: ident.clone(), primary: primary.clone(),
+			field: Vec::new(), ty: Vec::new(),
 		}
 	}
 	fn push(&mut self, fr: &syn::Ident, ft: &syn::Type) {
@@ -544,7 +544,7 @@ impl DeriveResourceTree {
 }
 impl ToTokens for DeriveResourceTree {
 	fn to_tokens(&self, dest: &mut TS) {
-		let Self { ident, field, ty } = self;
+		let Self { ident, field, ty, primary } = self;
 		let forestname = ident.extend("Forest");
 		let subforest = ty.iter().map(|x| x.extend("Forest"))
 			.collect::<Vec<_>>();
@@ -605,6 +605,15 @@ impl ToTokens for DeriveResourceTree {
 						_marker: PhantomData
 					}
 				};
+				type StatementForest<'a> = #forestname<Statement<'a>>;
+				type Primary = #primary;
+				fn insert_subresources(&self, db: &Connection, branches: &mut #forestname<Statement<'_>>, primary: impl rusqlite::ToSql+Copy)->Result<()> {
+					#(for (i, sub) in self.#field.iter().enumerate() {
+						sub.insert_as_subresource(db, &mut branches.#field, primary, i)?;
+					})*
+					Ok(())
+				}
+// 					#(self.#field = #ty::collect_all(&mut branches.#field, (primary,))?;)*
 			}
 // -- end of quote:
 		}.to_tokens(dest)
@@ -637,7 +646,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			_ => ()
 		}
 	}
-	let mut derive_forest = DeriveResourceTree::new(&ident);
+	let mut derive_forest = DeriveResourceTree::new(&ident, &primary);
 	for FieldRef { name, ty, .. } in fields.iter() {
 		// Read attributes for this field
 // 		for (name, mut _args) in attrs.iter().map(parse_attr) {
@@ -658,10 +667,10 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			quote!{ #name: <#eltype as crate::resources::RecResource>::FIELDS_NODE, }
 				.to_tokens(&mut fields_node);
 			quote!{ for (index, sub) in self.#name.iter().enumerate() {
-					sub.insert_as_subresource(db, &mut node.#name, primary, index)?;
+					sub.insert_as_subresource9(db, &mut node.#name, primary, index)?;
 				}
 			}.to_tokens(&mut insert_sub);
-			quote!{ self.#name = #eltype::collect_all(&mut node.#name, (primary,))?; }
+			quote!{ self.#name = #eltype::collect_all9(&mut node.#name, (primary,))?; }
 				.to_tokens(&mut select_sub);
 			quote!{
 				if let Some(new_target) = tail.strip_prefix(stringify!(#name)) {
@@ -683,9 +692,9 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				#fields_node
 				content: (#ext, <Self as crate::sql_rows::SqlRow>::FIELDS9)
 			};
-			type Primary = #primary;
+			type Primary9 = #primary;
 			type StatementNode<'a> = #node_ty<Statement<'a>>;
-			fn insert_subresources(&self, db: &Connection, node: &mut #node_ty<Statement<'_>>,
+			fn insert_subresources9(&self, db: &Connection, node: &mut #node_ty<Statement<'_>>,
 				primary: impl rusqlite::ToSql+Copy)->Result<()> { #insert_sub Ok(()) }
 			fn select_subresources(&mut self, node: &mut #node_ty<Statement<'_>>,
 				primary: #primary)->Result<()> { #select_sub Ok(()) }
@@ -748,9 +757,9 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				#fields_node
 				content: (#ext, <Self as crate::sql_rows::SqlRow>::FIELDS9)
 			};
-			type Primary = #primary;
+			type Primary9 = #primary;
 			type StatementNode<'a> = #node_ty<Statement<'a>>;
-			fn insert_subresources(&self, db: &Connection, node: &mut #node_ty<Statement<'_>>,
+			fn insert_subresources9(&self, db: &Connection, node: &mut #node_ty<Statement<'_>>,
 				primary: impl rusqlite::ToSql+Copy)->Result<()> { #insert_sub Ok(()) }
 			fn select_subresources(&mut self, node: &mut #node_ty<Statement<'_>>,
 				primary: #primary)->Result<()> { #select_sub Ok(()) }
@@ -771,14 +780,14 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 	let mut by_name = quote!{};
 	let mut by_name_mut = quote!{};
 	let mut const_def = quote!{};
-	let mut derive_root = DeriveResourceTree::new(&syn::Ident::new("RootNode9", Span::call_site()));
+// 	let mut derive_root = DeriveResourceTree::new(&syn::Ident::new("RootNode9", Span::call_site()));
 	TOP.with(|v| {
 		for TopResource { type_name, table_name, ext: _ext, resref: _res }
 				in v.borrow().iter() {
 			let field = syn::Ident::new(table_name, Span::call_site());
 			let ty = syn::Ident::new(type_name, Span::call_site());
-			let ty2 = syn::Ident::new(type_name, Span::call_site()).into_type();
-			derive_root.push(&field, &ty2);
+// 			let ty2 = syn::Ident::new(type_name, Span::call_site()).into_type();
+// 			derive_root.push(&field, &ty2);
 			let subnode = ty.extend("Node");
 			quote!{ pub #field: #subnode<X>, }.to_tokens(&mut data);
 			quote!{ #field: self.#field.recurse(f, stringify!(#field), init)?, }
