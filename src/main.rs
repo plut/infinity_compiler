@@ -1389,6 +1389,15 @@ end"#))?;
 			println!("{i:2} {:<20} {}", f.fname, f.ftype.description());
 		}
 	}
+	/// Returns the SQL statement for saving resources to filesystem.
+	pub fn select_dirty_sql(&self)->String {
+		match self.table_type {
+			TableType::Top { .. } =>
+			format!(r#"select "id", {cols} from "{self}" where "id" in "dirty_{self}""#, cols = self.fields),
+			TableType::Sub { .. } =>
+			format!(r#"select "id", {cols} from "{self}" where "parent"=? order by "position""#, cols = self.fields),
+		}
+	}
 }
 
 } // mod schemas
@@ -1513,18 +1522,51 @@ pub trait RecursiveResource: SqlRow {
 		self.insert_subresources(db, node, primary)?;
 		Ok(())
 	}
-	/// Converts a statement into an iterator returning structured results.
-	fn iter_rows<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(Self::Primary,Self)>> {
-		Ok(s.query(params)?.into())
+	fn select_subresources(&mut self, node: &mut Self::StatementNode<'_>,
+				primary: Self::Primary)->Result<()>;
+	fn collect_all(node: &mut Self::StatementNode<'_>, params: impl rusqlite::Params)->Result<Vec<Self>> {
+		todo!()
+// 		Self::select_all(node, params)?
+// 			.map(|x| x.map(|y| y.1))
+// 			.collect()
 	}
-	/// Collects all rows returned by a statement into a vector.
-	fn collect_rows(node: &mut Self::StatementNode<'_>, params: impl rusqlite::Params)->Result<Vec<Self>> {
-		Self::iter_rows(node.deref_mut(), params)?.map(|x| Ok(x?.1)).collect()
-	}
-// 	/// 
-// 	fn collect_rows9<'a>(s: &'a mut Self::StatementNode<'a>, params: impl rusqlite::Params)->Result<Vec<Self>> {
-// 		unimplemented!()
+// 	/// Converts a statement into an iterator returning structured results:
+// 	/// `(Primary, Self)`.
+// 	fn iter_rows<'a>(s: &'a mut Statement<'_>, params: impl rusqlite::Params)->Result<TypedRows<'a,(Self::Primary,Self)>> {
+// 	de
+// 		Ok(s.query(params)?.into())
 // 	}
+// 	/// Collects all rows returned by a statement into a vector.
+// 	fn collect_rows(node: &mut Self::StatementNode<'_>, params: impl rusqlite::Params)->Result<Vec<Self>> {
+// 		Self::iter_rows(node.deref_mut(), params)?.map(|x| Ok(x?.1)).collect()
+// 	}
+}
+/// An iterator building full recursive resources from a statement tree.
+#[allow(missing_debug_implementations)]
+pub struct RecursiveRows<'stmt, T: RecursiveResource> {
+	rows: TypedRows<'stmt,(T::Primary,T)>,
+	node: &'stmt mut T::StatementNode<'stmt>,
+}
+impl<'a,T: RecursiveResource> RecursiveRows<'a,T> {
+	fn new(node: &'a mut T::StatementNode<'a>, params: impl rusqlite::Params)->Result<Self> {
+		let stmt = node.deref_mut();
+		let rows = stmt.query(params)?;
+		Ok(Self { rows: rows.into(), node })
+	}
+}
+impl<T: RecursiveResource> Iterator for RecursiveRows<'_,T> {
+	type Item = Result<(T::Primary, T)>;
+	fn next(&mut self)->Option<Self::Item> {
+		match self.rows.next() {
+			None => None,
+			Some(Err(e)) => Some(Err(e)),
+			Some(Ok((primary, mut resource))) =>
+				match resource.select_subresources(&mut self.node, primary) {
+					Err(e) => Some(Err(e)),
+					_ => Some(Ok((primary, resource))),
+			}
+		}
+	}
 }
 
 /// A helper type for building schemas for all in-game resource.
@@ -2634,7 +2676,7 @@ use clap::Parser;
 use gamefiles::{GameIndex};
 use toolbox::{Progress};
 use crate::restypes::*;
-use crate::resources::{TopResource9,ALL_SCHEMAS};
+use crate::resources::{TopResource9,ALL_SCHEMAS,Recurse};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
@@ -2647,10 +2689,13 @@ fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
 	gamestrings::save(db, game)?;
 	pb.inc(1);
-	let mut tables = SCHEMAS().map(|schema| db.prepare(format!(
-	r#"select "id", {cols} from "save_{schema}" where "parent"=? sort by "position""#,
-		cols=schema.fields)))?;
-	Item::save_all_dirty(db, &mut tables, "save_items")?;
+	let mut tables = ALL_SCHEMAS.try_map(|schema|
+		db.prepare(schema.select_dirty_sql())
+	)?;
+// 	let mut tables = SCHEMAS().map(|schema| db.prepare(format!(
+// 	r#"select "id", {cols} from "save_{schema}" where "parent"=? sort by "position""#,
+// 		cols=schema.fields)))?;
+// 	Item::save_all_dirty(db, &mut tables, "save_items")?;
 	pb.inc(1);
 	Ok(())
 }

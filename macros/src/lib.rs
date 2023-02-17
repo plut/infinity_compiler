@@ -511,6 +511,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let mut fields_node = quote!{};
 	let mut primary = quote!{ i64 };
 	let mut insert_sub = quote!{};
+	let mut select_sub = quote!{};
 	let mut ext = String::new();
 	for (name, args) in attrs.iter().map(parse_attr) {
 		match name.as_str() {
@@ -545,6 +546,8 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 					sub.insert_as_subresource(db, &mut node.#name, primary, index)?;
 				}
 			}.to_tokens(&mut insert_sub);
+			quote!{ self.#name = #eltype::collect_all(&mut node.#name, (primary,))?; }
+				.to_tokens(&mut select_sub);
 			quote!{
 				if let Some(new_target) = tail.strip_prefix(stringify!(#name)) {
 					return self.#name.by_name(new_target)
@@ -555,8 +558,6 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 					return self.#name.by_name_mut(new_target)
 				}
 			}.to_tokens(&mut by_name_mut);
-// 			quote!{ self.#name = #eltype::collect_rows(&mut node.#name,(primary,))?;}
-// 				.to_tokens(&mut select_sub);
 		}
 	}
 	let node_ty = ident.node_ident();
@@ -615,16 +616,10 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			};
 			type Primary = #primary;
 			type StatementNode<'a> = #node_ty<Statement<'a>>;
-// 			fn select_sub(&mut self, node: &mut #node_ty<Statement<'_>>,
-// 				primary: #primary)->Result<()> {
-// 				#select_sub
-// 				Ok(())
-// 			}
 			fn insert_subresources(&self, db: &Connection, node: &mut #node_ty<Statement<'_>>,
-				primary: impl rusqlite::ToSql+Copy)->Result<()> {
-				#insert_sub
-				Ok(())
-			}
+				primary: impl rusqlite::ToSql+Copy)->Result<()> { #insert_sub Ok(()) }
+			fn select_subresources(&mut self, node: &mut #node_ty<Statement<'_>>,
+				primary: #primary)->Result<()> { #select_sub Ok(()) }
 		}
 // 		impl<T: Debug> Node<T> for #ident {
 // 			type Output = #node_ty<T>
