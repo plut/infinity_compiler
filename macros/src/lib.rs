@@ -613,8 +613,13 @@ impl ToTokens for DeriveResourceTree {
 					})*
 					Ok(())
 				}
-// 					#(self.#field = #ty::collect_all(&mut branches.#field, (primary,))?;)*
-			}
+				fn select_subresources(&mut self,
+					branches: &mut #forestname<Statement<'_>>,
+					primary: #primary)->Result<()> {
+					#(self.#field = #ty::collect_all(&mut branches.#field, (primary,))?;)*
+					Ok(())
+				}
+			} // impl ResourceTree
 // -- end of quote:
 		}.to_tokens(dest)
 	}
@@ -696,7 +701,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			type StatementNode<'a> = #node_ty<Statement<'a>>;
 			fn insert_subresources9(&self, db: &Connection, node: &mut #node_ty<Statement<'_>>,
 				primary: impl rusqlite::ToSql+Copy)->Result<()> { #insert_sub Ok(()) }
-			fn select_subresources(&mut self, node: &mut #node_ty<Statement<'_>>,
+			fn select_subresources9(&mut self, node: &mut #node_ty<Statement<'_>>,
 				primary: #primary)->Result<()> { #select_sub Ok(()) }
 		}
 // 		impl<T: Debug> Node<T> for #ident {
@@ -746,7 +751,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			type StatementNode<'a> = #node_ty<Statement<'a>>;
 			fn insert_subresources9(&self, db: &Connection, node: &mut #node_ty<Statement<'_>>,
 				primary: impl rusqlite::ToSql+Copy)->Result<()> { #insert_sub Ok(()) }
-			fn select_subresources(&mut self, node: &mut #node_ty<Statement<'_>>,
+			fn select_subresources9(&mut self, node: &mut #node_ty<Statement<'_>>,
 				primary: #primary)->Result<()> { #select_sub Ok(()) }
 		}
 // 		impl<T: Debug> Node<T> for #ident {
@@ -757,73 +762,6 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	code.into()
 }
 
-#[proc_macro]
-pub fn top_resources(_: TokenStream)->TokenStream {
-	let mut data = quote!{};
-	let mut recurse = quote!{};
-	let mut recurse_mut = quote!{};
-	let mut by_name = quote!{};
-	let mut by_name_mut = quote!{};
-	let mut const_def = quote!{};
-// 	let mut derive_root = DeriveResourceTree::new(&syn::Ident::new("RootNode9", Span::call_site()));
-	TOP.with(|v| {
-		for TopResource { type_name, table_name, ext: _ext, resref: _res }
-				in v.borrow().iter() {
-			let field = syn::Ident::new(table_name, Span::call_site());
-			let ty = syn::Ident::new(type_name, Span::call_site());
-// 			let ty2 = syn::Ident::new(type_name, Span::call_site()).into_type();
-// 			derive_root.push(&field, &ty2);
-			let subnode = ty.extend("Node");
-			quote!{ pub #field: #subnode<X>, }.to_tokens(&mut data);
-			quote!{ #field: self.#field.recurse(f, stringify!(#field), init)?, }
-				.to_tokens(&mut recurse);
-			quote!{ #field: self.#field.recurse_mut(f, stringify!(#field), init)?, }
-				.to_tokens(&mut recurse_mut);
-			quote!{
-				#field: <#ty as crate::resources::RecResource>::FIELDS_NODE,
-			}.to_tokens(&mut const_def);
-			quote!{
-				if let Some(new_target) = tail.strip_prefix(stringify!(#field)) {
-					return self.#field.by_name(new_target)
-				}
-			}.to_tokens(&mut by_name);
-			quote!{
-				if let Some(new_target) = tail.strip_prefix(stringify!(#field)) {
-					return self.#field.by_name_mut(new_target)
-				}
-			}.to_tokens(&mut by_name_mut);
-		}
-	});
-	let code = quote!{
-		/// A `Node` impl. derived by `derive(ResourceTree)`.
-		#[derive(Debug)] pub struct RootNode9<X: Debug> { #data
-			_marker: PhantomData<X>
-		}
-		impl<X: Debug> Deref for RootNode9<X> {
-			type Target = X;
-			fn deref(&self)->&X { unimplemented!() }
-		}
-		impl<X: Debug> DerefMut for RootNode9<X> {
-			fn deref_mut(&mut self)->&mut X { unimplemented!() }
-		}
-		impl<X: Debug> RootNode9<X> {
-			/// Runtime search in the tree.
-			/// this would be a bit hard to do with `recurse` — the lifetimes are
-			/// a mess, and we want to interrupt search as soon as we find *and*
-			/// cut branches with a non-matching name:
-			pub fn by_name<'a>(&'a self, target: &str)->crate::Result<&'a X> {
-				self.by_name1(target).ok_or(Error::UnknownTable(target.into()).into())
-			}
-			fn by_name1<'a>(&'a self, tail: &str)->Option<&'a X> {
-				#by_name None }
-			/// Same, with mutable reference.
-			pub fn by_name_mut<'a>(&'a mut self, target: &str)->crate::Result<&'a mut X> {
-				self.by_name_mut1(target).ok_or(Error::UnknownTable(target.into()).into())
-			}
-			fn by_name_mut1<'a>(&'a mut self, tail: &str)->Option<&'a mut X> {
-				#by_name_mut None }
-		}
-	};
-// 	println!("{}", code);
-	code.into()
-}
+// #[proc_macro]
+// pub fn top_resources(_: TokenStream)->TokenStream {
+// }

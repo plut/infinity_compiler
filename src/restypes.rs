@@ -9,7 +9,7 @@ use crate::gamefiles::{Restype};
 use crate::sql_rows::{SqlRow};
 use crate::database::{DbInterface};
 use crate::resources::{TopResource9,SubResource,ResourceIO};
-use macros::{ResourceTree,top_resources};
+use macros::{ResourceTree};
 
 /// An effect inside a .itm file (either global or in an ability).
 #[derive(Debug,Pack,SqlRow,ResourceTree)]
@@ -283,7 +283,6 @@ tables! {
 	item_effects: ItemEffect = Sub (items);
 }
 // trace_macros!(true);
-top_resources!();
 // trace_macros!(false);
 
 #[derive(Debug,SqlRow,ResourceTree)]
