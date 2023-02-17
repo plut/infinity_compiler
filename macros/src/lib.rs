@@ -28,6 +28,30 @@ use extend::ext;
 struct TopResource {
 	table_name: String,
 	type_name: String,
+	ext: String,
+	resref: u16,
+}
+impl TopResource {
+	/// Reads a #[topresource(table_name, "itm", 0x03ed)] attribute.
+	fn from(ident: &syn::Ident, mut parser: AttrParser)->Self {
+		let table_name = match parser.get::<syn::Expr>() {
+			Some(AttrArg::Ident(s)) => s,
+			Some(AttrArg::Str(s)) => s,
+			_ => panic!("bad topresource parameter 1, expected ident")
+		};
+		let ext = match parser.get::<syn::Expr>() {
+			Some(AttrArg::Str(s)) => s,
+			_ => panic!("bad topresource parameter 2, expected string")
+		};
+		let resref = match parser.get::<syn::Expr>() {
+			Some(AttrArg::Int(n)) => n as u16,
+			_ => panic!("bad topresource parameter 3, expected integer")
+		};
+		Self {
+			type_name: ident.to_string(),
+			table_name, ext, resref
+		}
+	}
 }
 thread_local! {
 	static TOP: RefCell<Vec<TopResource>> =
@@ -475,7 +499,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	code.into()
 }
 /// The macro deriving `Resource`.
-#[proc_macro_derive(Resource,attributes(top))]
+#[proc_macro_derive(Resource,attributes(topresource))]
 pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let DeriveInput{ ident, data, attrs,.. } = parse_macro_input!(tokens);
 	let fields = Fields::from(data);
@@ -484,14 +508,14 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let mut fields_node = quote!{};
 	let mut primary = quote!{ i64 };
 	let mut insert_sub = quote!{};
-	for (name, mut args) in attrs.iter().map(parse_attr) {
+	let mut ext = String::new();
+	for (name, args) in attrs.iter().map(parse_attr) {
 		match name.as_str() {
-			"top" => if let Some(AttrArg::Ident(s)) = args.get::<syn::Expr>() {
+			"topresource" => {
+				let top = TopResource::from(&ident, args);
+				ext = top.ext.clone();
+				define_top_resource(top);
 				primary = quote!{ crate::gamefiles::Resref };
-				define_top_resource(TopResource {
-					table_name: s.clone(),
-					type_name: ident.to_string(),
-				})
 			},
 			_ => ()
 		}
@@ -541,10 +565,10 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			}
 		}
 		impl crate::resources::Resource for #ident {
-			type FieldNode = #node_ty<crate::schemas::Fields>;
+			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
 			const FIELDS_NODE: Self::FieldNode = #node_ty {
 				#fields_node
-				content: <Self as crate::sql_rows::SqlRow>::FIELDS
+				content: (#ext, <Self as crate::sql_rows::SqlRow>::FIELDS)
 			};
 			type Primary = #primary;
 			type StatementNode<'a> = #node_ty<Statement<'a>>;
@@ -573,15 +597,17 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 	let mut recurse = quote!{};
 	let mut const_def = quote!{};
 	TOP.with(|v| {
-		for TopResource { type_name, table_name } in v.borrow().iter() {
+		for TopResource { type_name, table_name, ext: _ext, resref: _res }
+				in v.borrow().iter() {
 			let field = syn::Ident::new(table_name, Span::call_site());
 			let ty = syn::Ident::new(type_name, Span::call_site());
 			let subnode = ty.node_ident();
 			quote!{ pub #field: #subnode<X>, }.to_tokens(&mut data);
 			quote!{ #field: self.#field.recurse(f, stringify!(#field), init)?, }
 				.to_tokens(&mut recurse);
-			quote!{ #field: <#ty as crate::resources::Resource>::FIELDS_NODE, }
-				.to_tokens(&mut const_def);
+			quote!{
+				#field: <#ty as crate::resources::Resource>::FIELDS_NODE,
+			}.to_tokens(&mut const_def);
 		}
 	});
 	let code = quote!{
@@ -604,9 +630,8 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 				Ok(RootNode { #recurse _marker: PhantomData })
 			}
 		}
-		pub const TOP_FIELDS: RootNode<crate::schemas::Fields> = RootNode {
-			#const_def _marker: PhantomData
-		};
+		pub const TOP_FIELDS: RootNode<(&'static str, crate::schemas::Fields)> =
+		RootNode { #const_def _marker: PhantomData };
 	};
 // 	println!("{}", code);
 	code.into()

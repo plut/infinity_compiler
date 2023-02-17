@@ -1526,7 +1526,7 @@ struct SchemaBuildState {
 	table_type: crate::schemas::TableType,
 }
 impl SchemaBuildState {
-	fn descend(state: Option<&Self>, _fields: &Fields, name: &'static str)->Self {
+	fn descend(state: Option<&Self>, ext: &'static str, name: &'static str)->Self {
 		use crate::schemas::TableType;
 		if let Some(parent) = state {
 			Self {
@@ -1546,7 +1546,7 @@ impl SchemaBuildState {
 				parent_name: name,
 				root: name,
 				table_type: TableType::Top {
-					extension: ""
+					extension: ext,
 				},
 			}
 		}
@@ -1562,9 +1562,9 @@ impl SchemaBuildState {
 /// The definition of schemas for all in-game resources.
 pub static ALL_SCHEMAS: Lazy<RootNode<Schema>> = Lazy::new(|| {
 	// state contains: (level, "table_name", "parent_name", "root")
-	TOP_FIELDS.recurse(|fields,name,state| {
+	TOP_FIELDS.recurse(|(ext,fields),name,state| {
 		use crate::schemas::{TableType};
-		let new_state = SchemaBuildState::descend(state, fields, name);
+		let new_state = SchemaBuildState::descend(state, ext, name);
 		let schema = new_state.schema(fields);
 		infallible((new_state, schema))
 	}, "", None).unwrap()

@@ -79,8 +79,7 @@ pub struct ItemAbility {
 }
 /// A game item, corresponding to a .itm file.
 #[derive(Debug,Pack,SqlRow,Resource)]
-#[top(items)]
-// #[topresource("items", "itm", 0x03ed)]
+#[topresource(items, "itm", 0x03ed)]
 pub struct Item {
 #[header("ITM V1  ")]
 	unidentified_name: Strref,
