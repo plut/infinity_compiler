@@ -1,3 +1,3 @@
 (function() {var implementors = {
-"infinity_compiler":[["impl FromArgMatches for <a class=\"struct\" href=\"infinity_compiler/struct.RuntimeOptions.html\" title=\"struct infinity_compiler::RuntimeOptions\">RuntimeOptions</a>"],["impl FromArgMatches for <a class=\"enum\" href=\"infinity_compiler/enum.Command.html\" title=\"enum infinity_compiler::Command\">Command</a>"]]
+"infinity_compiler":[["impl FromArgMatches for <a class=\"struct\" href=\"infinity_compiler/arguments/struct.RuntimeOptions.html\" title=\"struct infinity_compiler::arguments::RuntimeOptions\">RuntimeOptions</a>"],["impl FromArgMatches for <a class=\"enum\" href=\"infinity_compiler/arguments/enum.Command.html\" title=\"enum infinity_compiler::arguments::Command\">Command</a>"]]
 };if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()

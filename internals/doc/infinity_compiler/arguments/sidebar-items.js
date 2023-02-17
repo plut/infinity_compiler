@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":[["Command","Subcommands passed to the executable."]],"struct":[["RuntimeOptions","The runtime options parser for `clap` crate."]]};
