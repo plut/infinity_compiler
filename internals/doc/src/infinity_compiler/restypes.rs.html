@@ -292,6 +292,50 @@
 <a href="#292" id="292">292</a>
 <a href="#293" id="293">293</a>
 <a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Full definition of all structures representing game resources.
 //!
 //! This crate makes heavy use of the `Pack` and `SqlRow` derive macros to
@@ -302,7 +346,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::gamefiles::{Restype};
 <span class="kw">use </span><span class="kw">crate</span>::sql_rows::{SqlRow};
 <span class="kw">use </span><span class="kw">crate</span>::database::{DbInterface};
-<span class="kw">use </span><span class="kw">crate</span>::resources::{TopResource,SubResource};
+<span class="kw">use </span><span class="kw">crate</span>::resources::{TopResource9,SubResource,ResourceIO};
 <span class="kw">use </span>macros::{Resource,top_resources};
 
 <span class="doccomment">/// An effect inside a .itm file (either global or in an ability).
@@ -329,7 +373,7 @@
 	stacking_id: u32,
 }
 <span class="doccomment">/// An ability inside a .itm file.
-</span><span class="attr">#[derive(Debug,Pack,SqlRow)]
+</span><span class="attr">#[derive(Debug,Pack,SqlRow,Resource)]
 #[allow(missing_copy_implementations)]
 </span><span class="comment">// #[resource(item_abilities)]
 </span><span class="kw">pub struct </span>ItemAbility {
@@ -366,14 +410,14 @@
 	is_arrow: u16,
 	is_bolt: u16,
 	is_bullet: u16,
+	effects: Vec::&lt;ItemEffect&gt;,
 <span class="comment">// 	itemref: NotPacked::&lt;Resref&gt;,
 // 	index: NotPacked::&lt;u16&gt;,
 // 	id: Rowid,
 </span>}
 <span class="doccomment">/// A game item, corresponding to a .itm file.
 </span><span class="attr">#[derive(Debug,Pack,SqlRow,Resource)]
-#[top(items)]
-</span><span class="comment">// #[topresource(&quot;items&quot;, &quot;itm&quot;, 0x03ed)]
+#[topresource(items, <span class="string">&quot;itm&quot;</span>, <span class="number">0x03ed</span>)]
 </span><span class="kw">pub struct </span>Item {
 <span class="attr">#[header(<span class="string">&quot;ITM V1  &quot;</span>)]
 	</span>unidentified_name: Strref,
@@ -412,9 +456,53 @@
 <span class="attr">#[sql(<span class="bool-val">false</span>)] </span>effect_index: u16,
 <span class="attr">#[sql(<span class="bool-val">false</span>)] </span>equip_effect_count: u16,
 	effects: Vec::&lt;ItemEffect&gt;,
+	abilities: Vec::&lt;ItemAbility&gt;,
 }
 
-<span class="kw">impl </span>TopResource <span class="kw">for </span>Item {
+<span class="kw">impl </span>ResourceIO <span class="kw">for </span>Item {
+	<span class="doccomment">/// load an item from cursor
+	</span><span class="kw">fn </span>load(<span class="kw-2">mut </span>io: <span class="kw">impl </span>Read+Seek)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+		<span class="kw">let </span><span class="kw-2">mut </span>item = Item::unpack(<span class="kw-2">&amp;mut </span>io)
+			.context(<span class="string">&quot;unpack Item main struct&quot;</span>)<span class="question-mark">?</span>;
+
+		io.seek(SeekFrom::Start(item.abilities_offset <span class="kw">as </span>u64))<span class="question-mark">?</span>;
+		item.abilities = ItemAbility::vecunpack(<span class="kw-2">&amp;mut </span>io,
+			item.abilities_count <span class="kw">as </span>usize)<span class="question-mark">?</span>;
+
+		io.seek(SeekFrom::Start(item.effect_offset <span class="kw">as </span>u64))<span class="question-mark">?</span>;
+		item.effects = ItemEffect::vecunpack(<span class="kw-2">&amp;mut </span>io,
+			item.equip_effect_count <span class="kw">as </span>usize)<span class="question-mark">?</span>;
+		<span class="kw">for </span>ability <span class="kw">in </span>item.abilities.iter_mut() {
+			ability.effects = ItemEffect::vecunpack(<span class="kw-2">&amp;mut </span>io,
+				ability.effect_count <span class="kw">as </span>usize)<span class="question-mark">?</span>;
+		}
+		<span class="prelude-val">Ok</span>(item)
+	}
+	<span class="kw">fn </span>save(<span class="kw-2">&amp;mut </span><span class="self">self</span>, <span class="kw-2">mut </span>io: <span class="kw">impl </span>Write+Seek+Debug)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
+		<span class="macro">trace!</span>(<span class="string">&quot;saving item with {} abilities and {} effects&quot;</span>,
+			<span class="self">self</span>.abilities.len(), <span class="self">self</span>.effects.len());
+		<span class="self">self</span>.abilities_offset = <span class="number">114</span>;
+		<span class="self">self</span>.abilities_count = <span class="self">self</span>.abilities.len() <span class="kw">as </span>u16;
+		<span class="self">self</span>.effect_offset = <span class="number">114 </span>+ <span class="number">56</span><span class="kw-2">*</span>(<span class="self">self</span>.abilities_count <span class="kw">as </span>u32);
+		<span class="self">self</span>.equip_effect_count = <span class="self">self</span>.effects.len() <span class="kw">as </span>u16;
+
+		<span class="kw">let </span><span class="kw-2">mut </span>current_effect_idx = <span class="self">self</span>.equip_effect_count;
+		<span class="kw">for </span>ab <span class="kw">in </span><span class="self">self</span>.abilities.iter_mut() {
+			ab.effect_count = ab.effects.len() <span class="kw">as </span>u16;
+			ab.effect_index = current_effect_idx;
+			current_effect_idx+= ab.effect_count;
+		}
+
+		<span class="self">self</span>.pack(<span class="kw-2">&amp;mut </span>io)<span class="question-mark">?</span>;
+		<span class="self">self</span>.abilities.pack_all(<span class="kw-2">&amp;mut </span>io)<span class="question-mark">?</span>;
+		<span class="self">self</span>.effects.pack_all(<span class="kw-2">&amp;mut </span>io)<span class="question-mark">?</span>;
+		<span class="kw">for </span>ab <span class="kw">in </span><span class="self">self</span>.abilities.iter() {
+			ab.effects.pack_all(<span class="kw-2">&amp;mut </span>io)<span class="question-mark">?</span>;
+		}
+		<span class="prelude-val">Ok</span>(())
+	}
+}
+<span class="kw">impl </span>TopResource9 <span class="kw">for </span>Item {
 	<span class="kw">const </span>EXTENSION: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str = <span class="string">&quot;itm&quot;</span>;
 	<span class="kw">const </span>RESTYPE: Restype = Restype(<span class="number">0x03ed</span>);
 	<span class="kw">type </span>Subresources = (Vec&lt;(ItemAbility,Vec&lt;ItemEffect&gt;)&gt;, Vec&lt;ItemEffect&gt;);
@@ -460,7 +548,7 @@
 		}
 	<span class="prelude-val">Ok</span>(())
 	}
-	<span class="kw">fn </span>save(<span class="kw-2">&amp;mut </span><span class="self">self</span>, <span class="kw-2">mut </span>file: <span class="kw">impl </span>Write+Seek+Debug, (abilities, effects): <span class="kw-2">&amp;</span><span class="self">Self</span>::Subresources) -&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
+	<span class="kw">fn </span>save9(<span class="kw-2">&amp;mut </span><span class="self">self</span>, <span class="kw-2">mut </span>file: <span class="kw">impl </span>Write+Seek+Debug, (abilities, effects): <span class="kw-2">&amp;</span><span class="self">Self</span>::Subresources) -&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
 		<span class="macro">trace!</span>(<span class="string">&quot;saving item with {} abilities and {} effects&quot;</span>,
 			abilities.len(), effects.len());
 		<span class="self">self</span>.pack(<span class="kw-2">&amp;mut </span>file)<span class="question-mark">?</span>;
@@ -477,12 +565,12 @@
 	<span class="kw">fn </span>select_subresources(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tables: <span class="kw-2">&amp;mut </span>AllTables&lt;Statement&lt;<span class="lifetime">&#39;_</span>&gt;&gt;, itemref: Resref)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::Subresources&gt; {
 		<span class="macro">debug!</span>(<span class="string">&quot;reading item: {}&quot;</span>, itemref);
 		<span class="kw">let </span><span class="kw-2">mut </span>abilities = Vec::&lt;(ItemAbility,Vec&lt;ItemEffect&gt;)&gt;::new();
-		<span class="kw">let </span>item_effects = ItemEffect::collect_rows(<span class="kw-2">&amp;mut </span>tables.item_effects, (itemref,))<span class="question-mark">?</span>;
+		<span class="kw">let </span>item_effects = ItemEffect::collect_rows9(<span class="kw-2">&amp;mut </span>tables.item_effects, (itemref,))<span class="question-mark">?</span>;
 		<span class="self">self</span>.equip_effect_count = item_effects.len() <span class="kw">as </span>u16;
 		<span class="kw">let </span><span class="kw-2">mut </span>current_effect_idx = <span class="self">self</span>.equip_effect_count;
-		<span class="kw">for </span>x <span class="kw">in </span>ItemAbility::iter_rows(<span class="kw-2">&amp;mut </span>tables.item_abilities, (itemref,))<span class="question-mark">? </span>{
+		<span class="kw">for </span>x <span class="kw">in </span>ItemAbility::iter_rows9(<span class="kw-2">&amp;mut </span>tables.item_abilities, (itemref,))<span class="question-mark">? </span>{
 			<span class="kw">let </span>(ab_id, <span class="kw-2">mut </span>ability) = x<span class="question-mark">?</span>;
-			<span class="kw">let </span>ab_effects = ItemEffect::collect_rows(<span class="kw-2">&amp;mut </span>tables.item_ability_effects, (ab_id,))<span class="question-mark">?</span>;
+			<span class="kw">let </span>ab_effects = ItemEffect::collect_rows9(<span class="kw-2">&amp;mut </span>tables.item_ability_effects, (ab_id,))<span class="question-mark">?</span>;
 			ability.effect_count = ab_effects.len() <span class="kw">as </span>u16;
 			ability.effect_index = current_effect_idx;
 			current_effect_idx+= ability.effect_count;
@@ -566,7 +654,7 @@
 	{Sub(<span class="macro-nonterminal">$parent</span>:ident)} =&gt; { <span class="macro">table_type!</span>(Sub(<span class="macro-nonterminal">$parent</span>, <span class="macro-nonterminal">$parent</span>)) };
 	{Sub(<span class="macro-nonterminal">$parent</span>:ident,<span class="macro-nonterminal">$root</span>:ident)} =&gt; {
 		<span class="kw">crate</span>::schemas::TableType::Sub {
-			parent: <span class="macro">stringify!</span>(<span class="macro-nonterminal">$parent</span>),
+			parent: <span class="macro">stringify!</span>(<span class="macro-nonterminal">$parent</span>).to_owned(),
 			root: <span class="macro">stringify!</span>(<span class="macro-nonterminal">$root</span>),
 		}
 	};
