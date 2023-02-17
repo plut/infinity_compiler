@@ -21,8 +21,10 @@ use syn::{Data::Struct, DataStruct};
 use syn::{Expr, ExprLit, ExprPath};
 use syn::{Ident, Type, Field, Fields::Named, Fields::Unnamed};
 use syn::{punctuated::Punctuated, token::Comma};
-use std::cell::RefCell;
 use extend::ext;
+
+use std::cell::RefCell;
+use std::fmt::Display;
 
 #[derive(Debug)]
 struct TopResource {
@@ -75,7 +77,9 @@ impl<T: ToTokens> T {
 }
 #[ext]
 impl syn::Ident {
-	fn node_ident(&self)->Self { Self::new(&format!("{self}Node"), self.span()) }
+	fn extend(&self, suffix: impl Display)->Self {
+		Self::new(&format!("{self}{suffix}"), self.span())
+	}
 	fn into_type(&self)->syn::Type {
 		syn::Type::Path(syn::TypePath {
 			qself: None,
@@ -112,9 +116,9 @@ impl syn::Type {
 		}
 	}
 	/// From `crate::Type` return `TypeNode` identifier.
-	fn node_ident(&self)->Option<syn::Ident> {
+	fn extend(&self, suffix: impl Display)->Option<syn::Ident> {
 		let (name, _) = self.name_and_args()?;
-		Some(name.node_ident())
+		Some(name.extend(suffix))
 	}
 }
 
@@ -536,8 +540,8 @@ impl DeriveNode {
 impl ToTokens for DeriveNode {
 	fn to_tokens(&self, dest: &mut TS) {
 		let Self { ident, field, ty } = self;
-		let nodename = ident.node_ident();
-		let subnode = ty.iter().map(|x| x.node_ident())
+		let nodename = ident.extend("Node");
+		let subnode = ty.iter().map(|x| x.extend("Node"))
 			.collect::<Vec<_>>();
 		quote! {
 			/// A `Node` impl. derived by `derive(RecursiveResource)`.
@@ -645,7 +649,7 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				.to_tokens(&mut select_sub);
 		}
 	}
-	let node_ty = ident.node_ident();
+	let node_ty = ident.extend("Node");
 	let code = quote!{ #derive_node
 		impl crate::resources::RecursiveResource for #ident {
 			type FieldNode = #node_ty<(&'static str, crate::schemas::Fields)>;
@@ -684,7 +688,7 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 			let ty = syn::Ident::new(type_name, Span::call_site());
 			let ty2 = syn::Ident::new(type_name, Span::call_site()).into_type();
 			derive_root.push(&field, &ty2);
-			let subnode = ty.node_ident();
+			let subnode = ty.extend("Node");
 			quote!{ pub #field: #subnode<X>, }.to_tokens(&mut data);
 			quote!{ #field: self.#field.recurse(f, stringify!(#field), init)?, }
 				.to_tokens(&mut recurse);
