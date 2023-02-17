@@ -1,11 +1,11 @@
 //! Compiler between IE game files and a SQLite database.
 #![allow(
 	unused_attributes,
-	unused_imports,
-	dead_code,
-	unreachable_code,
-	unused_macros,
-	unused_variables,
+// 	unused_imports,
+// 	dead_code,
+// 	unreachable_code,
+// 	unused_macros,
+// 	unused_variables,
 // 	unused_must_use,
 // 	unused_mut,
 )]
@@ -1181,6 +1181,13 @@ impl Schema {
 	pub fn is_subresource(&self)->bool {
 		matches!(self.table_type, TableType::Sub { .. })
 	}
+	/// Displays a full description of the schema on stdout.
+	pub fn describe(&self) {
+		println!("name={self}\nheader = {:?}", self.table_type);
+		for (i, f) in self.fields.iter().enumerate() {
+			println!("{i:2} {:<20} {}", f.fname, f.ftype.description());
+		}
+	}
 	/// Creates a table with this schema and an arbitrary name.
 	pub fn create_table(&self, name: impl Display, more: impl Display)->String {
 		let mut sql = format!("create table \"{name}\" (");
@@ -1391,13 +1398,6 @@ end"#))?;
 			uwriteln!(w, ";");
 		}
 	}
-	/// Displays a full description of the schema on stdout.
-	pub fn describe(&self) {
-		println!("name={self}\nheader = {:?}", self.table_type);
-		for (i, f) in self.fields.iter().enumerate() {
-			println!("{i:2} {:<20} {}", f.fname, f.ftype.description());
-		}
-	}
 	/// Returns the SQL statement for saving resources to filesystem.
 	pub fn select_dirty_sql(&self)->String {
 		match self.table_type {
@@ -1467,7 +1467,7 @@ pub trait ResourceTree: SqlRow {
 		self.insert_subresources(db, &mut tree.branches, primary)?;
 		Ok(())
 	}
-	fn collect_all(node: &mut Tree<Self::StatementForest<'_>>, params: impl rusqlite::Params)->Result<Vec<Self>> {
+	fn collect_all(tree: &mut Tree<Self::StatementForest<'_>>, params: impl rusqlite::Params)->Result<Vec<Self>> {
 		todo!()
 	}
 }
@@ -1833,7 +1833,7 @@ pub mod database {
 use crate::prelude::*;
 use crate::restypes::*;
 use crate::gamefiles::GameIndex;
-use crate::resources::{ALL_SCHEMAS,Tree,ResourceIO,Recurse};
+use crate::resources::{ALL_SCHEMAS,ResourceIO,Recurse};
 use crate::schemas::{Schema};
 
 /// A trivial wrapper on [`rusqlite::Connection`];
@@ -2609,10 +2609,10 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 			mlua_ok(())
 		})?)?;
 		statements.list_keys.install_callback(scope, &simod, "list")?;
-// 		statements.select_row.install_callback(scope, &simod, "select")?;
-// 		statements.insert_row.install_callback(scope, &simod, "insert")?;
-// 		statements.update_row.install_callback(scope, &simod, "update")?;
-// 		statements.delete_row.install_callback(scope, &simod, "delete")?;
+		statements.select_row.install_callback(scope, &simod, "select")?;
+		statements.insert_row.install_callback(scope, &simod, "insert")?;
+		statements.update_row.install_callback(scope, &simod, "update")?;
+		statements.delete_row.install_callback(scope, &simod, "delete")?;
 		lua.globals().set("simod", simod)?;
 
 		info!("loading file {lua_file:?}");
@@ -2630,7 +2630,6 @@ use clap::Parser;
 
 use gamefiles::{GameIndex};
 use toolbox::{Progress};
-use crate::restypes::*;
 use crate::resources::{ALL_SCHEMAS,ByName,Recurse};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }

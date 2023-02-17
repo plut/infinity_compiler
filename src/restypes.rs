@@ -6,8 +6,6 @@
 use crate::prelude::*;
 use crate::pack::{Pack,PackAll};
 use crate::gamefiles::{Restype};
-use crate::sql_rows::{SqlRow};
-use crate::database::{DbInterface};
 use crate::resources::{ResourceIO};
 use macros::{ResourceTree};
 
@@ -192,18 +190,6 @@ macro_rules! tables {
 			}
 		}
 	}
-}
-macro_rules! table_type {
-	{Top($ext:literal, $rt:literal)} => {
-		crate::schemas::TableType::Top { extension: $ext, }
-	};
-	{Sub($parent:ident)} => { table_type!(Sub($parent, $parent)) };
-	{Sub($parent:ident,$root:ident)} => {
-		crate::schemas::TableType::Sub {
-			parent: stringify!($parent).to_owned(),
-			root: stringify!($root),
-		}
-	};
 }
 macro_rules! table_restype {
 	{$e:ident, Sub($($arg:tt)*)} => { };
