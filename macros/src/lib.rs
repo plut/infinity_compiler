@@ -70,12 +70,18 @@ fn define_top_resource(rdef: TopResource) {
 // }
 
 #[ext]
-impl<T: quote::ToTokens> T {
+impl<T: ToTokens> T {
 	fn toks_string(&self)->String { self.to_token_stream().to_string() }
 }
 #[ext]
 impl syn::Ident {
 	fn node_ident(&self)->Self { Self::new(&format!("{self}Node"), self.span()) }
+	fn into_type(&self)->syn::Type {
+		syn::Type::Path(syn::TypePath {
+			qself: None,
+			path: syn::Path::from(self.clone())
+		})
+	}
 }
 
 #[ext]
@@ -125,7 +131,7 @@ impl<'a> FieldNameRef<'a> {
 		}
 	}
 }
-impl quote::ToTokens for FieldNameRef<'_> {
+impl ToTokens for FieldNameRef<'_> {
 	fn to_tokens(&self, tokens: &mut TS) {
 		match self {
 			Self::Named(ident) => ident.to_tokens(tokens),
@@ -507,28 +513,30 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	code.into()
 }
 
+/// The structure that does the work of producing the `FooNode` code.
 #[derive(Debug)]
 struct DeriveNode {
-	nodename: syn::Ident,
+	ident: syn::Ident,
 	field: Vec<syn::Ident>,
 	ty: Vec<syn::Type>,
 }
 impl DeriveNode {
 	fn new(ident: &syn::Ident)->Self {
 		Self {
-			nodename: ident.node_ident(),
+			ident: ident.clone(),
 			field: Vec::new(),
 			ty: Vec::new(),
 		}
 	}
-	fn push(&mut self, fr: &FieldNameRef, ft: &syn::Type) {
-		self.field.push(fr.ident().clone());
+	fn push(&mut self, fr: &syn::Ident, ft: &syn::Type) {
+		self.field.push(fr.clone());
 		self.ty.push(ft.clone());
 	}
 }
 impl ToTokens for DeriveNode {
 	fn to_tokens(&self, dest: &mut TS) {
-		let Self { nodename, field, ty } = self;
+		let Self { ident, field, ty } = self;
+		let nodename = ident.node_ident();
 		let subnode = ty.iter().map(|x| x.node_ident())
 			.collect::<Vec<_>>();
 		quote! {
@@ -620,13 +628,13 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let mut derive_node = DeriveNode::new(&ident);
 	for FieldRef { name, attrs, ty, .. } in fields.iter() {
 		// Read attributes for this field
-		for (name, mut _args) in attrs.iter().map(parse_attr) {
-			match name.as_str() {
-				_ => ()
-			} // match
-		} // for
+// 		for (name, mut _args) in attrs.iter().map(parse_attr) {
+// 			match name.as_str() {
+// 				_ => ()
+// 			} // match
+// 		} // for
 		if let Some(eltype) = ty.vec_eltype() {
-			derive_node.push(&name, &eltype);
+			derive_node.push(&name.ident(), eltype);
 			quote!{ #name: <#eltype as crate::resources::RecursiveResource>::FIELDS_NODE, }
 				.to_tokens(&mut fields_node);
 			quote!{ for (index, sub) in self.#name.iter().enumerate() {
@@ -668,11 +676,14 @@ pub fn top_resources(_: TokenStream)->TokenStream {
 	let mut by_name = quote!{};
 	let mut by_name_mut = quote!{};
 	let mut const_def = quote!{};
+	let mut derive_root = DeriveNode::new(&syn::Ident::new("RootNode", Span::call_site()));
 	TOP.with(|v| {
 		for TopResource { type_name, table_name, ext: _ext, resref: _res }
 				in v.borrow().iter() {
 			let field = syn::Ident::new(table_name, Span::call_site());
 			let ty = syn::Ident::new(type_name, Span::call_site());
+			let ty2 = syn::Ident::new(type_name, Span::call_site()).into_type();
+			derive_root.push(&field, &ty2);
 			let subnode = ty.node_ident();
 			quote!{ pub #field: #subnode<X>, }.to_tokens(&mut data);
 			quote!{ #field: self.#field.recurse(f, stringify!(#field), init)?, }
