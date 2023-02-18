@@ -1469,46 +1469,32 @@ pub trait ResourceTree: SqlRow {
 		self.insert_subresources(db, &mut tree.branches, primary)?;
 		Ok(())
 	}
-	fn read_rows<'a>(tree: &'a mut Tree<Self::StatementForest<'a>>, params: impl rusqlite::Params)
-// 	->Result<&'a mut Self::StatementForest<'a>>
-// 	->Result<TypedRows<'a,(Self::Primary,Self)>>
-	->Result<RecursiveRows<'a,Self>>
+	fn read_rows<'a:'r,'b:'r,'r>(tree: &'a mut Tree<Self::StatementForest<'b>>, params: impl rusqlite::Params)->Result<RecursiveRows<'r,'a,'b,Self>>
 	{
 		let rows = tree.content.query(params)?;
-// 		Ok(rows.into())
 		Ok(RecursiveRows{ rows: rows.into(), branches: &mut tree.branches })
 	}
 	fn collect_all(tree: &mut Tree<Self::StatementForest<'_>>, params: impl rusqlite::Params)->Result<Vec<Self>> {
-		use crate::sql_rows::FromSqlRow;
-		let mut rows = tree.content.query(params)?;
-		let mut v = Vec::<Self>::new();
-		while let Some(row) = rows.next()? {
-			let (_primary, resource) = <(Self::Primary, Self)>::from_row(row)?;
-			v.push(resource);
-		}
-		Ok(v)
-// 		let mut itr = Self::read_rows(tree, params)?;
-// 		let mut v = Vec::<Self>::new();
-// 		while let Some(resource) = itr.next() {
-// 			todo!()
-// 			v.push(resource)
-// 		}
-// 		Ok(v)
+		Self::read_rows(tree, params)?.collect()
 	}
 }
 /// An iterator building full recursive resources from a statement tree.
+///
+/// TODO: clean the lifetime mess here.
 #[allow(missing_debug_implementations)]
-pub struct RecursiveRows<'a, T: ResourceTree> {
+pub struct RecursiveRows<'a,'b:'a,'c:'a, T: ResourceTree> {
 	rows: TypedRows<'a,(T::Primary, T)>,
-	branches: &'a mut T::StatementForest<'a>,
+	branches: &'b mut T::StatementForest<'c>,
 }
-impl<T: ResourceTree> Iterator for RecursiveRows<'_,T> {
+impl<T: ResourceTree> Iterator for RecursiveRows<'_,'_,'_,T> {
 	type Item = Result<T>; // or could be (T::Primary, T) instead?
 	fn next(&mut self)->Option<Result<T>> {
 		match self.rows.next() {
 			Some(Ok((primary, mut resource))) => {
-				resource.select_subresources(self.branches, primary);
-				Some(Ok(resource))
+				match resource.select_subresources(self.branches, primary) {
+					Ok(_) => Some(Ok(resource)),
+					Err(e) => Some(Err(e)),
+				}
 			},
 			// We need to split those cases, otherwise the compiler does not
 			// like that we changed tye type of the `Some(Ok(_))` variant:
@@ -1674,7 +1660,7 @@ pub trait ResourceIO: ResourceTree {
 	/// Saves a resource to filesystem.
 	fn save(&mut self, io: impl Write+Seek+Debug)->Result<()>;
 	// Provided methods
-	fn save_all_dirty(db: &impl DbInterface, tables: &mut RootForest<Statement<'_>>) {
+	fn save_all_dirty(tables: &mut Tree<Self::StatementForest<'_>>)->Result<()> {
 		todo!()
 	}
 }
@@ -2661,6 +2647,8 @@ fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 /// a chdir to the appropriate override directory needs to have been done
 /// first.
 fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
+	use crate::restypes::*;
+	use crate::resources::ResourceIO;
 	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
 	gamestrings::save(db, game)?;
 	pb.inc(1);
@@ -2671,6 +2659,7 @@ fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 // 	r#"select "id", {cols} from "save_{schema}" where "parent"=? sort by "position""#,
 // 		cols=schema.fields)))?;
 // 	Item::save_all_dirty(db, &mut tables, "save_items")?;
+	Item::save_all_dirty(&mut tables.items)?;
 	pb.inc(1);
 	Ok(())
 }
