@@ -1660,8 +1660,17 @@ pub trait ResourceIO: ResourceTree {
 	/// Saves a resource to filesystem.
 	fn save(&mut self, io: impl Write+Seek+Debug)->Result<()>;
 	// Provided methods
-	fn save_all_dirty(tables: &mut Tree<Self::StatementForest<'_>>)->Result<()> {
-		todo!()
+	fn save_all_dirty(tree: &mut Tree<Self::StatementForest<'_>>)->Result<usize> {
+		let mut n_saved = 0;
+		for (resref, mut resource) in Self::read_rows(tree, ())?.flatten() {
+			let filename = format!("{resref}.{ext}", ext=Self::EXTENSION);
+			println!("saving to {filename:?}");
+			let mut file = File::create(&filename)
+				.with_context(|| format!("open for writing: {filename:?}"))?;
+			resource.save(&mut file)?;
+			n_saved+= 1;
+		}
+		Ok(n_saved)
 	}
 }
 impl<T: ResourceTree<Primary=Resref>+ResourceIO> crate::database::LoadResource for T {
