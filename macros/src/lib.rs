@@ -613,8 +613,8 @@ impl ToTokens for DeriveResourceTree {
 					})*
 					Ok(())
 				}
-				fn select_subresources(&mut self,
-					branches: &mut #forestname<Statement<'_>>,
+				fn select_subresources<'a,'b:'c,'c>(&'a mut self,
+					branches: &'b mut #forestname<Statement<'c>>,
 					primary: #primary)->Result<()> {
 					#(self.#field = #ty::collect_all(&mut branches.#field, (primary,))?;)*
 					Ok(())
@@ -655,7 +655,10 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 			derive_forest.push(name.ident(), eltype);
 		}
 	}
-	quote!{ #derive_forest }.into()
+	let code = quote!{ #derive_forest };
+// 	quote!{}.into()
+// 	println!("{code}");
+	code.into()
 }
 
 // #[proc_macro]
