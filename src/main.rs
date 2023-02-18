@@ -1475,7 +1475,7 @@ pub trait ResourceTree: SqlRow {
 		Ok(RecursiveRows{ rows: rows.into(), branches: &mut tree.branches })
 	}
 	fn collect_all(tree: &mut Tree<Self::StatementForest<'_>>, params: impl rusqlite::Params)->Result<Vec<Self>> {
-		Self::read_rows(tree, params)?.collect()
+		Self::read_rows(tree, params)?.map(|x| Ok(x?.1)).collect()
 	}
 }
 /// An iterator building full recursive resources from a statement tree.
@@ -1487,12 +1487,12 @@ pub struct RecursiveRows<'a,'b:'a,'c:'a, T: ResourceTree> {
 	branches: &'b mut T::StatementForest<'c>,
 }
 impl<T: ResourceTree> Iterator for RecursiveRows<'_,'_,'_,T> {
-	type Item = Result<T>; // or could be (T::Primary, T) instead?
-	fn next(&mut self)->Option<Result<T>> {
+	type Item = Result<(T::Primary,T)>; // or could be (T::Primary, T) instead?
+	fn next(&mut self)->Option<Self::Item> {
 		match self.rows.next() {
 			Some(Ok((primary, mut resource))) => {
 				match resource.select_subresources(self.branches, primary) {
-					Ok(_) => Some(Ok(resource)),
+					Ok(_) => Some(Ok((primary,resource))),
 					Err(e) => Some(Err(e)),
 				}
 			},
