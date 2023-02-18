@@ -613,7 +613,7 @@ impl ToTokens for DeriveResourceTree {
 					})*
 					Ok(())
 				}
-				fn select_subresources<'a,'b:'c,'c>(&'a mut self,
+				fn select_subresources<'a,'b,'c>(&'a mut self,
 					branches: &'b mut #forestname<Statement<'c>>,
 					primary: #primary)->Result<()> {
 					#(self.#field = #ty::collect_all(&mut branches.#field, (primary,))?;)*
