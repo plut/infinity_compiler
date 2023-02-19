@@ -46,17 +46,17 @@ test:
 
 x:
 	cargo build
-	-echo "delete from add_items" | sqlite3 game.sqlite
-	-echo "delete from add_items_abilities" | sqlite3 game.sqlite
-	-echo "delete from add_items_effects" | sqlite3 game.sqlite
-	-echo "delete from edit_items" | sqlite3 game.sqlite
-	-echo "delete from edit_items_abilities" | sqlite3 game.sqlite
-	-echo "delete from edit_items_effects" | sqlite3 game.sqlite
+	@-echo "delete from add_items" | sqlite3 game.sqlite
+	@-echo "delete from add_items_abilities" | sqlite3 game.sqlite
+	@-echo "delete from add_items_effects" | sqlite3 game.sqlite
+	@-echo "delete from edit_items" | sqlite3 game.sqlite
+	@-echo "delete from edit_items_abilities" | sqlite3 game.sqlite
+	@-echo "delete from edit_items_effects" | sqlite3 game.sqlite
 #  	$(RUN) -O init.log init -B
 	$(RUN) -O add.log add t
-	-echo "select * from add_items" | sqlite3 game.sqlite
-	-echo "select parent,id from items_abilities where parent in (select id from add_items)" |sqlite3 game.sqlite
-	-echo "select parent,root,id,opcode from items_effects where root in (select id from add_items)" |sqlite3 game.sqlite
+	@-echo "select * from add_items" | sqlite3 game.sqlite
+	@-echo "select parent,id from items_abilities where parent in (select id from add_items)" |sqlite3 game.sqlite
+	@-echo "select parent,root,id,opcode from items_effects where root in (select id from add_items)" |sqlite3 game.sqlite
 
 restore:
 	$(RUN) restore

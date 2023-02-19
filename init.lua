@@ -24,15 +24,15 @@ local function strdump(o)
       if k == i then
         i = i+1
       elseif type(k) == 'string' then
-        s = s..'[32m'..k..'[m='
+        s = s..'[38;5;65m'..k..'[m='
       else
-        s = s..'[[32m'..k..'[m]='
+        s = s..'[[38;5;65m'..k..'[m]='
       end
       s = s.. strdump(v)..', '
     end
     return s .. '} '
   elseif type(o) == 'string' then
-    return '[34m"'..o..'"[m'
+    return '[38;5;25m"'..o..'"[m'
   else
     return tostring(o)
   end
@@ -205,260 +205,315 @@ end
 --««1 Methods for resources
 -- Resource objects have the following form:
 -- { _table = "items", _key = "sw1h34" }
-local function child_context(tbl, fields, context)
-	-- given a table name, values and local context,
-	-- produce context for children (by adding the primary)
-	if debug then
-		print(magenta("building child context"))
-		print("tbl is", tbl)
-		print("context is ", strdump(context))
-		print("primary is", table_schema(tbl).primary)
-	end
-	local pk = table_schema(tbl).primary
-	local ctx = { [pk] = fields[pk] }
-	for k, v in pairs(context) do
-		ctx[k] = v
-	end
-	return ctx
-end
--- we need a forward declaration so that `resource_getindex` can find it:
-local function resource_delete(self)
-	local mt = getmetatable(self)
-	local sch = table_schema(mt.table)
-	print("deleting resource with id [31m"..self._fields[sch.primary].."[m")
-	simod.delete(mt.table, self._fields[sch.primary])
-end
-local function resource_getindex(self, fieldname)
-	-- Implements `$resource.$field`.
-	--
-	-- This returns either the raw field,
-	-- or (when the field designates a subresource)
-	-- a contextualized resvec.
-	--
-	-- first the methods (TODO: implement a proper method table)
-	if fieldname == "delete" then return resource_delete end
-	local mt = getmetatable(self)
-	local sch = table_schema(mt.table)
-	print("called getindex("..green(fieldname)..") for resource with name "..blue(mt.table))
-	-- `ft` is the field type (if it exists) for the field we are asking
-	local ft = sch.fields[fieldname]
-	if type(ft) == "table" then
-		-- this field designates a subresource;
-		-- we build the resvec, with the appropriate metatable
-		-- TODO: maybe _parent = self would be even better?
-		local resvec = {
-			_entries = self._fields[fieldname],
-			_context = child_context(mt.table, self._fields, self._context)
-		}
-		return setmetatable(resvec, mt[fieldname])
-	elseif ft ~= nil then
-		-- this field designates an ordinary property;
-		-- we simply return the value for this property:
-		return self._fields[fieldname]
-	end
-end
-local function resource_setindex(self, fieldname, value)
-	-- TODO: if the field points to a subresource, we should definitely do
-	-- something with the database
-	local mt = getmetatable(self)
-	local tbl = mt.table
-	local sch = table_schema(tbl)
-	local ft = schema_fieldtype(tbl, sch, fieldname)
-	self._fields[fieldname] = value
-	simod.update(mt.table, self._fields[sch.primary], fieldname, value)
-end
-local function insert_rec(tbl, fields, context)
-	-- takes as input a resource with its metatable and context and saves
-	-- it to the database (recursively if needed) by calling `simod.insert`.
-	local sch = table_schema(tbl)
-	-- insert main fields (ignoring sub-resources for now)
-	-- NOTE: this should set any `auto` context value:
-	-- as a precaution we kill any automatic primary key
-	local pk = sch.primary
-	if sch.fields[pk] == "auto" then fields[pk] = nil end
-	simod.insert(tbl, fields, context)
-	-- in principe now the primary key is set; set context for sub-resources:
-	local subctx = child_context(tbl, fields, context)
+-- They all share the same metatable (for now)
 
-	-- recursively insert all sub-resources
-	for fn, ft in pairs(sch.fields) do if type(ft) == "table" then
-		print("recursively save subresource: ", fn, strdump(subctx))
-		for _, v in ipairs(fields[fn] or {}) do
-			insert_rec(ft[1], v, subctx)
-		end
-	end end
+local function todo() error("todo!") end
+-- the metatable of `resource_mt`.
+local root_mt = {}
+
+local resource_mt = { _table = "" }
+setmetatable(resource_mt, root_mt)
+function resource_mt:__index(field)
+-- 	print(green("indexing a value with _table = ", self._table, ":", field))
+	local sch = table_schema(self._table)
+	local ty = sch[field]
+	if ty == nil then
+		error('field "'..field..'" not found in table "'..self._table..'"')
+	end
+	if ty == "subresource" then
+		todo()
+	end
+	return simod.get(self._table, field, self._key)
 end
-local function normalize_changes(changes, mt)
-	-- when passed a table of changes from a resource template,
-	-- together with the metatable for this resource type,
-	-- normalizes the changes (modifying the input table).
-	local tbl = mt.table
-	local primary = simod.schema[tbl].primary
-	local dk = default_key[tbl]
-	
-	if dk ~= nil then
-		if type(changes) == "string" then -- sword("carsomyr")
-			changes = { [dk] = changes }
-		elseif changes[dk] == nil and changes[1] ~= nil then
-			-- sword { "carsomyr", enchantment = 5 }
-			changes[dk] = changes[1]
-			changes[1] = nil
+function resource_mt:__call(key)
+	-- Creates a resource from a database row.
+	-- this gets invoked as: resourcetype("row")
+	--  => getmetatable(resourcetype).__call(resourcetype, "row")
+	--  => resource_mt.__call(resourcetype, "row")
+	-- so this must be `resource_mt.__call`
+	print(green("initializing a value from "..strdump(key)))
+	local new = { _table = self._table, _key = key }
+	return setmetatable(new, self)
+end
+function resource_mt:clone_resource(args)
+	-- Clones a resource, modifying values passed as arguments.
+	print(yellow("cloning a resource: ", strdump(self)))
+	print("  with modifiers: ", strdump(args))
+	local values = simod.select(self._table, self._key)
+	dump(values)
+	for k,v in pairs(args) do
+		if values[k] == nil then
+			error('field "'..k..'" is absent in target')
 		end
-		-- if primary key is not defined, then build a new one from
-		-- the default field (e.g. item name or something)
-		if changes[primary] == nil then
-			changes[primary] = changes[dk]
+		values[k] = v
+	end
+end
+function resource_mt:create_resource_type(init)
+	local new = type(init) == "table" and init or {}
+	new.__index = self.__index
+	new.__call = self.clone_resource
+	return setmetatable(new, self)
+end
+
+local item = resource_mt:create_resource_type{ _table = "items" }
+
+
+
+-- ««1 old code
+-- local function child_context(tbl, fields, context)
+-- 	-- given a table name, values and local context,
+-- 	-- produce context for children (by adding the primary)
+-- 	if debug then
+-- 		print(magenta("building child context"))
+-- 		print("tbl is", tbl)
+-- 		print("context is ", strdump(context))
+-- 		print("primary is", table_schema(tbl).primary)
+-- 	end
+-- 	local pk = table_schema(tbl).primary
+-- 	local ctx = { [pk] = fields[pk] }
+-- 	for k, v in pairs(context) do
+-- 		ctx[k] = v
+-- 	end
+-- 	return ctx
+-- end
+-- -- we need a forward declaration so that `resource_getindex` can find it:
+-- local function resource_delete(self)
+-- 	local mt = getmetatable(self)
+-- 	local sch = table_schema(mt.table)
+-- 	print("deleting resource with id [31m"..self._fields[sch.primary].."[m")
+-- 	simod.delete(mt.table, self._fields[sch.primary])
+-- end
+-- local function resource_getindex(self, fieldname)
+-- 	-- Implements `$resource.$field`.
+-- 	--
+-- 	-- This returns either the raw field,
+-- 	-- or (when the field designates a subresource)
+-- 	-- a contextualized resvec.
+-- 	--
+-- 	-- first the methods (TODO: implement a proper method table)
+-- 	if fieldname == "delete" then return resource_delete end
+-- 	local mt = getmetatable(self)
+-- 	local sch = table_schema(mt.table)
+-- 	print("called getindex("..green(fieldname)..") for resource with name "..blue(mt.table))
+-- 	-- `ft` is the field type (if it exists) for the field we are asking
+-- 	local ft = sch.fields[fieldname]
+-- 	if type(ft) == "table" then
+-- 		-- this field designates a subresource;
+-- 		-- we build the resvec, with the appropriate metatable
+-- 		-- TODO: maybe _parent = self would be even better?
+-- 		local resvec = {
+-- 			_entries = self._fields[fieldname],
+-- 			_context = child_context(mt.table, self._fields, self._context)
+-- 		}
+-- 		return setmetatable(resvec, mt[fieldname])
+-- 	elseif ft ~= nil then
+-- 		-- this field designates an ordinary property;
+-- 		-- we simply return the value for this property:
+-- 		return self._fields[fieldname]
+-- 	end
+-- end
+-- local function resource_setindex(self, fieldname, value)
+-- 	-- TODO: if the field points to a subresource, we should definitely do
+-- 	-- something with the database
+-- 	local mt = getmetatable(self)
+-- 	local tbl = mt.table
+-- 	local sch = table_schema(tbl)
+-- 	local ft = schema_fieldtype(tbl, sch, fieldname)
+-- 	self._fields[fieldname] = value
+-- 	simod.update(mt.table, self._fields[sch.primary], fieldname, value)
+-- end
+-- local function insert_rec(tbl, fields, context)
+-- 	-- takes as input a resource with its metatable and context and saves
+-- 	-- it to the database (recursively if needed) by calling `simod.insert`.
+-- 	local sch = table_schema(tbl)
+-- 	-- insert main fields (ignoring sub-resources for now)
+-- 	-- NOTE: this should set any `auto` context value:
+-- 	-- as a precaution we kill any automatic primary key
+-- 	local pk = sch.primary
+-- 	if sch.fields[pk] == "auto" then fields[pk] = nil end
+-- 	simod.insert(tbl, fields, context)
+-- 	-- in principe now the primary key is set; set context for sub-resources:
+-- 	local subctx = child_context(tbl, fields, context)
+-- 
+-- 	-- recursively insert all sub-resources
+-- 	for fn, ft in pairs(sch.fields) do if type(ft) == "table" then
+-- 		print("recursively save subresource: ", fn, strdump(subctx))
+-- 		for _, v in ipairs(fields[fn] or {}) do
+-- 			insert_rec(ft[1], v, subctx)
+-- 		end
+-- 	end end
+-- end
+-- local function normalize_changes(changes, mt)
+-- 	-- when passed a table of changes from a resource template,
+-- 	-- together with the metatable for this resource type,
+-- 	-- normalizes the changes (modifying the input table).
+-- 	local tbl = mt.table
+-- 	local primary = simod.schema[tbl].primary
+-- 	local dk = default_key[tbl]
+-- 	
+-- 	if dk ~= nil then
+-- 		if type(changes) == "string" then -- sword("carsomyr")
+-- 			changes = { [dk] = changes }
+-- 		elseif changes[dk] == nil and changes[1] ~= nil then
+-- 			-- sword { "carsomyr", enchantment = 5 }
+-- 			changes[dk] = changes[1]
+-- 			changes[1] = nil
+-- 		end
+-- 		-- if primary key is not defined, then build a new one from
+-- 		-- the default field (e.g. item name or something)
+-- 		if changes[primary] == nil then
+-- 			changes[primary] = changes[dk]
+-- -- 		else
+-- -- 			resref = changes[primary]; changes[primary] = nil
+-- 		end
+-- 	end
+-- 	-- since input might be a string, it might be passed by value:
+-- 	return changes
+-- end
+-- local function resource_clone(self, changes)
+-- --     resource_clone(self, { field1 = value1, ... })
+-- --
+-- -- Clones the resource `self` while applying the requested modifications.
+-- -- This inserts a new resource in the database and returns the new object.
+-- --
+-- -- A few special cases are also allowed as syntactic sugar:
+-- --     resource_clone(self, "name")
+-- --     resource_clone(self, { "name", field1 = vlaue1, ... })
+-- -- In both these cases, the value "name" is used for both the `default_key`
+-- -- (usually the item name, etc.) and the resource reference.
+-- 	local mt = getmetatable(self)
+-- 	local changes = normalize_changes(changes, mt)
+-- 	local tbl = mt.table
+-- 	local sch = table_schema(tbl)
+-- 
+-- 	local fields = {}
+-- 	for k,v in pairs(sch.fields) do
+-- 		if type(v) == "table" then
+-- 			-- we are dealing with a sub-resource
+-- 			-- no need to set metatables here: this is done during __index
+-- 			print("insert sub-resource "..k..":"..strdump(changes[k]))
+-- 			fields[k] = changes[k] or deep_copy(self._fields[k])
 -- 		else
--- 			resref = changes[primary]; changes[primary] = nil
-		end
-	end
-	-- since input might be a string, it might be passed by value:
-	return changes
-end
-local function resource_clone(self, changes)
---     resource_clone(self, { field1 = value1, ... })
---
--- Clones the resource `self` while applying the requested modifications.
--- This inserts a new resource in the database and returns the new object.
---
--- A few special cases are also allowed as syntactic sugar:
---     resource_clone(self, "name")
---     resource_clone(self, { "name", field1 = vlaue1, ... })
--- In both these cases, the value "name" is used for both the `default_key`
--- (usually the item name, etc.) and the resource reference.
-	local mt = getmetatable(self)
-	local changes = normalize_changes(changes, mt)
-	local tbl = mt.table
-	local sch = table_schema(tbl)
-
-	local fields = {}
-	for k,v in pairs(sch.fields) do
-		if type(v) == "table" then
-			-- we are dealing with a sub-resource
-			-- no need to set metatables here: this is done during __index
-			print("insert sub-resource "..k..":"..strdump(changes[k]))
-			fields[k] = changes[k] or deep_copy(self._fields[k])
-		else
-			fields[k] = changes[k] or self._fields[k]
-		end
-		if self._fields[k] == nil then
-			error("field \""..k.."\" undefined!")
-		end
-	end
-	-- insert our fresh resource in the database and return it:
-	-- note: if the input primary key is `auto` then it is expected to be
-	-- `nil` on function call and set by `simod.insert` to the rowid
-	local context = deep_copy(self._context)
-	print("new context is ", strdump(context))
--- 	print("new fields is ", strdump(fields))
-	insert_rec(tbl, fields, context)
-	return setmetatable({ _fields = fields, _context = context }, mt)
-end
-
--- forward declaration for mutual recursion with create_resource_mt
-local create_resvec_mt
-local function create_resource_mt(prop)
-	if type(prop) == "string" then
-		prop = { table = prop }
-	end
-	assert(type(prop.table) == "string", "resource should have 'table' defined")
-	local sch = table_schema(prop.table)
-	prop.__index = resource_getindex
-	prop.__newindex = resource_setindex
-	prop.__call = resource_clone
-	for fn,ft in pairs(sch.fields) do
-		if type(ft) == "table" then
-			prop[fn] = create_resvec_mt { table = ft[1] }
-		end
-	end
--- 	prop.index = -- mkfn("prop("..prop.table..").index")
--- 		function(self, key) print("called index("..prop.table..", [31m"..key.."[m)") end
-	return prop
-end
---««1 Methods for resource vectors
-local function resvec_len(self)
-	return #self._entries
-end
-local function resvec_getindex(self, key)
-	local mt = getmetatable(self)
-	if type(key) == type(0) then
-		-- make it zero-indexed:
-		return setmetatable({ _fields = self._entries[key+1],
-			_context = self._context}, mt.item)
-	else
-		return mt[key]
-	end
-end
-local function resvec_push(self, value)
-	-- in addition to the push we need to insert the values,
-	-- together with the parent info (self.parent)
-	local mt = getmetatable(self)
-	table.insert(self._entries, value)
-	insert_rec(mt.item.table, value, self._context)
-end
-local function resvec_iterate(self)
-	local i = 0
-	return function()
-		i = i+1
-		return self._entries[i]
-	end
-end
-function create_resvec_mt(prop)
-	-- builds the metatable for a particular resvec type (indexed by
-	-- a schema table name); mutually recursive with `create_resource_mt`
-	if type(prop) == "string" then
-		prop = { table = prop }
-	end
-	assert(type(prop.table) == "string",
-		"resource vector should have 'table' defined")
-	table_schema(prop.table)
-	prop.__index = resvec_getindex
-	prop.iterate = resvec_iterate
-	prop.push = resvec_push
-	prop.len = resvec_len
-	prop.item = create_resource_mt { table = prop.table }
-	return prop
-end
---««1 Individual resource types
--- Each call to `create_resource_mt` recursively creates the metatables
--- for all subresources as well.
--- item_mt = create_resource_mt { table = "items" }
-
-function select_all(tbl, parent)
-	-- returns an iterator over all rows from `tbl` with given parent key
-	local keys = simod.list(tbl, parent)
-	local i = 0
-	return function()
-		i = i+1
-		local k = keys[i]
-		if k == nil then return end
-		return simod.select(tbl, k)
-	end
-end
-function item(resref)
-	-- the main item creation function
-	local fields = simod.select("items", resref)
-	local ab = {}
-	local eff = {}
-	for t in select_all("item_abilities", resref) do
-		t.itemref = nil
-		t.effects = {}
-		table.insert(ab, t)
-	end
-	for t in select_all("item_effects", resref) do
-		t.itemref = nil
-		local i = t.abref; t.abref = nil
-		if i ~= 0 then
-			table.insert(ab[i].effects, t)
-		else
-			table.insert(eff, t)
-		end
-	end
-	fields.abilities = ab
-	fields.effects = eff
-	return setmetatable({ _fields = fields, _context = {} }, item_mt)
-end
-
+-- 			fields[k] = changes[k] or self._fields[k]
+-- 		end
+-- 		if self._fields[k] == nil then
+-- 			error("field \""..k.."\" undefined!")
+-- 		end
+-- 	end
+-- 	-- insert our fresh resource in the database and return it:
+-- 	-- note: if the input primary key is `auto` then it is expected to be
+-- 	-- `nil` on function call and set by `simod.insert` to the rowid
+-- 	local context = deep_copy(self._context)
+-- 	print("new context is ", strdump(context))
+-- -- 	print("new fields is ", strdump(fields))
+-- 	insert_rec(tbl, fields, context)
+-- 	return setmetatable({ _fields = fields, _context = context }, mt)
+-- end
+-- 
+-- -- forward declaration for mutual recursion with create_resource_mt
+-- local create_resvec_mt
+-- local function create_resource_mt(prop)
+-- 	if type(prop) == "string" then
+-- 		prop = { table = prop }
+-- 	end
+-- 	assert(type(prop.table) == "string", "resource should have 'table' defined")
+-- 	local sch = table_schema(prop.table)
+-- 	prop.__index = resource_getindex
+-- 	prop.__newindex = resource_setindex
+-- 	prop.__call = resource_clone
+-- 	for fn,ft in pairs(sch.fields) do
+-- 		if type(ft) == "table" then
+-- 			prop[fn] = create_resvec_mt { table = ft[1] }
+-- 		end
+-- 	end
+-- -- 	prop.index = -- mkfn("prop("..prop.table..").index")
+-- -- 		function(self, key) print("called index("..prop.table..", [31m"..key.."[m)") end
+-- 	return prop
+-- end
+-- --««1 Methods for resource vectors
+-- local function resvec_len(self)
+-- 	return #self._entries
+-- end
+-- local function resvec_getindex(self, key)
+-- 	local mt = getmetatable(self)
+-- 	if type(key) == type(0) then
+-- 		-- make it zero-indexed:
+-- 		return setmetatable({ _fields = self._entries[key+1],
+-- 			_context = self._context}, mt.item)
+-- 	else
+-- 		return mt[key]
+-- 	end
+-- end
+-- local function resvec_push(self, value)
+-- 	-- in addition to the push we need to insert the values,
+-- 	-- together with the parent info (self.parent)
+-- 	local mt = getmetatable(self)
+-- 	table.insert(self._entries, value)
+-- 	insert_rec(mt.item.table, value, self._context)
+-- end
+-- local function resvec_iterate(self)
+-- 	local i = 0
+-- 	return function()
+-- 		i = i+1
+-- 		return self._entries[i]
+-- 	end
+-- end
+-- function create_resvec_mt(prop)
+-- 	-- builds the metatable for a particular resvec type (indexed by
+-- 	-- a schema table name); mutually recursive with `create_resource_mt`
+-- 	if type(prop) == "string" then
+-- 		prop = { table = prop }
+-- 	end
+-- 	assert(type(prop.table) == "string",
+-- 		"resource vector should have 'table' defined")
+-- 	table_schema(prop.table)
+-- 	prop.__index = resvec_getindex
+-- 	prop.iterate = resvec_iterate
+-- 	prop.push = resvec_push
+-- 	prop.len = resvec_len
+-- 	prop.item = create_resource_mt { table = prop.table }
+-- 	return prop
+-- end
+-- --««1 Individual resource types
+-- -- Each call to `create_resource_mt` recursively creates the metatables
+-- -- for all subresources as well.
+-- -- item_mt = create_resource_mt { table = "items" }
+-- 
+-- function select_all(tbl, parent)
+-- 	-- returns an iterator over all rows from `tbl` with given parent key
+-- 	local keys = simod.list(tbl, parent)
+-- 	local i = 0
+-- 	return function()
+-- 		i = i+1
+-- 		local k = keys[i]
+-- 		if k == nil then return end
+-- 		return simod.select(tbl, k)
+-- 	end
+-- end
+-- function item(resref)
+-- 	-- the main item creation function
+-- 	local fields = simod.select("items", resref)
+-- 	local ab = {}
+-- 	local eff = {}
+-- 	for t in select_all("item_abilities", resref) do
+-- 		t.itemref = nil
+-- 		t.effects = {}
+-- 		table.insert(ab, t)
+-- 	end
+-- 	for t in select_all("item_effects", resref) do
+-- 		t.itemref = nil
+-- 		local i = t.abref; t.abref = nil
+-- 		if i ~= 0 then
+-- 			table.insert(ab[i].effects, t)
+-- 		else
+-- 			table.insert(eff, t)
+-- 		end
+-- 	end
+-- 	fields.abilities = ab
+-- 	fields.effects = eff
+-- 	return setmetatable({ _fields = fields, _context = {} }, item_mt)
+-- end
+-- 
 --««1 Test code
 function test_core()
 	function group(x) print(red(bold("\ntesting "..x))) end
@@ -524,14 +579,13 @@ function test_objects()
 	carsomyr2:delete()
 	print("after delete")
 end
-test_core()
--- print("blah")
--- test()
--- print("==============")
--- sword.abilities:push { range = 9, use_icon="!!new!!",
--- 	effects = { { opcode = 55, target = 55 } } }
--- sword.abilities[2].effects:push { opcode = 57, target = 57 }
--- print(sword.abilities[2].effects:len())
--- d"sword.abilities[2]"
+-- test_core()
+local albruin = item("sw1h34")
+-- local sw1h = item("sw1h01")
+dump(albruin)
+-- print(getmetatable(albruin)==item_mt)
+print(albruin.weight)
+dump(albruin{weight=100})
 
--- dump(simod.select("item_effects", 31))
+-- print(getmetatable(albruin)==item_mt)
+-- print(getmetatable(albruin)==resource_mt)
