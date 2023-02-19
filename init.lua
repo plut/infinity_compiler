@@ -16,11 +16,17 @@ API for subresources:
  - item.abilities.iterate()
 ]]--
 --««1 Preamble
-local function strdump(o)
+local function strdump(o, limit)
   if type(o) == 'table' then
     local s = '{ '
     local i = 1
+		local n = 0
     for k,v in pairs(o) do
+			n = n+1
+			if type(limit) == type(0) and n > limit then
+				s = s..'…'
+				break
+			end
       if k == i then
         i = i+1
       elseif type(k) == 'string' then
@@ -28,7 +34,7 @@ local function strdump(o)
       else
         s = s..'[[38;5;65m'..k..'[m]='
       end
-      s = s.. strdump(v)..', '
+      s = s.. strdump(v, limit)..', '
     end
     return s .. '} '
   elseif type(o) == 'string' then
@@ -38,11 +44,11 @@ local function strdump(o)
   end
 end
 
-local function dump(o)
-	print(strdump(o))
+local function dump(o, limit)
+	print(strdump(o, limit))
 end
-local function evaldump(s)
-	print("[35m"..s.."[m:", strdump(loadstring("return "..s)()))
+local function evaldump(s, limit)
+	print("[35m"..s.."[m:", strdump(loadstring("return "..s)(), limit))
 end
 d = evaldump
 local function count(tbl)
@@ -214,7 +220,7 @@ local root_mt = {}
 -- { _table = "items", _key = "sw1h34" }
 -- They all share the same metatable (for now)
 
-local resource_mt = { _table = "" }
+local resource_mt = {}
 setmetatable(resource_mt, root_mt)
 function resource_mt:__index(fieldname)
 -- 	print(green("indexing a value with _table = ", self._table, ":", field))
@@ -225,7 +231,9 @@ function resource_mt:__index(fieldname)
 		error('field "'..fieldname..'" not found in table "'..self._table..'"')
 	end
 	if ty == "subresource" then
-		todo()
+		local v = {_table = self._table..'_'..fieldname, _parent = self._key }
+		local mt = {} -- TODO
+		return setmetatable(v, mt)
 	end
 	return simod.get(self._table, fieldname, self._key)
 end
@@ -277,7 +285,7 @@ function resource_mt:clone_resource(args)
 		error("only resources with a defined default_key can be cloned")
 	end
 	print("for table "..self._table.." dk is ", dk)
-	dump(sch)
+	dump(sch, 5)
 	local id, changes = normalize_changes(args, dk)
 	
 	local values = simod.select(self._table, self._key)
@@ -299,13 +307,29 @@ function resource_mt:create_resource_type(init)
 	return setmetatable(new, self)
 end
 
-local item = resource_mt:create_resource_type{ _table = "items" }
-for k,v in pairs(simod.schema) do
-	print("schema: ", k, v)
-	for k1, v1 in pairs(v) do
-		print("\t", k1, v1)
+local resvec_mt = {}
+function resvec_mt:__index(i)
+	print(type(0))
+	-- TODO: write an iter() method
+	if type(i) ~= "integer" then
+		error("resvec index must be an integer")
 	end
+	local list = simod.list(self._table, self._parent)
+	if i < 1 or i > #list then
+		error("resvec index out of bounds")
+	end
+	local v = { _table = self._table, _key = list[i] }
+	-- TODO: compute the appropriate metatable
+	return v
 end
+
+local item = resource_mt:create_resource_type{ _table = "items" }
+-- for k,v in pairs(simod.schema) do
+-- 	print("schema: ", k, v)
+-- 	for k1, v1 in pairs(v) do
+-- 		print("\t", k1, v1)
+-- 	end
+-- end
 
 
 
@@ -635,6 +659,7 @@ local albruin = item("sw1h34")
 dump(albruin)
 -- print(getmetatable(albruin)==item_mt)
 print(albruin.weight)
+dump(albruin.abilities)
 dump(albruin{"toto", weight=100})
 
 -- print(getmetatable(albruin)==item_mt)

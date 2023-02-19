@@ -69,3 +69,13 @@ Note that rows from the base game (those present in the `load_*` tables)
 currently cannot be deleted,
 since the data they represent is stored in the BIF files
 and not in the override directory.
+
+## `simod.schema`
+
+This contains the description for the format of the game resource tables.
+For example, the entry `simod.schema.items` contains the description of
+items, as the following fields:
+
+ - `simod.schema.items.fields`: list of fields and types, as key-pair values;
+ - `simod.schema.items.is_subresource`: `nil` since this is not a
+   subresource (otherwise `true`);
