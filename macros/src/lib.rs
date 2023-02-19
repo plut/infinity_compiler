@@ -470,7 +470,9 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	let mut collect_at = quote!{};
 	let DeriveInput{ ident, data, .. } = parse_macro_input!(tokens);
 	let fields = Fields::from(data);
-	let mut field_index = 1usize;
+	// WARNING: row::get is zero-indexed,
+	// while raw_bind is one-indexed...
+	let mut field_index = 0usize;
 	for FieldRef { name, attrs, ty, .. } in fields.iter() {
 		// Read attributes for this field
 		let mut field_info = FieldInfo::default();
@@ -494,21 +496,18 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 				create: #create },
 		}.to_tokens(&mut fields_def);
 		quote!{
-			s.raw_bind_parameter(#field_index + offset, &self.#name)
-				.with_context(|| format!("raw bind {} at column {}/{}",
-					stringify!(#name), #field_index+offset,
-					 s.parameter_count()))?;
+			/// THIS IS ONE-INDEXED
+			s.raw_bind_parameter(#field_index + offset + 1, &self.#name)
+				.with_context(|| format!(concat!("bind field '", stringify!(#name),
+					"' at zero-based index {}/{}"),
+					#field_index + offset, s.parameter_count()))?;
 		}.to_tokens(&mut bind_at);
 		quote!{
-			#name: { let i = #field_index + offset;
-			println!("(offset is {offset}, read {fname} at {i})",
-				offset=offset, fname=stringify!(#name), i=i);
-				let x = row.get::<_,#ty>(i);
-				match x {
-					Err(e) => panic!("error when reading field {} at column{i}: {e:?}",
-						stringify!(#name), i = i, e=e),
-					Ok(x) => x
-				} },
+			/// THIS IS ZERO-INDEXED
+			#name: row.get::<_,#ty>(#field_index + offset)
+				.with_context(|| format!(concat!("read field '", stringify!(#name),
+					"' at zero-based index {}/{}"),
+					#field_index + offset, row.as_ref().column_count()))?,
 // 			#name: row.get::<_,#ty>(#field_index + offset)
 // 				.with_context(|| format!("cannot read field {} from column {}",
 // 					stringify!(#name), #field_index+offset))?,
@@ -528,9 +527,6 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 				Ok(())
 			}
 			fn collect_at(row: &Row<'_>, offset: usize)->Result<Self> {
-				println!("reading collect_at({ty}, {offset})", offset=offset,
-					ty=std::any::type_name::<Self>());
-				println!("columns: {:?}", row.as_ref().column_names());
 				Ok(Self { #collect_at })
 			}
 		}

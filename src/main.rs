@@ -421,21 +421,25 @@ use rusqlite::types::{FromSql,ValueRef};
 
 /// An extension trait allowing to dump a row from SQL.
 pub trait RowExt {
-	/// dumps the content of this row to stdout.
-	fn dump(&self);
+	fn dump(&self) {
+		println!("{}", self.dump_to_string());
+	}
+	fn dump_to_string(&self)->String;
 }
 impl RowExt for Row<'_> {
 	/// Dumps all values found in a single row to stdout.
-	fn dump(&self) {
+	fn dump_to_string(&self)->String {
+		let mut r = String::new();
 		for (i, c) in self.as_ref().column_names().iter().enumerate() {
 			match self.get_ref(i) {
-				Ok(ValueRef::Null) => println!("  [{i:3}] {c} = \x1b[31mNull\x1b[m"),
-				Ok(ValueRef::Text(s)) => println!("  [{i:3}] {c} = Text(\"{}\")",
+				Ok(ValueRef::Null) => write!(&mut r, "  [{i:3}] {c} = \x1b[31mNull\x1b[m"),
+				Ok(ValueRef::Text(s)) => write!(&mut r, "  [{i:3}] {c} = Text(\"{}\")",
 					std::str::from_utf8(s).unwrap()),
-				Ok(x) => println!("  [{i:3}] {c} = {x:?}"),
+				Ok(x) => write!(&mut r, "  [{i:3}] {c} = {x:?}"),
 				_ => break
-			}
+			}.unwrap();
 		}
+		r
 	}
 }
 /// An utility enum defining SQL behaviour for a given resource field type.
@@ -571,7 +575,7 @@ pub trait SqlRow: Sized {
 	}
 	/// Returns a SQL select statement restricted to type `(K, Self)`.
 	fn select_statement<'db,K:FromSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>, condition: impl Display)->Result<SelectStatement<'db,K,Self>> {
-		let mut sql = format!(r#"select "#);
+		let mut sql = String::from("select ");
 		K::write_headers(&mut sql, hdr)?;
 		write!(&mut sql, r#"{cols} from "{name}" {condition}"#,
 			cols = Self::FIELDS.fields)?;
@@ -595,6 +599,7 @@ impl<T: ToSql> ToSqlMulti for T {
 		write!(dest, r#""{hdr}","#)
 	}
 	fn raw_bind_to(&self, statement: &mut Statement<'_>)->rusqlite::Result<()> {
+		// 1-INDEXED
 		statement.raw_bind_parameter(1, self)
 	}
 }
@@ -605,7 +610,7 @@ pub struct InsertStatement<'a,K: ToSqlMulti, R:SqlRow> {
 	_key: PhantomData<K>,
 	_row: PhantomData<R>,
 }
-impl<'a, K: ToSqlMulti, R: SqlRow> InsertStatement<'a,K,R> {
+impl<K: ToSqlMulti, R: SqlRow> InsertStatement<'_,K,R> {
 	/// type-constrained version of execution of statement:
 	pub fn execute(&mut self, key: K, data: R)->Result<usize> {
 		key.raw_bind_to(&mut self.statement)?;
@@ -627,8 +632,8 @@ impl<T: FromSql> FromSqlMulti for T {
 		write!(dest, r#""{hdr}","#)
 	}
 	fn raw_collect(row: &Row<'_>)->Result<Self> {
-		row.get::<_,Self>(1)
-			.context("raw_collect at index 1")
+		// 0-INDEXED
+		row.get::<_,Self>(0).context("raw_collect at 0-based index 0")
 	}
 }
 #[derive(Debug)]
@@ -646,10 +651,16 @@ impl<K: FromSqlMulti, R: SqlRow> SelectStatement<'_,K,R> {
 	}
 }
 /// A strongly typed iterator, returning `(key, payload)` pairs.
+#[allow(missing_debug_implementations)]
 pub struct SelectRows<'a, K: FromSqlMulti, R: SqlRow> {
 	rows: rusqlite::Rows<'a>,
 	_key: PhantomData<K>,
 	_row: PhantomData<R>,
+}
+impl<'a, K:FromSqlMulti, R:SqlRow> From<rusqlite::Rows<'a>> for SelectRows<'a,K,R> {
+	fn from(rows: rusqlite::Rows<'a>)->Self {
+		Self { rows, _key: PhantomData, _row: PhantomData }
+	}
 }
 impl<'a, K:FromSqlMulti, R:SqlRow> SelectRows<'a,K,R> {
 	fn read_row(row: &Row<'a>)->Result<(K,R)> {
@@ -658,7 +669,7 @@ impl<'a, K:FromSqlMulti, R:SqlRow> SelectRows<'a,K,R> {
 		Ok((key, payload))
 	}
 }
-impl<'a, K:FromSqlMulti, R:SqlRow> Iterator for SelectRows<'a,K,R> {
+impl<K:FromSqlMulti, R:SqlRow> Iterator for SelectRows<'_,K,R> {
 	type Item = Result<(K,R)>;
 	fn next(&mut self)->Option<Self::Item> {
 		loop {
@@ -669,76 +680,12 @@ impl<'a, K:FromSqlMulti, R:SqlRow> Iterator for SelectRows<'a,K,R> {
 			};
 			match Self::read_row(row) {
 				Err(e) => {
-					println!("{e:?}"); continue
-				},
-				t => return Some(t)
+					println!("cannot read a {T} from row: {e:?} {dump}",
+						T = std::any::type_name::<(K,R)>(), dump = row.dump_to_string());
+					continue },
+				good => return Some(good)
 			}
 		}
-	}
-}
-
-/// A structure collectable from a SQL statement.
-///
-/// Functionally almost identical to `TryFrom<Row<'_>>`, except (1) it
-/// avoids a useless lifetime parameter, and (2) we own this trait and
-/// thus are allowed to implement it on e.g. (Strref, GameString).
-pub trait FromSqlRow: Sized {
-	/// Tries to collect a row into this structure.
-	fn from_row(row: &Row<'_>)->Result<Self>;
-	/// Converts a statement into an iterator of `Self` structures.
-	fn iter<'a>(stmt: &'a mut Statement<'_>, params: impl rusqlite::Params)->rusqlite::Result<TypedRows<'a,Self>> {
-		Ok(TypedRows { rows: stmt.query(params)?, index: 0, _marker: PhantomData })
-	}
-}
-impl<P: FromSql, T: SqlRow> FromSqlRow for (P, T) {
-	fn from_row(row: &Row<'_>)->Result<Self> {
-		if std::any::type_name::<T>().contains("Item") {
-// 			panic!("item");
-		}
-		println!("from_row({})", std::any::type_name::<T>());
-		Ok((row.get(1)?, T::collect_at(row, 1)?))
-	}
-}
-
-/// An enriched version of `rusqlite::Rows`.
-///
-/// This struct retains information about the output type,
-/// as well as the current row index.
-///
-/// This also behaves as an `Iterator` (throwing when the underlying
-/// `Row` iterator fails).
-#[allow(missing_debug_implementations)]
-pub struct TypedRows<'stmt, T:FromSqlRow> {
-	rows: rusqlite::Rows<'stmt>,
-	index: usize,
-	_marker: PhantomData<T>,
-}
-impl<'a, T:FromSqlRow> From<rusqlite::Rows<'a>> for TypedRows<'a,T> {
-	fn from(rows: rusqlite::Rows<'a>)->Self {
-		Self { rows, index: 0, _marker: PhantomData }
-	}
-}
-impl<T: FromSqlRow> Iterator for TypedRows<'_,T> {
-	type Item = Result<T>;
-	fn next(&mut self)->Option<Self::Item> {
-		loop {
-			let row = match self.rows.next() {
-				Ok(Some(row)) => row,
-				Ok(None) => break,
-				Err(e) => return Some(Err(e.into()))
-			};
-			self.index+= 1;
-			let t = T::from_row(row);
-			match t {
-			Err(e) => {
-				println!("cannot read a {} from row {}: {e:?}",
-				std::any::type_name::<T>(), self.index);
-				row.dump();
-				continue },
-			_ => return Some(t)
-			}
-		}
-		None
 	}
 }
 
@@ -1369,7 +1316,7 @@ as "source""#, fields = self.fields);
 	}
 	/// Creates the `save_xxx` view.
 	pub fn create_save_view(&self)->String {
-		let mut select = format!(r#"create view "save_{self}" as select"#);
+		let mut select = format!(r#"create view "save_{self}" as select "id","#);
 		let mut source = format!(r#"
 from "{self}" as "a""#);
 		for Field { fname: f, ftype, .. } in self.fields.iter() {
@@ -1531,9 +1478,9 @@ end"#))?;
 	pub fn select_dirty_sql(&self)->String {
 		match self.table_type {
 			TableType::Top { .. } =>
-			format!(r#"select "id", {cols} from "{self}" where "id" in "dirty_{self}""#, cols = self.fields),
+			format!(r#"select "id", {cols} from "save_{self}" where "id" in "dirty_{self}""#, cols = self.fields),
 			TableType::Sub { .. } =>
-			format!(r#"select "id", {cols} from "{self}" where "parent"=? order by "position""#, cols = self.fields),
+			format!(r#"select "id", {cols} from "save_{self}" where "parent"=? order by "position""#, cols = self.fields),
 		}
 	}
 }
@@ -1544,7 +1491,7 @@ pub mod resources {
 //! Definition of specific resources goes to `restypes` mod.
 use crate::prelude::*;
 use rusqlite::{ToSql,types::{FromSql}};
-use crate::sql_rows::{SqlRow,TypedRows};
+use crate::sql_rows::{SqlRow,SelectRows};
 use crate::schemas::{Schema,Fields};
 use crate::gamefiles::Restype;
 use crate::restypes::{RootForest};
@@ -1610,7 +1557,7 @@ pub trait ResourceTree: SqlRow {
 /// TODO: clean the lifetime mess here.
 #[allow(missing_debug_implementations)]
 pub struct RecursiveRows<'a,'b:'a,'c:'a, T: ResourceTree> {
-	rows: TypedRows<'a,(T::Primary, T)>,
+	rows: SelectRows<'a,T::Primary,T>,
 	branches: &'b mut T::StatementForest<'c>,
 }
 impl<T: ResourceTree> Iterator for RecursiveRows<'_,'_,'_,T> {
@@ -1819,7 +1766,7 @@ use crate::toolbox::{Progress};
 use crate::database::{DbInterface};
 use crate::gamefiles::{GameIndex};
 use crate::pack::{Pack,PackAll};
-use crate::sql_rows::{SqlRow,FromSqlRow};
+use crate::sql_rows::{SqlRow};
 use macros::{Pack};
 
 #[derive(Debug,Pack)]
@@ -2780,10 +2727,6 @@ fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	let mut tables = ALL_SCHEMAS.try_map(|schema|
 		db.prepare(schema.select_dirty_sql())
 	)?;
-// 	let mut tables = SCHEMAS().map(|schema| db.prepare(format!(
-// 	r#"select "id", {cols} from "save_{schema}" where "parent"=? sort by "position""#,
-// 		cols=schema.fields)))?;
-// 	Item::save_all_dirty(db, &mut tables, "save_items")?;
 	Item::save_all_dirty(&mut tables.items)?;
 	pb.inc(1);
 	Ok(())
