@@ -2906,6 +2906,15 @@
 <a href="#2906" id="2906">2906</a>
 <a href="#2907" id="2907">2907</a>
 <a href="#2908" id="2908">2908</a>
+<a href="#2909" id="2909">2909</a>
+<a href="#2910" id="2910">2910</a>
+<a href="#2911" id="2911">2911</a>
+<a href="#2912" id="2912">2912</a>
+<a href="#2913" id="2913">2913</a>
+<a href="#2914" id="2914">2914</a>
+<a href="#2915" id="2915">2915</a>
+<a href="#2916" id="2916">2916</a>
+<a href="#2917" id="2917">2917</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Compiler between IE game files and a SQLite database.
 </span><span class="attr">#![allow(
 	unused_attributes,
@@ -4542,11 +4551,13 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 	/// a mess, and we want to interrupt search as soon as we find *and*
 	/// cut branches with a non-matching name:
 	</span><span class="kw">fn </span>by_name&lt;<span class="lifetime">&#39;a</span>&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="self">self</span>, target: <span class="kw-2">&amp;</span>str)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="self">Self</span>::In&gt; {
-		<span class="self">self</span>.by_name1(target).ok_or(Error::UnknownTable(target.into()).into())
+		<span class="self">self</span>.by_name1(target).ok_or_else(||
+			Error::UnknownTable(target.into()).into())
 	}
 	<span class="doccomment">/// Same, with mutable reference.
 	</span><span class="kw">fn </span>by_name_mut&lt;<span class="lifetime">&#39;a</span>&gt;(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw-2">mut </span><span class="self">self</span>, target: <span class="kw-2">&amp;</span>str)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw-2">mut </span><span class="self">Self</span>::In&gt; {
-		<span class="self">self</span>.by_name_mut1(target).ok_or(Error::UnknownTable(target.into()).into())
+		<span class="self">self</span>.by_name_mut1(target).ok_or_else(||
+			Error::UnknownTable(target.into()).into())
 	}
 }
 <span class="doccomment">/// Trait containing the basic recursion function for forests.
@@ -4643,10 +4654,17 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 	<span class="doccomment">/// Saves a resource to filesystem.
 	</span><span class="kw">fn </span>save(<span class="kw-2">&amp;mut </span><span class="self">self</span>, io: <span class="kw">impl </span>Write+Seek+Debug)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt;;
 	<span class="comment">// Provided methods
+	</span><span class="doccomment">/// Entry point for loading: loads from filesystem, inserts into
+	/// database.
+	///
+	/// Could be implemented ad-hoc for not allocating vectors, but this
+	/// is supposed to be a one-time cost anyway.
+	</span><span class="attr">#[inline]
 	</span><span class="kw">fn </span>load_and_insert(db: <span class="kw-2">&amp;</span>Connection, tree: <span class="kw-2">&amp;mut </span>Tree&lt;<span class="self">Self</span>::StatementForest&lt;<span class="lifetime">&#39;_</span>&gt;&gt;, <span class="kw-2">mut </span>handle: <span class="kw">crate</span>::gamefiles::ResHandle&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
 		<span class="kw">let </span>resource = <span class="self">Self</span>::load(handle.open()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 		resource.insert_as_topresource(db, tree, handle.resref)<span class="question-mark">?</span>;
 		<span class="comment">// TODO: mark resource as override
+		// using &quot;insert into &quot;override&quot; values &quot;(resref,EXTENSION)&quot;
 		// TODO: increase counter if possible
 		</span><span class="prelude-val">Ok</span>(())
 	}
