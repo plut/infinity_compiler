@@ -619,7 +619,6 @@ impl ToTokens for DeriveResourceTree {
 					}
 				};
 				type StatementForest<'a> = #forestname<Statement<'a>>;
-				type Primary = #primary;
 				fn insert_subresources(&self, db: &Connection, branches: &mut #forestname<Statement<'_>>, primary: impl rusqlite::ToSql+Copy)->Result<()> {
 					#(for (i, sub) in self.#field.iter().enumerate() {
 						sub.insert_as_subresource(db, &mut branches.#field, primary, i)?;
