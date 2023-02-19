@@ -628,7 +628,7 @@ impl ToTokens for DeriveResourceTree {
 				}
 				fn select_subresources(&mut self,
 					branches: &mut #forestname<Statement<'_>>,
-					primary: #primary)->Result<()> {
+					primary: impl rusqlite::ToSql+Copy)->Result<()> {
 					#(self.#field = #ty::collect_all(&mut branches.#field, (primary,))?;)*
 					Ok(())
 				}
