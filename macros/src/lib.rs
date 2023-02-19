@@ -631,6 +631,13 @@ impl ToTokens for DeriveResourceTree {
 					Ok(())
 				}
 			} // impl ResourceTree
+			impl<X :Debug> #forestname<X> {
+				pub fn shallow_try_map<E,F>(&self, f: F)->Result<(),E>
+				where F: Fn(&X, &'static str)->Result<(),E> {
+					#(f(&self.#field.content, stringify!(#field))?;)*
+					Ok(())
+				}
+			}
 // -- end of quote:
 		}.to_tokens(dest)
 	}
