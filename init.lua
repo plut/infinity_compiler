@@ -203,31 +203,8 @@ function simod_simul.insert(tbl, fields, context)
 end
 
 --««1 Methods for resources
--- Resource objects store their data in two main fields:
---  - `_context` for read-only information located to the resource's
---  place in the database;
---  - for individual resources, `_fields` for accessible data;
---  - for resource vectors (resvecs), `_entries` (as an array).
---
--- When accessing the database (through one of the `simod.*` functions)
--- all these fields are handled together. It is our job to group them
--- (when inserting in the database) or separate them (when reading).
---
--- Rationale for context:
---  - when extracted from its structure, a field must be able to function
---    independently (e.g. inserting a new item ability) and still report to
---    the database.
---  - resvecs might be empty, so we cannot store context only in
---    individual resources.
---  - we still might allow resref to be user-accessible so we put it
---    outside of context and in `_fields`. (Plus, this makes reading top
---    resources slightly easier).
---
-local default_key = {
-	-- The default field used to generate resrefs when none are specified.
-	-- (This is only syntactic sugar for the item cloning functions).
-	items = "name",
-}
+-- Resource objects have the following form:
+-- { _table = "items", _key = "sw1h34" }
 local function child_context(tbl, fields, context)
 	-- given a table name, values and local context,
 	-- produce context for children (by adding the primary)
@@ -253,11 +230,12 @@ local function resource_delete(self)
 end
 local function resource_getindex(self, fieldname)
 	-- Implements `$resource.$field`.
-	-- 
+	--
 	-- This returns either the raw field,
 	-- or (when the field designates a subresource)
 	-- a contextualized resvec.
-	-- first the methods
+	--
+	-- first the methods (TODO: implement a proper method table)
 	if fieldname == "delete" then return resource_delete end
 	local mt = getmetatable(self)
 	local sch = table_schema(mt.table)
@@ -444,7 +422,7 @@ end
 --««1 Individual resource types
 -- Each call to `create_resource_mt` recursively creates the metatables
 -- for all subresources as well.
-item_mt = create_resource_mt { table = "items" }
+-- item_mt = create_resource_mt { table = "items" }
 
 function select_all(tbl, parent)
 	-- returns an iterator over all rows from `tbl` with given parent key
@@ -509,8 +487,8 @@ function test_core()
 		print(blue("now sw1h34 name is:"))
 		local x = simod.get("items", "name", "sw1h34")
 		dump(x)
-	group("simod.schema")
-		dump(simod.subresources)
+	group("simod.schema is:")
+		dump(simod.schema)
 end
 function test_objects()
 	-- show schema

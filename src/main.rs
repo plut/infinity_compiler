@@ -2704,45 +2704,46 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
 	lua.scope(|scope| {
+		// lua schema is defined by a table of strings in the following way:
+		// items= { weight= "integer", name= "strref", abilities= "subresource" }
+		// since we known in advance that a lot of those strings will be
+		// identical (and Lua interns strings anyway), we might as well
+		// allocate them first:
+		let marker_integer = lua.create_string("integer")?;
+		let marker_text = lua.create_string("text")?;
+		let marker_strref = lua.create_string("strref")?;
+		let marker_resref = lua.create_string("resref")?;
+		let marker_subresource = lua.create_string("subresource")?;
+
 		let simod = lua.create_table()?;
-		let lua_schema = lua.create_table()?;
-		ALL_SCHEMAS.try_map_mut(|schema| {
-			let fields = lua.create_table()?;
-// 			let context = lua.create_table()?;
+
+		let simod_schema = lua.create_table()?;
+		// there are a lot of `clone()` calls in there: all those values are
+		// really `LuaRef()`, which _should_ implement `Copy`, but are cheap
+		// to clone anyway (a pointer + an integer).
+		ALL_SCHEMAS.recurse_mut(|schema, name, parent_table| {
+			let table = lua.create_table()?;
 			for f in schema.fields.iter() {
-				fields.set(f.fname, f.ftype.description())?;
+				use crate::sql_rows::FieldType;
+				let marker = match f.ftype {
+					FieldType::Integer => marker_integer.clone(),
+					FieldType::Text => marker_text.clone(),
+					FieldType::Resref => marker_resref.clone(),
+					FieldType::Strref => marker_strref.clone(),
+				};
+				table.set(f.fname, marker)?;
 			}
-// 			for col in schema.context() {
-// 				context.push(col.fname)?;
-// 			}
-			let res_schema = lua.create_table()?;
-			res_schema.set("fields", fields)?;
-// 			res_schema.set("context", context)?;
-// 			res_schema.set("primary", schema.primary().fname)?;
-			lua_schema.set(schema.to_string(), res_schema)?;
-			mlua_ok(())
-		})?;
-		// Step 2: build the sub-schema relations
-		// We do this in a second pass since by now all resource tables exist
-		let lua_subresources = lua.create_table()?;
-		ALL_SCHEMAS.try_map_mut(|schema| {
-			// root is &&str
-			// parent is &String
-			// schema is &schema
-			lua_subresources.set::<&str,_>(schema.name.as_ref(),
-				lua.create_table()?)?;
-			if let Some((parent, _root)) = schema.parent_root.as_ref() {
-				if let Some(suffix) = schema.name.strip_prefix(parent.as_str()) {
-					if suffix.as_bytes()[0] == b'_' {
-						lua_subresources.get::<&str,mlua::Table<'_>>(parent.as_str())?
-							.set(&suffix[1..], true)?
-					}
-				}
+			// we mark ourself as a subresource for the parent (note that the
+			// `recurse_mut` function does not allow easily doing this on the
+			// parent side; we use the `parent_table` we got as our state):
+			if let Some((_parent, _root)) = schema.parent_root.as_ref() {
+				parent_table.set(name, marker_subresource.clone())?;
 			}
-			mlua_ok(())
-		})?;
-		simod.set("subresources", lua_subresources)?;
-		simod.set("schema", lua_schema)?;
+			// pass the resulting table to our branches, and return nothing:
+			simod_schema.set(schema.name.as_str(), table.clone())?;
+			mlua_ok((table, nothing))
+		}, "", &simod_schema)?;
+		simod.set("schema", simod_schema)?;
 		simod.set("dump", scope.create_function(
 		|_lua, (query,): (String,)| {
 			debug!("lua called exec with query {query}");
