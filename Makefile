@@ -21,6 +21,9 @@ build:
 init: build
 	$(RUN) -O init.log init -B
 
+save: build
+	$(RUN) -O save.log save
+
 c: clippy
 clippy:
 	cargo clippy --color=always 2>&1 | less -R
@@ -32,10 +35,10 @@ watch:
 t: test
 test:
 	rm -rf $(BG)/simod_out
-	$(RUN) -O init.log init -B
+#  	$(RUN) -O init.log init -B
 	echo "update \"items\" set price=5,name='A new name for Albruin' where id='sw1h34';" | sqlite3 $(DB)
-	$(RUN) -O show.log show sw1h34.itm
-	$(RUN) -O add.log add target
+#  	$(RUN) -O show.log show sw1h34.itm
+#  	$(RUN) -O add.log add target
 	$(RUN) -O save.log save
 
 x:

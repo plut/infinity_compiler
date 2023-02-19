@@ -552,6 +552,129 @@ pub trait SqlRow: Sized {
 		self.bind_at(stmt, 2)?;
 		stmt.raw_execute().context("raw_execute")
 	}
+	/// Returns a SQL statement restricted to type `(K, Self)` and built
+	/// from matching columns.
+	fn insert_statement<'db,K:ToSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>)->Result<InsertStatement<'db,K,Self>> {
+		let mut sql = format!(r#"insert into "{name}"("#);
+		K::write_headers(&mut sql, hdr)?;
+		write!(&mut sql, r#"{cols}) values ("#, cols = Self::FIELDS.fields)?;
+		for i in 0..K::WIDTH + Self::FIELDS.fields.len() {
+			if i > 0 { sql.push(',') }
+			sql.push('?')
+		}
+		sql.push(')');
+		println!("sql = {sql}");
+		Ok(InsertStatement {
+			statement: db.prepare(&sql)?,
+			_key: PhantomData, _row: PhantomData,
+		})
+	}
+	/// Returns a SQL select statement restricted to type `(K, Self)`.
+	fn select_statement<'db,K:FromSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>, condition: impl Display)->Result<SelectStatement<'db,K,Self>> {
+		let mut sql = format!(r#"select "#);
+		K::write_headers(&mut sql, hdr)?;
+		write!(&mut sql, r#"{cols} from "{name}" {condition}"#,
+			cols = Self::FIELDS.fields)?;
+		Ok(SelectStatement {
+			statement: db.prepare(&sql)?,
+			_key: PhantomData, _row: PhantomData,
+		})
+	}
+}
+
+pub trait ToSqlMulti {
+	const WIDTH: usize;
+	type Headers<'a>;
+	fn write_headers(dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result;
+	fn raw_bind_to(&self, statement: &mut Statement<'_>)->rusqlite::Result<()>;
+}
+impl<T: ToSql> ToSqlMulti for T {
+	const WIDTH: usize = 1;
+	type Headers<'a> = &'a str;
+	fn write_headers(mut dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result {
+		write!(dest, r#""{hdr}","#)
+	}
+	fn raw_bind_to(&self, statement: &mut Statement<'_>)->rusqlite::Result<()> {
+		statement.raw_bind_parameter(1, self)
+	}
+}
+/// A `insert` statement restricted to its struct type + primary key.
+#[derive(Debug)]
+pub struct InsertStatement<'a,K: ToSqlMulti, R:SqlRow> {
+	statement: Statement<'a>,
+	_key: PhantomData<K>,
+	_row: PhantomData<R>,
+}
+impl<'a, K: ToSqlMulti, R: SqlRow> InsertStatement<'a,K,R> {
+	/// type-constrained version of execution of statement:
+	pub fn execute(&mut self, key: K, data: R)->Result<usize> {
+		key.raw_bind_to(&mut self.statement)?;
+		data.bind_at(&mut self.statement, K::WIDTH)?;
+		self.statement.raw_execute().map_err(|e| e.into())
+	}
+}
+
+pub trait FromSqlMulti: Sized {
+	const WIDTH: usize;
+	type Headers<'a>;
+	fn write_headers(dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result;
+	fn raw_collect(row: &Row<'_>)->Result<Self>;
+}
+impl<T: FromSql> FromSqlMulti for T {
+	const WIDTH: usize = 1;
+	type Headers<'a> = &'a str;
+	fn write_headers(mut dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result {
+		write!(dest, r#""{hdr}","#)
+	}
+	fn raw_collect(row: &Row<'_>)->Result<Self> {
+		row.get::<_,Self>(1)
+			.context("raw_collect at index 1")
+	}
+}
+#[derive(Debug)]
+pub struct SelectStatement<'a,K: FromSqlMulti, R:SqlRow> {
+	statement: Statement<'a>,
+	_key: PhantomData<K>,
+	_row: PhantomData<R>,
+}
+impl<K: FromSqlMulti, R: SqlRow> SelectStatement<'_,K,R> {
+	pub fn query(&mut self, params: impl rusqlite::Params)->Result<SelectRows<'_,K,R>> {
+		Ok(SelectRows {
+			rows: self.statement.query(params)?,
+			_key: PhantomData, _row: PhantomData,
+		})
+	}
+}
+/// A strongly typed iterator, returning `(key, payload)` pairs.
+pub struct SelectRows<'a, K: FromSqlMulti, R: SqlRow> {
+	rows: rusqlite::Rows<'a>,
+	_key: PhantomData<K>,
+	_row: PhantomData<R>,
+}
+impl<'a, K:FromSqlMulti, R:SqlRow> SelectRows<'a,K,R> {
+	fn read_row(row: &Row<'a>)->Result<(K,R)> {
+		let key = K::raw_collect(row)?;
+		let payload = R::collect_at(row, K::WIDTH)?;
+		Ok((key, payload))
+	}
+}
+impl<'a, K:FromSqlMulti, R:SqlRow> Iterator for SelectRows<'a,K,R> {
+	type Item = Result<(K,R)>;
+	fn next(&mut self)->Option<Self::Item> {
+		loop {
+			let row = match self.rows.next() {
+				Ok(None) => return None,
+				Ok(Some(row)) => row,
+				Err(e) => return Some(Err(e.into()))
+			};
+			match Self::read_row(row) {
+				Err(e) => {
+					println!("{e:?}"); continue
+				},
+				t => return Some(t)
+			}
+		}
+	}
 }
 
 /// A structure collectable from a SQL statement.
@@ -569,6 +692,10 @@ pub trait FromSqlRow: Sized {
 }
 impl<P: FromSql, T: SqlRow> FromSqlRow for (P, T) {
 	fn from_row(row: &Row<'_>)->Result<Self> {
+		if std::any::type_name::<T>().contains("Item") {
+// 			panic!("item");
+		}
+		println!("from_row({})", std::any::type_name::<T>());
 		Ok((row.get(1)?, T::collect_at(row, 1)?))
 	}
 }
@@ -1600,6 +1727,7 @@ pub trait Recurse<Y>: ByName {
 struct SchemaBuildState {
 	level: usize,
 	table_name: String,
+	#[allow(dead_code)]
 	parent_name: &'static str,
 	root: &'static str,
 	table_type: crate::schemas::TableType,
@@ -1651,7 +1779,7 @@ pub static ALL_SCHEMAS: Lazy<RootForest<Schema>> = Lazy::new(|| {
 /// A trait containing resource I/O functions.
 ///
 /// This is only available for top-level resources.
-pub trait ResourceIO: ResourceTree {
+pub trait ResourceIO: ResourceTree<Primary=Resref> {
 	const EXTENSION: &'static str;
 	const RESTYPE: Restype;
 	// Required methods
@@ -1660,6 +1788,13 @@ pub trait ResourceIO: ResourceTree {
 	/// Saves a resource to filesystem.
 	fn save(&mut self, io: impl Write+Seek+Debug)->Result<()>;
 	// Provided methods
+	fn load_and_insert(db: &Connection, tree: &mut Tree<Self::StatementForest<'_>>, mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
+		let resource = Self::load(handle.open()?)?;
+		resource.insert_as_topresource(db, tree, handle.resref)?;
+		// TODO: mark resource as override
+		// TODO: increase counter if possible
+		Ok(())
+	}
 	fn save_all_dirty(tree: &mut Tree<Self::StatementForest<'_>>)->Result<usize> {
 		let mut n_saved = 0;
 		for (resref, mut resource) in Self::read_rows(tree, ())?.flatten() {
@@ -1672,19 +1807,6 @@ pub trait ResourceIO: ResourceTree {
 		}
 		Ok(n_saved)
 	}
-}
-impl<T: ResourceTree<Primary=Resref>+ResourceIO> crate::database::LoadResource for T {
-	type InsertHandle<'db:'b,'b> = (&'db Connection, &'b mut Tree<T::StatementForest<'db>>);
-	#[allow(single_use_lifetimes)] // clippy over-optimistic here
-	fn load_and_insert<'db:'b,'b>((db, tree): Self::InsertHandle<'db,'b>, 
-			mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
-		let resource = T::load(handle.open()?)?;
-		resource.insert_as_topresource(db, tree, handle.resref)?;
-		// TODO: mark resource as override
-		// TODO: increase counter if possible
-		Ok(())
-	}
-
 }
 
 }
@@ -1770,8 +1892,10 @@ impl ExactSizeIterator for GameStringsIterator<'_> {
 fn load_language(db: &impl DbInterface, langname: &str, path: &(impl AsRef<Path> + Debug))->Result<()> {
 	let bytes = fs::read(path)
 		.with_context(|| format!("cannot open strings file: {path:?}"))?;
-	let mut q = db.prepare(GameString::FIELDS9.insert_sql(
-		lazy_format!("load_strings_{langname}"), r#""strref","#, 1))?;
+	let mut stmt = GameString::insert_statement::<Strref>(db,
+		lazy_format!("load_strings_{langname}"), "strref")?;
+// 	let mut q = db.prepare(GameString::FIELDS9.insert_sql(
+// 		lazy_format!("load_strings_{langname}"), r#""strref","#, 1))?;
 	let itr = GameStringsIterator::try_from(bytes.as_ref())?;
 	let pb = Progress::new(itr.len(), langname);
 	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
@@ -1779,7 +1903,8 @@ fn load_language(db: &impl DbInterface, langname: &str, path: &(impl AsRef<Path>
 	for (strref, x) in itr.enumerate() {
 		let s = x?;
 		pb.inc(1);
-		s.bind_execute1(&mut q, strref)?;
+		stmt.execute(Strref(strref as i32), s)?;
+// 		s.bind_execute1(&mut q, strref)?;
 		n_strings+= 1;
 	}
 	info!("loaded {n_strings} strings for language \"{langname}\"");
@@ -1826,8 +1951,9 @@ pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 			(), |row| row.get::<_,usize>(0))?;
 		let mut vec = vec![GameString::default(); count];
 		let mut delta = 0;
-		let mut stmt = db.prepare(format!(r#"select "strref",{fields} from "strings_{lang}""#, fields = GameString::FIELDS9))?;
-		for row in <(Strref,GameString)>::iter(&mut stmt, ())? {
+		let mut select = GameString::select_statement::<Strref>(db,
+			lazy_format!("strings_{lang}"), "strref", "")?;
+		for row in select.query(())? {
 			let (strref, mut gamestring) = row?;
 	// first string in en.tlk has: (flags: u16=5, offset=0, strlen=9)
 	// second string has (flags: u16=1, offset=9, strlen=63) etc.
@@ -1980,7 +2106,7 @@ from "new_strings"
 				#[allow(clippy::single_match)]
 				match restype {
 				Item::RESTYPE =>
-					Item::load_and_insert((db, &mut tables.items), handle)?,
+					Item::load_and_insert(db, &mut tables.items, handle)?,
 				_ => (),
 				};
 				Ok(())
@@ -2172,16 +2298,6 @@ begin"#);
 	end"#)?;
 		Ok(())
 	}
-}
-
-/// A trait describing how to insert a top-level resource into the
-/// database.
-pub trait LoadResource {
-	type InsertHandle<'db:'b,'b>;
-	/// Reads from a resource handle and writes to database.
-	#[allow(single_use_lifetimes)] // clippy over-optimistic here
-	fn load_and_insert<'db:'b,'b>(db_handle: Self::InsertHandle<'db,'b>,
-		handle: crate::gamefiles::ResHandle<'_>)->Result<()>;
 }
 
 } // mod database

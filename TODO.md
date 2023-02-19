@@ -4,7 +4,11 @@
  + build code for const (schema) base case `ALL_SCHEMAS`
  + port most functions to use this instead of old const `SCHEMAS`
  + then remove code from `TopResource` and see how to rec. i/o from db
- - reinstate some code deleted since `69789`
+ + reinstate some code deleted since `69789`
+ - we need a proper `Table` type with
+  - a FromSqlMulti + ToSqlMulti type for indexing,
+  - a SqlRow for payload,
+  - automatic select, insert, create procedures
 # Override
  - [x] improve backup procedure: a full backup as part of init
  - [x] a mod `base_types` for chaff such as SqlType etc.
