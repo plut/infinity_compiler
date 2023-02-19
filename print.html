@@ -78,7 +78,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="lua_core.html"><strong aria-hidden="true">2.1.</strong> Core functions</a></li></ol></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">4.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">4.2.</strong> Game strings</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">4.3.</strong> Translations</a></li></ol></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">2.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="lua_core.html"><strong aria-hidden="true">2.2.</strong> Core functions</a></li><li class="chapter-item expanded "><a href="lua_objects.html"><strong aria-hidden="true">2.3.</strong> Object-oriented front-end</a></li></ol></li><li class="chapter-item expanded "><div><strong aria-hidden="true">3.</strong> API for translators</div></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">4.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">5.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><div><strong aria-hidden="true">5.1.</strong> Implementation of namespacing</div></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">5.2.</strong> Game strings</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">5.3.</strong> Translations</a></li></ol></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -158,6 +158,67 @@ items.</p>
 </blockquote>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="api-for-modders"><a class="header" href="#api-for-modders">API for modders</a></h1>
 <p>TODO.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="resource-identifiers-and-namespacing"><a class="header" href="#resource-identifiers-and-namespacing">Resource identifiers and namespacing</a></h1>
+<p>In-game resources are identified by “resrefs”, which are 8-byte ASCII
+strings.
+These resrefs are also used as file names in the override directory,
+which puts a number of additional constraints on allowed characters:
+namely, the characters <code>&quot;+&lt;&gt;/\|?*:</code> are forbidden.</p>
+<p>Inside the <code>simod</code> database however, resources are identified by
+arbitrary strings (hereafter designated as “longrefs”).</p>
+<h2 id="namespacing"><a class="header" href="#namespacing">Namespacing</a></h2>
+<p>To protect from resource conflicts, mod components generally do not
+access them globally.</p>
+<p>To each mod component is attached a <em>namespace</em>, in the form of a string.
+Whenever a mod accesses a resource identifier <code>R</code>
+it is translated to a longref in the following way,
+assuming that <code>N</code> is the current namespace.</p>
+<ol>
+<li>if the name <code>R</code> does not contain a slash character, then
+the namespace <code>N</code> is prepended: the longref is thus <code>&quot;N/R&quot;</code>;</li>
+<li>if <code>R</code> contains a slash, then it is assumed to be a fully-qualified
+longref.</li>
+<li>as a special case, resources from the base game are accessible
+using the empty namespace, e.g. as <code>&quot;/sw1h01&quot;</code>.</li>
+</ol>
+<p>These rules allow referring to either a base game resource (case 3)
+or a resource from another mod (case 2), while still providing namespace
+separation by default (case 1).</p>
+<h3 id="namespacing-and-storage"><a class="header" href="#namespacing-and-storage">Namespacing and storage</a></h3>
+<p>When stored inside the database,
+longrefs are stored as fully-qualified strings
+(in the form <code>&quot;namespace/identifier&quot;</code>).
+Original game resrefs are stored in their original form
+as 8-byte strings.</p>
+<h3 id="implicit-resref-access"><a class="header" href="#implicit-resref-access">Implicit resref access</a></h3>
+<p><strong>TODO:</strong> the Lua interface has the following feature:
+whenever a structure field is of the “resref” type,
+it is possible to assign a full structure to this field;
+this will result in the assignment being made
+with the reference to this structure instead.</p>
+<p>For instance,</p>
+<pre><code class="language-lua">small_sword = simod.item(&quot;/sw1h01&quot;);
+store.inventory:push(small_sword); -- only pushes the resref &quot;/sw1h01&quot;
+</code></pre>
+<h2 id="conversion-to-game-format"><a class="header" href="#conversion-to-game-format">Conversion to game format</a></h2>
+<p>The resource identifier strings are converted to the resref format
+when the database is saved to the filesystem.</p>
+<p>More precisely, the <code>resref_dict</code> table contains a dictionary
+between string identifiers and resrefs.
+This table is filled by triggers: whenever a game value
+pointing to a resource is modified,
+the values <code>(&quot;long_resource_name&quot;, null)</code> are inserted.
+As part of the <code>save</code> operation,
+The compiler takes care of replacing all <code>null</code> fields by
+game-unique resref as needed.</p>
+<p>(These resrefs are deduced from the long resource name by truncating and
+enumerating).</p>
+<h3 id="internal-representation-of-resrefs-from-the-base-game"><a class="header" href="#internal-representation-of-resrefs-from-the-base-game">Internal representation of resrefs from the base game</a></h3>
+<p>Internally, resrefs from the base game are imported untouched as
+longrefs (no slash character is prepended; rule 3. above actually removes
+the slash character).
+This means that longrefs without a slash always designate base resources,
+while longrefs with a slash always designate mod-owned resources.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="core-functions-in-the-lua-api"><a class="header" href="#core-functions-in-the-lua-api">Core functions in the LUA API</a></h1>
 <p>The <code>simod</code> library contains the lowest-level API exported to Lua mod
 scripts. The remainder of the API is built on top of these functions.</p>
@@ -165,11 +226,6 @@ scripts. The remainder of the API is built on top of these functions.</p>
 a string <code>table</code> containing the name of one of the game's resource tables
 (<code>&quot;items&quot;</code>, <code>&quot;item_abilities&quot;</code> etc.).
 String matching is case-sensitive.</p>
-<h2 id="simodinsert-insertin-a-new-game-object"><a class="header" href="#simodinsert-insertin-a-new-game-object"><code>simod.insert</code>: insertin a new game object</a></h2>
-<p><code>simod.insert(table, row)</code></p>
-<p><code>row</code> is a table containing the row to be inserted, as key-value
-pairs; the keys are strings matching the column headers for this table
-(with the same case).</p>
 <h2 id="simodlisttable-parent-list-primary-keys-in-a-table"><a class="header" href="#simodlisttable-parent-list-primary-keys-in-a-table"><code>simod.list(table, [parent])</code>: list primary keys in a table</a></h2>
 <p>If <code>table</code> describes a top-level resource (e.g. <code>&quot;items&quot;</code>) then
 the <code>[parent]</code> value is not allowed.
@@ -180,12 +236,23 @@ appearing in this table.</p>
 this will return a list of all sub-resources whose parent attribute
 matches this primary key.</p>
 <p>If no rows match the query, then an empty table is returned.</p>
+<h2 id="simodinserttable-row-insert-a-new-game-object"><a class="header" href="#simodinserttable-row-insert-a-new-game-object"><code>simod.insert(table, row)</code>: insert a new game object</a></h2>
+<p><code>row</code> is a table containing the row to be inserted, as key-value
+pairs; the keys are strings matching the column headers for this table
+(with the same case).</p>
+<p>This returns the number of lines inserted.
+If the row does not match the format for this table then an error is
+thrown.</p>
+<h2 id="simodgettable-fieldname-primary-read-a-single-field-entry"><a class="header" href="#simodgettable-fieldname-primary-read-a-single-field-entry"><code>simod.get(table, fieldname, primary)</code>: read a single field entry</a></h2>
+<p>This returns the value of column <code>fieldname</code>
+on the line where the primary key is <code>primary</code>.</p>
+<p>If no such line (or column) exists then an error is thrown.</p>
 <h2 id="simodselecttable-primary-read-one-row-in-a-table"><a class="header" href="#simodselecttable-primary-read-one-row-in-a-table"><code>simod.select(table, primary)</code>: read one row in a table</a></h2>
 <p>This returns the content of the row with primary key <code>primary</code>
 in the table, as a Lua table whose keys are strings
 corresponding to the table's column names.</p>
 <p>If no row with the given primary key exists, then an error is thrown.</p>
-<h2 id="simodupdatetable-fieldname-primary-value-modify-an-entry-in-a-table"><a class="header" href="#simodupdatetable-fieldname-primary-value-modify-an-entry-in-a-table"><code>simod.update(table, fieldname, primary, value)</code>: modify an entry in a table.</a></h2>
+<h2 id="simodsettable-fieldname-primary-value-modify-an-entry-in-a-table"><a class="header" href="#simodsettable-fieldname-primary-value-modify-an-entry-in-a-table"><code>simod.set(table, fieldname, primary, value)</code>: modify an entry in a table.</a></h2>
 <p>This updates the row with primary key <code>primary</code> in the given table,
 setting the field with column name <code>fieldname</code> to the given <code>value</code>.
 The <code>fieldname</code> must be a string corresponding to one of the table's
@@ -200,6 +267,35 @@ and <code>false</code> otherwise.</p>
 currently cannot be deleted,
 since the data they represent is stored in the BIF files
 and not in the override directory.</p>
+<h2 id="simodschema"><a class="header" href="#simodschema"><code>simod.schema</code></a></h2>
+<p>This contains the description for the format of the game resource tables.
+For example, the entry <code>simod.schema.items</code> contains the description of
+items, as the following fields:</p>
+<ul>
+<li><code>simod.schema.items.fields</code>: list of fields and types, as key-pair values;</li>
+<li><code>simod.schema.items.is_subresource</code>: <code>nil</code> since this is not a
+subresource (otherwise <code>true</code>);</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="representation-of-objects-for-the-lua-api"><a class="header" href="#representation-of-objects-for-the-lua-api">Representation of objects for the Lua API</a></h1>
+<h2 id="resources"><a class="header" href="#resources">Resources</a></h2>
+<p>Resources are stored as a table <code>{_table, _key}</code>,
+where <code>_table</code> is a string containing the name of the SQL table
+to which the resource is attached,
+and <code>_key</code> contains the primary key for the row mapped to the resource.</p>
+<p>Access to the contents of the resource via <code>resource.field</code>
+is overloaded to a function which returns
+the value currently found in a database.
+Thus, the value of <code>resource.field</code> will remain up-to-date
+even if a SQL operation modified the contents of the database.</p>
+<h2 id="resource-vectors"><a class="header" href="#resource-vectors">Resource vectors</a></h2>
+<p>Resource vectors (e.g. the list of abilities of an item)
+are stored as a table <code>{_table, _parent}</code>,
+where <code>_table</code> is a string containing the name of the SQL table
+containing this kind of resource (e.g. <code>&quot;items_abilities&quot;</code>)
+and <code>_parent</code> is the primary key of the parent resource.</p>
+<p>Accessing the <code>i</code>-th entry of this resource vector
+triggers a SQL request which retrieves the corresponding
+primary key.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="design-goals"><a class="header" href="#design-goals">Design goals</a></h1>
 <p>Obviously, there already exists a perfectly fine tool for IE modding.
 However, starting from scratch allows us to design
@@ -218,7 +314,7 @@ cost).</p>
 mods are trying to access the same resource.</p>
 <p>(This is still <strong>TODO</strong> however; mostly, we need to fix an interface
 about what to do in the case of conflict).</p>
-<h3 id="namespacing"><a class="header" href="#namespacing">Namespacing</a></h3>
+<h3 id="namespacing-1"><a class="header" href="#namespacing-1">Namespacing</a></h3>
 <p>Identifiers for game resources and strings are abstracted as strings
 and namespaced per mod component.
 This completely removes the need for using mod prefixes
@@ -374,67 +470,6 @@ under which the resource will be saved.</p>
 <li>2da,</li>
 <li>script (de)compiling,</li>
 </ul>
-<div style="break-before: page; page-break-before: always;"></div><h1 id="resource-identifiers-and-namespacing"><a class="header" href="#resource-identifiers-and-namespacing">Resource identifiers and namespacing</a></h1>
-<p>In-game resources are identified by “resrefs”, which are 8-byte ASCII
-strings.
-These resrefs are also used as file names in the override directory,
-which puts a number of additional constraints on allowed characters:
-namely, the characters <code>&quot;+&lt;&gt;/\|?*:</code> are forbidden.</p>
-<p>Inside the <code>simod</code> database however, resources are identified by
-arbitrary strings (hereafter designated as “longrefs”).</p>
-<h2 id="namespacing-1"><a class="header" href="#namespacing-1">Namespacing</a></h2>
-<p>To protect from resource conflicts, mod components generally do not
-access them globally.</p>
-<p>To each mod component is attached a <em>namespace</em>, in the form of a string.
-Whenever a mod accesses a resource identifier <code>R</code>
-it is translated to a longref in the following way,
-assuming that <code>N</code> is the current namespace.</p>
-<ol>
-<li>if the name <code>R</code> does not contain a slash character, then
-the namespace <code>N</code> is prepended: the longref is thus <code>&quot;N/R&quot;</code>;</li>
-<li>if <code>R</code> contains a slash, then it is assumed to be a fully-qualified
-longref.</li>
-<li>as a special case, resources from the base game are accessible
-using the empty namespace, e.g. as <code>&quot;/sw1h01&quot;</code>.</li>
-</ol>
-<p>These rules allow referring to either a base game resource (case 3)
-or a resource from another mod (case 2), while still providing namespace
-separation by default (case 1).</p>
-<h3 id="namespacing-and-storage"><a class="header" href="#namespacing-and-storage">Namespacing and storage</a></h3>
-<p>When stored inside the database,
-longrefs are stored as fully-qualified strings
-(in the form <code>&quot;namespace/identifier&quot;</code>).
-Original game resrefs are stored in their original form
-as 8-byte strings.</p>
-<h3 id="implicit-resref-access"><a class="header" href="#implicit-resref-access">Implicit resref access</a></h3>
-<p><strong>TODO:</strong> the Lua interface has the following feature:
-whenever a structure field is of the “resref” type,
-it is possible to assign a full structure to this field;
-this will result in the assignment being made
-with the reference to this structure instead.</p>
-<p>For instance,</p>
-<pre><code class="language-lua">small_sword = simod.item(&quot;/sw1h01&quot;);
-store.inventory:push(small_sword); -- only pushes the resref &quot;/sw1h01&quot;
-</code></pre>
-<h2 id="conversion-to-game-format"><a class="header" href="#conversion-to-game-format">Conversion to game format</a></h2>
-<p>The resource identifier strings are converted to the resref format
-when the database is saved to the filesystem.</p>
-<p>More precisely, the <code>resref_dict</code> table contains a dictionary
-between string identifiers and resrefs.
-This table is filled by triggers: whenever a game value
-pointing to a resource is modified,
-the values <code>(&quot;long_resource_name&quot;, null)</code> are inserted.
-As part of the <code>save</code> operation,
-The compiler takes care of replacing all <code>null</code> fields by
-game-unique resref as needed.</p>
-<p>(These resrefs are deduced from the long resource name by truncating and
-enumerating).</p>
-<h3 id="internal-representation-of-resrefs-from-the-base-game"><a class="header" href="#internal-representation-of-resrefs-from-the-base-game">Internal representation of resrefs from the base game</a></h3>
-<p>Internally, resrefs from the base game are imported untouched as
-longrefs (no slash character is prepended; rule 3. above actually removes
-the slash character).
-This means that longrefs without a slash always designate base resources,
-while longrefs with a slash always designate mod-owned resources.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="string-references"><a class="header" href="#string-references">String references</a></h1>
 <p>In-game strings are collected in one or two files, <code>dialog.tlk</code> and
 (depending on user language) <code>dialogF.tlk</code>,

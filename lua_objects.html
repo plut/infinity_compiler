@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Translations - &#x60;simod&#x60; user documentation</title>
+        <title>Object-oriented front-end - &#x60;simod&#x60; user documentation</title>
         <!-- Custom HTML head -->
         <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
         <meta name="description" content="">
@@ -77,7 +77,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">2.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="lua_core.html"><strong aria-hidden="true">2.2.</strong> Core functions</a></li><li class="chapter-item expanded "><a href="lua_objects.html"><strong aria-hidden="true">2.3.</strong> Object-oriented front-end</a></li></ol></li><li class="chapter-item expanded "><div><strong aria-hidden="true">3.</strong> API for translators</div></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">4.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">5.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><div><strong aria-hidden="true">5.1.</strong> Implementation of namespacing</div></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">5.2.</strong> Game strings</a></li><li class="chapter-item expanded "><a href="translations.html" class="active"><strong aria-hidden="true">5.3.</strong> Translations</a></li></ol></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">2.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="lua_core.html"><strong aria-hidden="true">2.2.</strong> Core functions</a></li><li class="chapter-item expanded "><a href="lua_objects.html" class="active"><strong aria-hidden="true">2.3.</strong> Object-oriented front-end</a></li></ol></li><li class="chapter-item expanded "><div><strong aria-hidden="true">3.</strong> API for translators</div></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">4.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">5.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><div><strong aria-hidden="true">5.1.</strong> Implementation of namespacing</div></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">5.2.</strong> Game strings</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">5.3.</strong> Translations</a></li></ol></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -136,70 +136,36 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="translations"><a class="header" href="#translations">Translations</a></h1>
-<h2 id="language-identifiers"><a class="header" href="#language-identifiers">Language identifiers</a></h2>
-<p>Languages are represented by their 5-letter name (as in <code>&quot;en_US&quot;</code>)
-or, for female variants, by their 6-letter name (as in <code>&quot;fr_FRF&quot;</code>).</p>
-<p>Inside the database, female variants are handled as
-distinct languages from male variants;
-however a number of rules exist </p>
-<p>(The 5- or 6-letter language identifier is lossless from the game's
-<code>&quot;dialog.tlk&quot;</code> path; this simplifies backups etc.)</p>
-<h2 id="translations-1"><a class="header" href="#translations-1">Translations</a></h2>
-<p>String translation is handled through the use of the <code>translations_X</code>
-table, where <code>X</code> is a 5- or 6- language identifier.
-This table contains data similar to the game's <code>.tlk</code> file,
-except that it is indexed by native strings instead of strrefs.</p>
-<p>Any native string absent from this dictionary is left untranslated;
-only its markers (see below) are discarded.
-This is intended as a sane default value where the player,
-when a string has not (yet) been translated, will see the string in the
-original language, which is most often English.</p>
-<h2 id="markers"><a class="header" href="#markers">Markers</a></h2>
-<p>Native strings can contain markers of the following form: <code>{?text}</code>.
-Such markers are discarded when a native string is used as the default
-value for a game string in the absence of an appropriate translation.</p>
-<p>These markers, however, are seen by translators when translating the
-native string to another game language; most tools will even highlight
-them (these look like Python formatting parameters).
-It is thus <strong>strongly recommended</strong> to include markers in native strings
-to signal any possible grammatical ambiguity
-including at least the following cases:</p>
-<ul>
-<li>distinguishing verbs from nouns etc.: <code>&quot;{?verb}guard&quot;</code> vs.
-`&quot;{?noun}guard&quot;;</li>
-<li>marking grammatical gender where it is not obvious:
-e.g. <code>&quot;come here, my dear {?male}friend&quot;</code>.</li>
-</ul>
-<p>Keep in mind that translators, when translating a string,
-will generally not have access to context beyond the string itself.
-Make liberal use of markers to help them produce quality work.</p>
-<h2 id="gendered-languages"><a class="header" href="#gendered-languages">Gendered languages</a></h2>
-<p>When producing translations for gendered languages,
-the general case is that a single translation will be produced
-for both gender variants.</p>
-<h3 id="gender-markers"><a class="header" href="#gender-markers">Gender markers</a></h3>
-<p>The empty marker <code>{?}</code> is a special case.
-Including this marker in a native string marks this string as
-needing two translations for gendered languages.
-This means that, while a single native string is present in the source file,
-the translator will be prompted to translate two strings,
-where the empty marker will be replaced by either <code>{?M}</code> or <code>{?F}</code>.</p>
-<p>This marker has no special meaning for non-gendered languages;
-in this case the translator will see only a single string,
-still bearing its empty marker.</p>
-<h2 id="conversion-to-strref"><a class="header" href="#conversion-to-strref">Conversion to strref</a></h2>
-<p>Conversion between native strings and strref is performed iby the
-<code>strref_dict</code> table in a way similar to the <code>resref_dict</code> table.
-The algorithm for generating new strrefs is of course different (the
-lowest available value is used).</p>
+                        <h1 id="representation-of-objects-for-the-lua-api"><a class="header" href="#representation-of-objects-for-the-lua-api">Representation of objects for the Lua API</a></h1>
+<h2 id="resources"><a class="header" href="#resources">Resources</a></h2>
+<p>Resources are stored as a table <code>{_table, _key}</code>,
+where <code>_table</code> is a string containing the name of the SQL table
+to which the resource is attached,
+and <code>_key</code> contains the primary key for the row mapped to the resource.</p>
+<p>Access to the contents of the resource via <code>resource.field</code>
+is overloaded to a function which returns
+the value currently found in a database.
+Thus, the value of <code>resource.field</code> will remain up-to-date
+even if a SQL operation modified the contents of the database.</p>
+<h2 id="resource-vectors"><a class="header" href="#resource-vectors">Resource vectors</a></h2>
+<p>Resource vectors (e.g. the list of abilities of an item)
+are stored as a table <code>{_table, _parent}</code>,
+where <code>_table</code> is a string containing the name of the SQL table
+containing this kind of resource (e.g. <code>&quot;items_abilities&quot;</code>)
+and <code>_parent</code> is the primary key of the parent resource.</p>
+<p>Accessing the <code>i</code>-th entry of this resource vector
+triggers a SQL request which retrieves the corresponding
+primary key.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="strrefs.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="lua_core.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
+                            </a>
+                            <a rel="next" href="design.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
                             </a>
                         <div style="clear: both"></div>
                     </nav>
@@ -207,8 +173,11 @@ lowest available value is used).</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="strrefs.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="lua_core.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
+                    </a>
+                    <a rel="next" href="design.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
                     </a>
             </nav>
 

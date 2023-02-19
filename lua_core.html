@@ -77,7 +77,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="lua_core.html" class="active"><strong aria-hidden="true">2.1.</strong> Core functions</a></li></ol></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">3.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">4.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">4.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">4.2.</strong> Game strings</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">4.3.</strong> Translations</a></li></ol></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">2.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="lua_core.html" class="active"><strong aria-hidden="true">2.2.</strong> Core functions</a></li><li class="chapter-item expanded "><a href="lua_objects.html"><strong aria-hidden="true">2.3.</strong> Object-oriented front-end</a></li></ol></li><li class="chapter-item expanded "><div><strong aria-hidden="true">3.</strong> API for translators</div></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">4.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">5.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><div><strong aria-hidden="true">5.1.</strong> Implementation of namespacing</div></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">5.2.</strong> Game strings</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">5.3.</strong> Translations</a></li></ol></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -143,11 +143,6 @@ scripts. The remainder of the API is built on top of these functions.</p>
 a string <code>table</code> containing the name of one of the game's resource tables
 (<code>&quot;items&quot;</code>, <code>&quot;item_abilities&quot;</code> etc.).
 String matching is case-sensitive.</p>
-<h2 id="simodinsert-insertin-a-new-game-object"><a class="header" href="#simodinsert-insertin-a-new-game-object"><code>simod.insert</code>: insertin a new game object</a></h2>
-<p><code>simod.insert(table, row)</code></p>
-<p><code>row</code> is a table containing the row to be inserted, as key-value
-pairs; the keys are strings matching the column headers for this table
-(with the same case).</p>
 <h2 id="simodlisttable-parent-list-primary-keys-in-a-table"><a class="header" href="#simodlisttable-parent-list-primary-keys-in-a-table"><code>simod.list(table, [parent])</code>: list primary keys in a table</a></h2>
 <p>If <code>table</code> describes a top-level resource (e.g. <code>&quot;items&quot;</code>) then
 the <code>[parent]</code> value is not allowed.
@@ -158,12 +153,23 @@ appearing in this table.</p>
 this will return a list of all sub-resources whose parent attribute
 matches this primary key.</p>
 <p>If no rows match the query, then an empty table is returned.</p>
+<h2 id="simodinserttable-row-insert-a-new-game-object"><a class="header" href="#simodinserttable-row-insert-a-new-game-object"><code>simod.insert(table, row)</code>: insert a new game object</a></h2>
+<p><code>row</code> is a table containing the row to be inserted, as key-value
+pairs; the keys are strings matching the column headers for this table
+(with the same case).</p>
+<p>This returns the number of lines inserted.
+If the row does not match the format for this table then an error is
+thrown.</p>
+<h2 id="simodgettable-fieldname-primary-read-a-single-field-entry"><a class="header" href="#simodgettable-fieldname-primary-read-a-single-field-entry"><code>simod.get(table, fieldname, primary)</code>: read a single field entry</a></h2>
+<p>This returns the value of column <code>fieldname</code>
+on the line where the primary key is <code>primary</code>.</p>
+<p>If no such line (or column) exists then an error is thrown.</p>
 <h2 id="simodselecttable-primary-read-one-row-in-a-table"><a class="header" href="#simodselecttable-primary-read-one-row-in-a-table"><code>simod.select(table, primary)</code>: read one row in a table</a></h2>
 <p>This returns the content of the row with primary key <code>primary</code>
 in the table, as a Lua table whose keys are strings
 corresponding to the table's column names.</p>
 <p>If no row with the given primary key exists, then an error is thrown.</p>
-<h2 id="simodupdatetable-fieldname-primary-value-modify-an-entry-in-a-table"><a class="header" href="#simodupdatetable-fieldname-primary-value-modify-an-entry-in-a-table"><code>simod.update(table, fieldname, primary, value)</code>: modify an entry in a table.</a></h2>
+<h2 id="simodsettable-fieldname-primary-value-modify-an-entry-in-a-table"><a class="header" href="#simodsettable-fieldname-primary-value-modify-an-entry-in-a-table"><code>simod.set(table, fieldname, primary, value)</code>: modify an entry in a table.</a></h2>
 <p>This updates the row with primary key <code>primary</code> in the given table,
 setting the field with column name <code>fieldname</code> to the given <code>value</code>.
 The <code>fieldname</code> must be a string corresponding to one of the table's
@@ -178,15 +184,24 @@ and <code>false</code> otherwise.</p>
 currently cannot be deleted,
 since the data they represent is stored in the BIF files
 and not in the override directory.</p>
+<h2 id="simodschema"><a class="header" href="#simodschema"><code>simod.schema</code></a></h2>
+<p>This contains the description for the format of the game resource tables.
+For example, the entry <code>simod.schema.items</code> contains the description of
+items, as the following fields:</p>
+<ul>
+<li><code>simod.schema.items.fields</code>: list of fields and types, as key-pair values;</li>
+<li><code>simod.schema.items.is_subresource</code>: <code>nil</code> since this is not a
+subresource (otherwise <code>true</code>);</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="lua.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="resrefs.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
-                            <a rel="next" href="design.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next" href="lua_objects.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
                         <div style="clear: both"></div>
@@ -195,10 +210,10 @@ and not in the override directory.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="lua.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="resrefs.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
-                    <a rel="next" href="design.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next" href="lua_objects.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

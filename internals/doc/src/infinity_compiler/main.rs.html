@@ -2968,6 +2968,14 @@
 <a href="#2968" id="2968">2968</a>
 <a href="#2969" id="2969">2969</a>
 <a href="#2970" id="2970">2970</a>
+<a href="#2971" id="2971">2971</a>
+<a href="#2972" id="2972">2972</a>
+<a href="#2973" id="2973">2973</a>
+<a href="#2974" id="2974">2974</a>
+<a href="#2975" id="2975">2975</a>
+<a href="#2976" id="2976">2976</a>
+<a href="#2977" id="2977">2977</a>
+<a href="#2978" id="2978">2978</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Compiler between IE game files and a SQLite database.
 </span><span class="attr">#![allow(
 	unused_attributes,
@@ -5674,45 +5682,53 @@ begin&quot;#</span>);
 	<span class="comment">// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
 	</span>lua.scope(|scope| {
+		<span class="comment">// lua schema is defined by a table of strings in the following way:
+		// items= { weight= &quot;integer&quot;, name= &quot;strref&quot;, abilities= &quot;subresource&quot; }
+		// since we known in advance that a lot of those strings will be
+		// identical (and Lua interns strings anyway), we might as well
+		// allocate them first:
+		</span><span class="kw">let </span>marker_integer = lua.create_string(<span class="string">&quot;integer&quot;</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span>marker_text = lua.create_string(<span class="string">&quot;text&quot;</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span>marker_strref = lua.create_string(<span class="string">&quot;strref&quot;</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span>marker_resref = lua.create_string(<span class="string">&quot;resref&quot;</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span>marker_subresource = lua.create_string(<span class="string">&quot;subresource&quot;</span>)<span class="question-mark">?</span>;
+		<span class="comment">// constant key entries for schema table; same behaviour:
+		</span><span class="kw">let </span>fields_key = lua.create_string(<span class="string">&quot;fields&quot;</span>)<span class="question-mark">?</span>;
+		<span class="kw">let </span>is_subresource_key = lua.create_string(<span class="string">&quot;is_subresource&quot;</span>)<span class="question-mark">?</span>;
+
 		<span class="kw">let </span>simod = lua.create_table()<span class="question-mark">?</span>;
-		<span class="kw">let </span>lua_schema = lua.create_table()<span class="question-mark">?</span>;
-		ALL_SCHEMAS.try_map_mut(|schema| {
+
+		<span class="kw">let </span>simod_schema = lua.create_table()<span class="question-mark">?</span>;
+		<span class="comment">// there are a lot of `clone()` calls in there: all those values are
+		// really `LuaRef()`, which _should_ implement `Copy`, but are cheap
+		// to clone anyway (a pointer + an integer).
+		</span>ALL_SCHEMAS.recurse_mut(|schema, name, parent_fields| {
 			<span class="kw">let </span>fields = lua.create_table()<span class="question-mark">?</span>;
-<span class="comment">// 			let context = lua.create_table()?;
-			</span><span class="kw">for </span>f <span class="kw">in </span>schema.fields.iter() {
-				fields.set(f.fname, f.ftype.description())<span class="question-mark">?</span>;
+			<span class="kw">for </span>f <span class="kw">in </span>schema.fields.iter() {
+				<span class="kw">use </span><span class="kw">crate</span>::sql_rows::FieldType;
+				<span class="kw">let </span>marker = <span class="kw">match </span>f.ftype {
+					FieldType::Integer =&gt; marker_integer.clone(),
+					FieldType::Text =&gt; marker_text.clone(),
+					FieldType::Resref =&gt; marker_resref.clone(),
+					FieldType::Strref =&gt; marker_strref.clone(),
+				};
+				fields.set(f.fname, marker)<span class="question-mark">?</span>;
 			}
-<span class="comment">// 			for col in schema.context() {
-// 				context.push(col.fname)?;
-// 			}
-			</span><span class="kw">let </span>res_schema = lua.create_table()<span class="question-mark">?</span>;
-			res_schema.set(<span class="string">&quot;fields&quot;</span>, fields)<span class="question-mark">?</span>;
-<span class="comment">// 			res_schema.set(&quot;context&quot;, context)?;
-// 			res_schema.set(&quot;primary&quot;, schema.primary().fname)?;
-			</span>lua_schema.set(schema.to_string(), res_schema)<span class="question-mark">?</span>;
-			mlua_ok(())
-		})<span class="question-mark">?</span>;
-		<span class="comment">// Step 2: build the sub-schema relations
-		// We do this in a second pass since by now all resource tables exist
-		</span><span class="kw">let </span>lua_subresources = lua.create_table()<span class="question-mark">?</span>;
-		ALL_SCHEMAS.try_map_mut(|schema| {
-			<span class="comment">// root is &amp;&amp;str
-			// parent is &amp;String
-			// schema is &amp;schema
-			</span>lua_subresources.set::&lt;<span class="kw-2">&amp;</span>str,<span class="kw">_</span>&gt;(schema.name.as_ref(),
-				lua.create_table()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-			<span class="kw">if let </span><span class="prelude-val">Some</span>((parent, _root)) = schema.parent_root.as_ref() {
-				<span class="kw">if let </span><span class="prelude-val">Some</span>(suffix) = schema.name.strip_prefix(parent.as_str()) {
-					<span class="kw">if </span>suffix.as_bytes()[<span class="number">0</span>] == <span class="string">b&#39;_&#39; </span>{
-						lua_subresources.get::&lt;<span class="kw-2">&amp;</span>str,mlua::Table&lt;<span class="lifetime">&#39;_</span>&gt;&gt;(parent.as_str())<span class="question-mark">?
-							</span>.set(<span class="kw-2">&amp;</span>suffix[<span class="number">1</span>..], <span class="bool-val">true</span>)<span class="question-mark">?
-					</span>}
-				}
+			<span class="comment">// store this in `simod.schema.X.fields`:
+			</span><span class="kw">let </span>this_schema = lua.create_table()<span class="question-mark">?</span>;
+			this_schema.set(fields_key.clone(), fields.clone())<span class="question-mark">?</span>;
+			<span class="comment">// we mark ourself as a subresource for the parent (note that the
+			// `recurse_mut` function does not allow easily doing this on the
+			// parent side; we use the `parent_table` we got as our state):
+			</span><span class="kw">if let </span><span class="prelude-val">Some</span>((_parent, _root)) = schema.parent_root.as_ref() {
+				parent_fields.set(name, marker_subresource.clone())<span class="question-mark">?</span>;
+				this_schema.set(is_subresource_key.clone(), <span class="bool-val">true</span>)<span class="question-mark">?</span>;
 			}
-			mlua_ok(())
-		})<span class="question-mark">?</span>;
-		simod.set(<span class="string">&quot;subresources&quot;</span>, lua_subresources)<span class="question-mark">?</span>;
-		simod.set(<span class="string">&quot;schema&quot;</span>, lua_schema)<span class="question-mark">?</span>;
+			simod_schema.set(schema.name.as_str(), this_schema)<span class="question-mark">?</span>;
+			<span class="comment">// pass the resulting table to our branches, and return nothing:
+			</span>mlua_ok((fields, nothing))
+		}, <span class="string">&quot;&quot;</span>, <span class="kw-2">&amp;</span>simod_schema)<span class="question-mark">?</span>;
+		simod.set(<span class="string">&quot;schema&quot;</span>, simod_schema)<span class="question-mark">?</span>;
 		simod.set(<span class="string">&quot;dump&quot;</span>, scope.create_function(
 		|_lua, (query,): (String,)| {
 			<span class="macro">debug!</span>(<span class="string">&quot;lua called exec with query {query}&quot;</span>);
