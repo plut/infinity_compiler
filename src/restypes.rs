@@ -164,47 +164,10 @@ impl ResourceIO for Item {
 	}
 }
 
-/// Builds the full list of schemas for all resource tables.
+/// The fictive structure holding all top-level tables.
 ///
-/// The syntax is as follows:
-/// `table_name: StructType = header`,
-/// where `header` is either:
-///  - `Top("extension", resource_type)`,
-///  - `Sub(parent [, root])`
-///
-/// In these:
-///  - `extension` is the file extension for this resource (e.g. `"itm"`),
-///  - `resource_type` is the numeric identifier (e.g. 0x03ed),
-///  - `parent` is the identifier for the parent table,
-///  - `root` is the identifier for the highest resource table (strictly
-///  put, this could be derived from the parent relations, but
-///  `macro_rules!` is not too practical for walking in trees).
-macro_rules! tables {
-	($($tablename:ident: $ty:ty = $which:ident ($($arg:tt)*));*$(;)?) => {
-		#[allow(non_snake_case)]
-		impl Restype {
-			pub fn from(e: &str)->Self {
-				$(table_restype!(e,$which($($arg)*)));*;
-				Self(0)
-			}
-		}
-	}
-}
-macro_rules! table_restype {
-	{$e:ident, Sub($($arg:tt)*)} => { };
-	{$e:ident, Top($ext:literal, $restype: literal)} => {
-		if $e.eq_ignore_ascii_case($ext) { return Self($restype) }
-	}
-}
-tables! {
-	items: Item = Top ("itm", 0x03ed);
-	item_abilities: ItemAbility = Sub (items);
-	item_ability_effects: ItemEffect = Sub(item_abilities, items);
-	item_effects: ItemEffect = Sub (items);
-}
-// trace_macros!(true);
-// trace_macros!(false);
-
+/// This structure is never actually built; only the corresponding
+/// resource trees are.
 #[derive(Debug,SqlRow,ResourceTree)]
 pub struct Root {
 	items: Vec::<Item>,

@@ -57,6 +57,3 @@ x:
 	-echo "select * from add_items" | sqlite3 game.sqlite
 	-echo "select parent,id from item_abilities where parent in (select id from add_items)" |sqlite3 game.sqlite
 	-echo "select parent,root,id,opcode from item_effects where root in (select id from add_items)" |sqlite3 game.sqlite
-
-save:
-	$(RUN) -O save.log save

@@ -906,6 +906,19 @@ impl ResReader<'_> {
 		}
 	}
 }
+/// The identifier for a resource type, as found in the filesystem:
+/// either a file extension or a numeric id.
+#[derive(Debug,Clone,Copy)]
+pub enum HandleRestype<'a> {
+	Extension(&'a str),
+	Numeric(Restype),
+}
+impl<'a> From<&'a str> for HandleRestype<'a> {
+	fn from(source: &'a str)->Self { Self::Extension(source) }
+}
+impl From<Restype> for HandleRestype<'_> {
+	fn from(source: Restype)->Self { Self::Numeric(source) }
+}
 /// A (lazy) accessor to a game resource.
 #[derive(Debug)]
 pub struct ResHandle<'a> {
@@ -1009,7 +1022,7 @@ impl GameIndex {
 	/// statement) allows ignoring of BIF resources masked by an override
 	/// file.
 	pub fn for_each<F>(&self, mut f: F)->Result<()>
-	where F: (FnMut(Restype, ResHandle<'_>)->Result<()>)
+	where F: (FnMut(HandleRestype<'_>, ResHandle<'_>)->Result<()>)
 	{
 		let pb = Progress::new(self.resources.len(), "resources");
 		let over_dir = self.root.join("override"); // "override" is a reserved kw
@@ -1025,7 +1038,7 @@ impl GameIndex {
 				if pos > 8 { continue }
 				let resref = Resref(name[..pos].into());
 				let ext = &name[pos+1..];
-				let restype = Restype::from(ext);
+				let restype = HandleRestype::from(ext);
 				trace!("reading override file: {name}; restype={restype:?}");
 				let path = entry.path();
 				let handle = ResHandle { resref, reader: ResReader::Override(&path) };
@@ -1043,7 +1056,7 @@ impl GameIndex {
 					reader: ResReader::Bif(&mut bif, res.location, res.restype,) };
 				pb.inc(1);
 				pb1.inc(1);
-				f(res.restype, handle)?
+				f(HandleRestype::from(res.restype), handle)?
 			}
 		}
 		Ok(())
@@ -1719,9 +1732,12 @@ pub static ALL_SCHEMAS: Lazy<RootForest<Schema>> = Lazy::new(|| {
 
 /// A trait containing resource I/O functions.
 ///
-/// This is only available for top-level resources.
+/// Each top-level resource as defined in `restypes.rs` should implement
+/// this (inside `restypes.rs`).
 pub trait ResourceIO: ResourceTree {
+	/// The file extension attached to this resource (e.g. `".itm"`).
 	const EXTENSION: &'static str;
+	/// The 16-bit resource type (e.g. `0x03ed`).
 	const RESTYPE: Restype;
 	// Required methods
 	/// Loads a resource from filesystem.
@@ -1764,6 +1780,8 @@ pub trait ResourceIO: ResourceTree {
 		// TODO: increase counter if possible
 		Ok(())
 	}
+	/// Saves all dirty resources to filesystem, and clears the `orphan_x`
+	/// and `dirty_x` tables.
 	fn save_all_dirty(tree: &mut Tree<Self::StatementForest<'_>>, db: &impl DbInterface, name: &str)->Result<usize> {
 		let mut n_saved = 0;
 		for (resref, mut resource) in Self::read_rows::<Resref>(tree, ())?.flatten() {
@@ -1778,6 +1796,14 @@ pub trait ResourceIO: ResourceTree {
 		db.exec(format!(r#"delete from "dirty_{name}""#))?;
 		db.exec(format!(r#"delete from "orphan_{name}""#))?;
 		Ok(n_saved)
+	}
+	/// Detects restype.
+	fn is_restype(restype: crate::gamefiles::HandleRestype<'_>)->bool {
+		match restype {
+			crate::gamefiles::HandleRestype::Numeric(r) => r == Self::RESTYPE,
+			crate::gamefiles::HandleRestype::Extension(ext) =>
+				ext.eq_ignore_ascii_case(Self::EXTENSION),
+		}
 	}
 }
 
@@ -1804,8 +1830,6 @@ struct TlkHeader {
 /// A game string as present in a .tlk file.
 #[derive(Debug,Default,Clone,Pack,SqlRow)]
 pub struct GameString {
-// #[column("primary key")]
-// 	strref: NotPacked::<i32>,
 	flags: u16,
 	sound: Resref,
 	volume: i32,
@@ -2070,15 +2094,12 @@ from "new_strings"
 				db.prepare(&schema.insert_sql("load_"))
 					.with_context(|| format!("insert statement for table '{schema}'")))?;
 			game.for_each(move |restype, handle| {
-				trace!("found resource {}.{:#04x}", handle.resref, restype.0);
+				trace!("found resource {}.{:?}", handle.resref, restype);
 // 				base.register(&resref)
 // 					.with_context(|| format!("could not register resref:{resref}"))?;
-				#[allow(clippy::single_match)]
-				match restype {
-				Item::RESTYPE =>
-					Item::load_and_insert(db, &mut tables.items, handle)?,
-				_ => (),
-				};
+				if Item::is_restype(restype) {
+					Item::load_and_insert(db, &mut tables.items, handle)?
+				}
 				Ok(())
 			})?;
 			pb.inc(1);
