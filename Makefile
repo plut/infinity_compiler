@@ -37,6 +37,9 @@ test:
 	rm -rf $(BG)/simod_out
 #  	$(RUN) -O init.log init -B
 	echo "update \"items\" set price=5,name='A new name for Albruin' where id='sw1h34';" | sqlite3 $(DB)
+	echo "select * from save_items where id='sw1h34'"|sqlite3 game.sqlite
+	echo "select * from save_items_abilities where root='sw1h34'"|sqlite3 game.sqlite
+	echo "select * from strref_dict"|sqlite3 game.sqlite
 #  	$(RUN) -O show.log show sw1h34.itm
 #  	$(RUN) -O add.log add target
 	$(RUN) -O save.log save

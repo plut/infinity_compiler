@@ -5,6 +5,7 @@
  + port most functions to use this instead of old const `SCHEMAS`
  + then remove code from `TopResource` and see how to rec. i/o from db
  + reinstate some code deleted since `69789`
+ - a command-line option to make it headless (disable progress bars)
  - we need a proper `Table` type with
   - a FromSqlMulti + ToSqlMulti type for indexing,
   - a SqlRow for payload,
@@ -23,6 +24,7 @@
  - [+] atomic save to override
  - [+] they need to be read as resource handles
 # Lua side
+ - [ ] make every field access lazy (this is probably simplest way)
  - [ ] decide when conversion from native to strref (etc.1
 ## Primitive operations
  - [x] `update`

@@ -1634,11 +1634,13 @@ pub trait ByName {
 	/// a mess, and we want to interrupt search as soon as we find *and*
 	/// cut branches with a non-matching name:
 	fn by_name<'a>(&'a self, target: &str)->Result<&'a Self::In> {
-		self.by_name1(target).ok_or(Error::UnknownTable(target.into()).into())
+		self.by_name1(target).ok_or_else(||
+			Error::UnknownTable(target.into()).into())
 	}
 	/// Same, with mutable reference.
 	fn by_name_mut<'a>(&'a mut self, target: &str)->Result<&'a mut Self::In> {
-		self.by_name_mut1(target).ok_or(Error::UnknownTable(target.into()).into())
+		self.by_name_mut1(target).ok_or_else(||
+			Error::UnknownTable(target.into()).into())
 	}
 }
 /// Trait containing the basic recursion function for forests.
@@ -1735,10 +1737,17 @@ pub trait ResourceIO: ResourceTree<Primary=Resref> {
 	/// Saves a resource to filesystem.
 	fn save(&mut self, io: impl Write+Seek+Debug)->Result<()>;
 	// Provided methods
+	/// Entry point for loading: loads from filesystem, inserts into
+	/// database.
+	///
+	/// Could be implemented ad-hoc for not allocating vectors, but this
+	/// is supposed to be a one-time cost anyway.
+	#[inline]
 	fn load_and_insert(db: &Connection, tree: &mut Tree<Self::StatementForest<'_>>, mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
 		let resource = Self::load(handle.open()?)?;
 		resource.insert_as_topresource(db, tree, handle.resref)?;
 		// TODO: mark resource as override
+		// using "insert into "override" values "(resref,EXTENSION)"
 		// TODO: increase counter if possible
 		Ok(())
 	}
