@@ -2906,15 +2906,6 @@
 <a href="#2906" id="2906">2906</a>
 <a href="#2907" id="2907">2907</a>
 <a href="#2908" id="2908">2908</a>
-<a href="#2909" id="2909">2909</a>
-<a href="#2910" id="2910">2910</a>
-<a href="#2911" id="2911">2911</a>
-<a href="#2912" id="2912">2912</a>
-<a href="#2913" id="2913">2913</a>
-<a href="#2914" id="2914">2914</a>
-<a href="#2915" id="2915">2915</a>
-<a href="#2916" id="2916">2916</a>
-<a href="#2917" id="2917">2917</a>
 </pre><pre class="rust"><code><span class="doccomment">//! Compiler between IE game files and a SQLite database.
 </span><span class="attr">#![allow(
 	unused_attributes,
@@ -2966,7 +2957,7 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>macros::{Pack,SqlRow};
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span><span class="kw">crate</span>::gamefiles::{Resref,Strref};
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span><span class="kw">crate</span>::database::{GameDB,DbInterface};
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span><span class="kw">crate</span>::toolbox::{Progress,scope_trace,NullDisplay};
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span><span class="kw">crate</span>::toolbox::{Progress,scope_trace,NullDisplay,create_dir,with_dir};
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>infallible&lt;T&gt;(x: T)-&gt;std::result::Result&lt;T,Infallible&gt;{ <span class="prelude-val">Ok</span>(x) }
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>any_ok&lt;T&gt;(x: T)-&gt;<span class="prelude-ty">Result</span>&lt;T&gt; { <span class="prelude-val">Ok</span>(x) }
@@ -3085,6 +3076,26 @@
 	}
 }
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>scope_trace;
+
+<span class="doccomment">/// Creates the directory unless it exists
+</span><span class="kw">pub fn </span>create_dir(path: <span class="kw">impl </span>AsRef&lt;Path&gt;)-&gt;io::Result&lt;()&gt; {
+	<span class="kw">let </span>path = path.as_ref();
+	<span class="kw">match </span>fs::create_dir(path) {
+		<span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; { <span class="macro">info!</span>(<span class="string">&quot;creating directory {path:?}&quot;</span>); <span class="prelude-val">Ok</span>(()) }
+		<span class="prelude-val">Err</span>(e) =&gt; <span class="kw">match </span>e.kind() {
+			io::ErrorKind::AlreadyExists =&gt;
+				{ <span class="macro">info!</span>(<span class="string">&quot;not creating directory {path:?}: it already exists&quot;</span>); <span class="prelude-val">Ok</span>(()) },
+			<span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(e) } }
+}
+<span class="doccomment">/// Executes a closure in a given directory and returns to the original
+/// directory as soon as the closure returns.
+</span><span class="kw">pub fn </span>with_dir&lt;T&gt;(dir: <span class="kw">impl </span>AsRef&lt;Path&gt;, f: <span class="kw">impl </span>FnOnce()-&gt;<span class="prelude-ty">Result</span>&lt;T&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;T&gt; {
+	<span class="kw">let </span>orig_dir = std::env::current_dir()<span class="question-mark">?</span>;
+	std::env::set_current_dir(dir)<span class="question-mark">?</span>;
+	<span class="kw">let </span>res = f();
+	std::env::set_current_dir(orig_dir)<span class="question-mark">?</span>;
+	res
+}
 } <span class="comment">// mod toolbox
 </span><span class="kw">pub mod </span>pack {
 <span class="doccomment">//! I/O to binary format. See the [`Pack`] trait.
@@ -3349,10 +3360,12 @@
 		<span class="kw">let </span><span class="kw-2">mut </span>r = String::new();
 		<span class="kw">for </span>(i, c) <span class="kw">in </span><span class="self">self</span>.as_ref().column_names().iter().enumerate() {
 			<span class="kw">match </span><span class="self">self</span>.get_ref(i) {
-				<span class="prelude-val">Ok</span>(ValueRef::Null) =&gt; <span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>r, <span class="string">&quot;  [{i:3}] {c} = \x1b[31mNull\x1b[m&quot;</span>),
-				<span class="prelude-val">Ok</span>(ValueRef::Text(s)) =&gt; <span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>r, <span class="string">&quot;  [{i:3}] {c} = Text(\&quot;{}\&quot;)&quot;</span>,
+				<span class="prelude-val">Ok</span>(ValueRef::Null) =&gt;
+					<span class="macro">writeln!</span>(<span class="kw-2">&amp;mut </span>r, <span class="string">&quot;  [{i:3}] {c} = \x1b[31mNull\x1b[m&quot;</span>),
+				<span class="prelude-val">Ok</span>(ValueRef::Text(s)) =&gt;
+					<span class="macro">writeln!</span>(<span class="kw-2">&amp;mut </span>r, <span class="string">&quot;  [{i:3}] {c} = Text(\&quot;{}\&quot;)&quot;</span>,
 					std::str::from_utf8(s).unwrap()),
-				<span class="prelude-val">Ok</span>(x) =&gt; <span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>r, <span class="string">&quot;  [{i:3}] {c} = {x:?}&quot;</span>),
+				<span class="prelude-val">Ok</span>(x) =&gt; <span class="macro">writeln!</span>(<span class="kw-2">&amp;mut </span>r, <span class="string">&quot;  [{i:3}] {c} = {x:?}&quot;</span>),
 				<span class="kw">_ </span>=&gt; <span class="kw">break
 			</span>}.unwrap();
 		}
@@ -3428,27 +3441,20 @@
 	}
 }
 
-<span class="doccomment">/// Data statically attached to the schema of a table.
-</span><span class="attr">#[derive(Debug,Clone,Copy)]
-</span><span class="kw">pub struct </span>SqlRowData {
-	<span class="doccomment">/// Columns of this table
-	</span><span class="kw">pub </span>fields: <span class="kw">crate</span>::schemas::Fields,
-	<span class="doccomment">/// Extension for a top-resource, or empty string
-	</span><span class="kw">pub </span>ext: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str,
-}
 <span class="doccomment">/// Structure which can be read from (part of) a SQL row,
 /// or bound to (part of) a SQL statement.
+///
+/// Implemented by the derive macro.
 </span><span class="kw">pub trait </span>SqlRow: Sized {
-	<span class="kw">const </span>FIELDS: SqlRowData;
 	<span class="doccomment">/// The description of the columns that this binds to.
-	</span><span class="kw">const </span>FIELDS9: <span class="kw">crate</span>::schemas::Fields;
+	</span><span class="kw">const </span>FIELDS: <span class="kw">crate</span>::schemas::Fields;
 	<span class="doccomment">/// Binds to columns [offset, ...] of statement.
 	</span><span class="kw">fn </span>bind_at(<span class="kw-2">&amp;</span><span class="self">self</span>, s: <span class="kw-2">&amp;mut </span>Statement&lt;<span class="lifetime">&#39;_</span>&gt;, offset: usize)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt;;
 	<span class="doccomment">/// Reads from columns [offset, ... ] of row.
 	</span><span class="kw">fn </span>collect_at(s: <span class="kw-2">&amp;</span>Row&lt;<span class="lifetime">&#39;_</span>&gt;, offset: usize)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;;
 	<span class="doccomment">/// Checks that the number of columns is good.
 	</span><span class="kw">fn </span>check_parameter_count(s: <span class="kw-2">&amp;mut </span>Statement&lt;<span class="lifetime">&#39;_</span>&gt;, extra: usize)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-		<span class="kw">let </span>found = <span class="self">Self</span>::FIELDS.fields.len() + extra;
+		<span class="kw">let </span>found = <span class="self">Self</span>::FIELDS.len() + extra;
 		<span class="kw">let </span>expected = s.parameter_count();
 		<span class="kw">if </span>found == expected {
 			<span class="prelude-val">Ok</span>(())
@@ -3478,8 +3484,8 @@
 	</span><span class="kw">fn </span>insert_statement&lt;<span class="lifetime">&#39;db</span>,K:ToSqlMulti&gt;(db: <span class="kw-2">&amp;</span><span class="lifetime">&#39;db </span><span class="kw">impl </span>DbInterface, name: <span class="kw">impl </span>Display, hdr: K::Headers&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;InsertStatement&lt;<span class="lifetime">&#39;db</span>,K,<span class="self">Self</span>&gt;&gt; {
 		<span class="kw">let </span><span class="kw-2">mut </span>sql = <span class="macro">format!</span>(<span class="string">r#&quot;insert into &quot;{name}&quot;(&quot;#</span>);
 		K::write_headers(<span class="kw-2">&amp;mut </span>sql, hdr)<span class="question-mark">?</span>;
-		<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>sql, <span class="string">r#&quot;{cols}) values (&quot;#</span>, cols = <span class="self">Self</span>::FIELDS.fields)<span class="question-mark">?</span>;
-		<span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..K::WIDTH + <span class="self">Self</span>::FIELDS.fields.len() {
+		<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>sql, <span class="string">r#&quot;{cols}) values (&quot;#</span>, cols = <span class="self">Self</span>::FIELDS)<span class="question-mark">?</span>;
+		<span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..K::WIDTH + <span class="self">Self</span>::FIELDS.len() {
 			<span class="kw">if </span>i &gt; <span class="number">0 </span>{ sql.push(<span class="string">&#39;,&#39;</span>) }
 			sql.push(<span class="string">&#39;?&#39;</span>)
 		}
@@ -3494,8 +3500,7 @@
 	</span><span class="kw">fn </span>select_statement&lt;<span class="lifetime">&#39;db</span>,K:FromSqlMulti&gt;(db: <span class="kw-2">&amp;</span><span class="lifetime">&#39;db </span><span class="kw">impl </span>DbInterface, name: <span class="kw">impl </span>Display, hdr: K::Headers&lt;<span class="lifetime">&#39;_</span>&gt;, condition: <span class="kw">impl </span>Display)-&gt;<span class="prelude-ty">Result</span>&lt;SelectStatement&lt;<span class="lifetime">&#39;db</span>,K,<span class="self">Self</span>&gt;&gt; {
 		<span class="kw">let </span><span class="kw-2">mut </span>sql = String::from(<span class="string">&quot;select &quot;</span>);
 		K::write_headers(<span class="kw-2">&amp;mut </span>sql, hdr)<span class="question-mark">?</span>;
-		<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>sql, <span class="string">r#&quot;{cols} from &quot;{name}&quot; {condition}&quot;#</span>,
-			cols = <span class="self">Self</span>::FIELDS.fields)<span class="question-mark">?</span>;
+		<span class="macro">write!</span>(<span class="kw-2">&amp;mut </span>sql, <span class="string">r#&quot;{cols} from &quot;{name}&quot; {condition}&quot;#</span>, cols=<span class="self">Self</span>::FIELDS)<span class="question-mark">?</span>;
 		<span class="prelude-val">Ok</span>(SelectStatement {
 			statement: db.prepare(<span class="kw-2">&amp;</span>sql)<span class="question-mark">?</span>,
 			_key: PhantomData, _row: PhantomData,
@@ -3553,7 +3558,8 @@
 		</span>row.get::&lt;<span class="kw">_</span>,<span class="self">Self</span>&gt;(<span class="number">0</span>).context(<span class="string">&quot;raw_collect at 0-based index 0&quot;</span>)
 	}
 }
-<span class="attr">#[derive(Debug)]
+<span class="doccomment">/// A strongly typed `select` statement, tied to a payload + primary key.
+</span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>SelectStatement&lt;<span class="lifetime">&#39;a</span>,K: FromSqlMulti, R:SqlRow&gt; {
 	statement: Statement&lt;<span class="lifetime">&#39;a</span>&gt;,
 	_key: PhantomData&lt;K&gt;,
@@ -3743,7 +3749,7 @@
 	_unknown: u16,
 }
 
-<span class="comment">// IV. Game index main structure:
+<span class="comment">// III. Game index main structure:
 </span><span class="doccomment">/// Abstract, higher-level representation of a BIF file.
 </span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>BifFile {
@@ -3808,6 +3814,19 @@
 		}
 	}
 }
+<span class="doccomment">/// The identifier for a resource type, as found in the filesystem:
+/// either a file extension or a numeric id.
+</span><span class="attr">#[derive(Debug,Clone,Copy)]
+</span><span class="kw">pub enum </span>HandleRestype&lt;<span class="lifetime">&#39;a</span>&gt; {
+	Extension(<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>str),
+	Numeric(Restype),
+}
+<span class="kw">impl</span>&lt;<span class="lifetime">&#39;a</span>&gt; From&lt;<span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>str&gt; <span class="kw">for </span>HandleRestype&lt;<span class="lifetime">&#39;a</span>&gt; {
+	<span class="kw">fn </span>from(source: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span>str)-&gt;<span class="self">Self </span>{ <span class="self">Self</span>::Extension(source) }
+}
+<span class="kw">impl </span>From&lt;Restype&gt; <span class="kw">for </span>HandleRestype&lt;<span class="lifetime">&#39;_</span>&gt; {
+	<span class="kw">fn </span>from(source: Restype)-&gt;<span class="self">Self </span>{ <span class="self">Self</span>::Numeric(source) }
+}
 <span class="doccomment">/// A (lazy) accessor to a game resource.
 </span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>ResHandle&lt;<span class="lifetime">&#39;a</span>&gt; {
@@ -3833,25 +3852,6 @@
 	<span class="doccomment">/// The backup directory. This is a constant value (always
 	/// `$root/simod/backup`); we store it here for caching purposes.
 	</span><span class="kw">pub </span>backup_dir: PathBuf,
-}
-<span class="doccomment">/// Creates the directory unless it exists
-</span><span class="kw">pub fn </span>create_dir(path: <span class="kw">impl </span>AsRef&lt;Path&gt;)-&gt;io::Result&lt;()&gt; {
-	<span class="kw">let </span>path = path.as_ref();
-	<span class="kw">match </span>fs::create_dir(path) {
-		<span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; { <span class="macro">info!</span>(<span class="string">&quot;creating directory {path:?}&quot;</span>); <span class="prelude-val">Ok</span>(()) }
-		<span class="prelude-val">Err</span>(e) =&gt; <span class="kw">match </span>e.kind() {
-			io::ErrorKind::AlreadyExists =&gt;
-				{ <span class="macro">info!</span>(<span class="string">&quot;not creating directory {path:?}: it already exists&quot;</span>); <span class="prelude-val">Ok</span>(()) },
-			<span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(e) } }
-}
-<span class="doccomment">/// Executes a closure in a given directory and returns to the original
-/// directory as soon as the closure returns.
-</span><span class="kw">pub fn </span>with_dir&lt;T&gt;(dir: <span class="kw">impl </span>AsRef&lt;Path&gt;, f: <span class="kw">impl </span>FnOnce()-&gt;<span class="prelude-ty">Result</span>&lt;T&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;T&gt; {
-	<span class="kw">let </span>orig_dir = std::env::current_dir()<span class="question-mark">?</span>;
-	std::env::set_current_dir(dir)<span class="question-mark">?</span>;
-	<span class="kw">let </span>res = f();
-	std::env::set_current_dir(orig_dir)<span class="question-mark">?</span>;
-	res
 }
 <span class="kw">impl </span>GameIndex {
 	<span class="doccomment">/// Initializes the structure from the path containing &quot;chitin.key&quot;.
@@ -3930,7 +3930,7 @@
 	/// statement) allows ignoring of BIF resources masked by an override
 	/// file.
 	</span><span class="kw">pub fn </span>for_each&lt;F&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>f: F)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt;
-	<span class="kw">where </span>F: (FnMut(Restype, ResHandle&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt;)
+	<span class="kw">where </span>F: (FnMut(HandleRestype&lt;<span class="lifetime">&#39;_</span>&gt;, ResHandle&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt;)
 	{
 		<span class="kw">let </span>pb = Progress::new(<span class="self">self</span>.resources.len(), <span class="string">&quot;resources&quot;</span>);
 		<span class="kw">let </span>over_dir = <span class="self">self</span>.root.join(<span class="string">&quot;override&quot;</span>); <span class="comment">// &quot;override&quot; is a reserved kw
@@ -3946,7 +3946,7 @@
 				<span class="kw">if </span>pos &gt; <span class="number">8 </span>{ <span class="kw">continue </span>}
 				<span class="kw">let </span>resref = Resref(name[..pos].into());
 				<span class="kw">let </span>ext = <span class="kw-2">&amp;</span>name[pos+<span class="number">1</span>..];
-				<span class="kw">let </span>restype = Restype::from(ext);
+				<span class="kw">let </span>restype = HandleRestype::from(ext);
 				<span class="macro">trace!</span>(<span class="string">&quot;reading override file: {name}; restype={restype:?}&quot;</span>);
 				<span class="kw">let </span>path = entry.path();
 				<span class="kw">let </span>handle = ResHandle { resref, reader: ResReader::Override(<span class="kw-2">&amp;</span>path) };
@@ -3964,7 +3964,7 @@
 					reader: ResReader::Bif(<span class="kw-2">&amp;mut </span>bif, res.location, res.restype,) };
 				pb.inc(<span class="number">1</span>);
 				pb1.inc(<span class="number">1</span>);
-				f(res.restype, handle)<span class="question-mark">?
+				f(HandleRestype::from(res.restype), handle)<span class="question-mark">?
 			</span>}
 		}
 		<span class="prelude-val">Ok</span>(())
@@ -4140,14 +4140,6 @@
 	}
 }
 
-<span class="doccomment">/// Identifies whether this is a top resource or a sub-resource.
-</span><span class="attr">#[derive(Debug,Clone)]
-</span><span class="kw">pub enum </span>TableType {
-	<span class="doccomment">/// A top-level resource (associated to a given file extension).
-	</span>Top { extension: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str, },
-	<span class="doccomment">/// A sub-resource
-	</span>Sub { parent: String, root: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str, },
-}
 <span class="doccomment">/// The full database description of a game resource.
 ///
 /// This contains all relevant information to fully define a resource
@@ -4161,8 +4153,8 @@
 	</span><span class="kw">pub </span>level: usize,
 	<span class="doccomment">/// Name of the SQL table mapped to this data.
 	</span><span class="kw">pub </span>name: String,
-	<span class="doccomment">/// Position of the schema in the arborescence.
-	</span><span class="kw">pub </span>table_type: TableType,
+	<span class="doccomment">/// Position of the schema in the arborescence: (parent, root)
+	</span><span class="kw">pub </span>parent_root: <span class="prelude-ty">Option</span>&lt;(String, <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str)&gt;,
 	<span class="doccomment">/// Description of the SQL table for this data.
 	</span><span class="kw">pub </span>fields: Fields,
 }
@@ -4172,11 +4164,11 @@
 <span class="kw">impl </span>Schema {
 	<span class="doccomment">/// `true` iff this is not a top-level resource.
 	</span><span class="kw">pub fn </span>is_subresource(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;bool {
-		<span class="macro">matches!</span>(<span class="self">self</span>.table_type, TableType::Sub { .. })
+		<span class="self">self</span>.parent_root.is_some()
 	}
 	<span class="doccomment">/// Displays a full description of the schema on stdout.
 	</span><span class="kw">pub fn </span>describe(<span class="kw-2">&amp;</span><span class="self">self</span>) {
-		<span class="macro">println!</span>(<span class="string">&quot;name={self}\nheader = {:?}&quot;</span>, <span class="self">self</span>.table_type);
+		<span class="macro">println!</span>(<span class="string">&quot;name={self}\nheader = {:?}&quot;</span>, <span class="self">self</span>.parent_root);
 		<span class="kw">for </span>(i, f) <span class="kw">in </span><span class="self">self</span>.fields.iter().enumerate() {
 			<span class="macro">println!</span>(<span class="string">&quot;{i:2} {:&lt;20} {}&quot;</span>, f.fname, f.ftype.description());
 		}
@@ -4184,7 +4176,7 @@
 	<span class="doccomment">/// Creates a table with this schema and an arbitrary name.
 	</span><span class="kw">pub fn </span>create_table(<span class="kw-2">&amp;</span><span class="self">self</span>, name: <span class="kw">impl </span>Display, more: <span class="kw">impl </span>Display)-&gt;String {
 		<span class="kw">let </span><span class="kw-2">mut </span>sql = <span class="macro">format!</span>(<span class="string">&quot;create table \&quot;{name}\&quot; (&quot;</span>);
-		<span class="kw">if let </span>TableType::Sub { parent, .. } = <span class="kw-2">&amp;</span><span class="self">self</span>.table_type {
+		<span class="kw">if let </span><span class="prelude-val">Some</span>((parent, _root)) = <span class="kw-2">&amp;</span><span class="self">self</span>.parent_root {
 			<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>sql, <span class="string">r#&quot;
 	&quot;id&quot; integer primary key,
 	&quot;position&quot; integer,
@@ -4206,7 +4198,7 @@
 		<span class="kw">let </span><span class="kw-2">mut </span>sql = <span class="macro">format!</span>(<span class="string">r#&quot;create view &quot;{self}&quot; as
 	select &quot;source&quot;.&quot;id&quot;&quot;#</span>);
 		<span class="kw">let </span>source_position: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str;
-		<span class="kw">if let </span>TableType::Sub { parent, .. } = <span class="kw-2">&amp;</span><span class="self">self</span>.table_type {
+		<span class="kw">if let </span><span class="prelude-val">Some</span>((parent, _root)) = <span class="kw-2">&amp;</span><span class="self">self</span>.parent_root {
 			source_position = <span class="string">r#&quot;&quot;parent&quot;, &quot;position&quot;, &quot;#</span>;
 			<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>sql, <span class="string">r#&quot;,
 	&quot;{parent}&quot;.&quot;root&quot; as &quot;root&quot;,
@@ -4225,7 +4217,7 @@
 from
 	(select &quot;id&quot;, {source_position}{fields} from &quot;load_{self}&quot; union select &quot;id&quot;, {source_position}{fields} from &quot;add_{self}&quot;)
 as &quot;source&quot;&quot;#</span>, fields = <span class="self">self</span>.fields);
-		<span class="kw">if let </span>TableType::Sub{ parent, .. } = <span class="kw-2">&amp;</span><span class="self">self</span>.table_type {
+		<span class="kw">if let </span><span class="prelude-val">Some</span>((parent, _root)) = <span class="kw-2">&amp;</span><span class="self">self</span>.parent_root {
 			<span class="macro">uwrite!</span>(<span class="kw-2">&amp;mut </span>sql, <span class="string">r#&quot;
 	inner join &quot;{parent}&quot; on &quot;source&quot;.&quot;parent&quot; = &quot;{parent}&quot;.&quot;id&quot;&quot;#</span>);
 		}
@@ -4282,8 +4274,8 @@ left join &quot;strref_dict&quot; as {b} on {a} = {b}.&quot;native&quot;&quot;#<
 		</span>f(<span class="macro">format!</span>(<span class="string">r#&quot;create table &quot;edit_{self}&quot; (&quot;source&quot; text, &quot;line&quot;, &quot;field&quot; text, &quot;value&quot;)&quot;#</span>))<span class="question-mark">?</span>;
 		f(<span class="self">self</span>.create_main_view())<span class="question-mark">?</span>;
 		f(<span class="self">self</span>.create_save_view())<span class="question-mark">?</span>;
-		<span class="kw">let </span>root = <span class="kw">match </span><span class="self">self</span>.table_type {
-			TableType::Sub { root, .. } =&gt; root,
+		<span class="kw">let </span>root = <span class="kw">match </span><span class="self">self</span>.parent_root.as_ref() {
+			<span class="prelude-val">Some</span>((_parent, root)) =&gt; <span class="kw-2">*</span>root,
 			<span class="kw">_ </span>=&gt; {
 			<span class="comment">// only for top-level resource: create the dirty and orphan tables
 			</span>f(<span class="macro">format!</span>(<span class="string">r#&quot;create table &quot;dirty_{self}&quot; (&quot;name&quot; text primary key on conflict ignore)&quot;#</span>))<span class="question-mark">?</span>;
@@ -4353,9 +4345,9 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 	/// this is used when initializing the database to ignore resources
 	/// which are superseded by override files.
 	</span><span class="kw">pub fn </span>insert_sql(<span class="kw-2">&amp;</span><span class="self">self</span>, prefix: <span class="kw">impl </span>Display)-&gt;String {
-		<span class="kw">let </span>(more, more_n) = <span class="kw">match </span><span class="self">self</span>.table_type {
-			TableType::Top { .. } =&gt; (<span class="string">r#&quot;&quot;id&quot;, &quot;#</span>, <span class="number">1</span>),
-			TableType::Sub { .. } =&gt; (<span class="string">r#&quot;&quot;parent&quot;, &quot;position&quot;, &quot;#</span>, <span class="number">2</span>),
+		<span class="kw">let </span>(more, more_n) = <span class="kw">match </span><span class="self">self</span>.parent_root {
+			<span class="prelude-val">None </span>=&gt; (<span class="string">r#&quot;&quot;id&quot;, &quot;#</span>, <span class="number">1</span>),
+			<span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt; (<span class="string">r#&quot;&quot;parent&quot;, &quot;position&quot;, &quot;#</span>, <span class="number">2</span>),
 		};
 		<span class="self">self</span>.fields.insert_sql(<span class="macro">lazy_format!</span>(<span class="string">&quot;{prefix}{self}&quot;</span>), more, more_n)
 	}
@@ -4374,9 +4366,9 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 	</span><span class="kw">pub fn </span>append_new_strings_trigger(<span class="kw-2">&amp;</span><span class="self">self</span>, w: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>fmt::Write) {
 		<span class="kw">let </span><span class="kw-2">mut </span>is_first_field = <span class="bool-val">true</span>;
 		<span class="kw">for </span>Field { fname, ftype, .. } <span class="kw">in </span><span class="self">self</span>.fields.iter() {
-			<span class="kw">let </span>root = <span class="kw">match </span><span class="self">self</span>.table_type {
-				TableType::Sub { root, .. }=&gt; root,
-				TableType::Top { .. }  =&gt; <span class="kw-2">&amp;</span><span class="self">self</span>.name
+			<span class="kw">let </span>root = <span class="kw">match </span><span class="self">self</span>.parent_root.as_ref() {
+				<span class="prelude-val">Some</span>((_parent,root)) =&gt; <span class="kw-2">*</span>root,
+				<span class="prelude-val">None  </span>=&gt; <span class="kw-2">&amp;</span><span class="self">self</span>.name
 			};
 			<span class="kw">if </span><span class="kw-2">*</span>ftype != FieldType::Strref { <span class="kw">continue </span>}
 			<span class="kw">if </span>is_first_field {
@@ -4393,10 +4385,10 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 	}
 	<span class="doccomment">/// Returns the SQL statement for saving resources to filesystem.
 	</span><span class="kw">pub fn </span>select_dirty_sql(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;String {
-		<span class="kw">match </span><span class="self">self</span>.table_type {
-			TableType::Top { .. } =&gt;
+		<span class="kw">match </span><span class="self">self</span>.parent_root {
+			<span class="prelude-val">None </span>=&gt;
 			<span class="macro">format!</span>(<span class="string">r#&quot;select &quot;id&quot;, {cols} from &quot;save_{self}&quot; where &quot;id&quot; in &quot;dirty_{self}&quot;&quot;#</span>, cols = <span class="self">self</span>.fields),
-			TableType::Sub { .. } =&gt;
+			<span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt;
 			<span class="macro">format!</span>(<span class="string">r#&quot;select &quot;id&quot;, {cols} from &quot;save_{self}&quot; where &quot;parent&quot;=? order by &quot;position&quot;&quot;#</span>, cols = <span class="self">self</span>.fields),
 		}
 	}
@@ -4412,17 +4404,19 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 <span class="kw">use </span><span class="kw">crate</span>::schemas::{Schema,Fields};
 <span class="kw">use </span><span class="kw">crate</span>::gamefiles::Restype;
 <span class="kw">use </span><span class="kw">crate</span>::restypes::{RootForest};
-<span class="kw">pub trait </span>ResourceTree: SqlRow {
+<span class="doccomment">/// A resource type inside the hierarchy of sub-resources in the
+/// database.
+///
+/// This trait is implemented by the corresponding derive macro.
+</span><span class="kw">pub trait </span>ResourceTree: SqlRow {
 	<span class="doccomment">/// Always `Tree&lt;FooForest&lt;Fields&gt;&gt;`.
 	</span><span class="kw">type </span>FieldsTree;
 	<span class="doccomment">/// SQL statements in the database, linked to all the resources tables.
+	/// Always `FooForest&lt;Statement&lt;&#39;a&gt;&gt;`.
 	</span><span class="kw">type </span>StatementForest&lt;<span class="lifetime">&#39;a</span>&gt;: <span class="lifetime">&#39;a </span>+ ByName&lt;In=Statement&lt;<span class="lifetime">&#39;a</span>&gt;&gt;;
 	<span class="doccomment">/// The tree holding the fields description for this resource and all
 	/// sub-resources.
 	</span><span class="kw">const </span>FIELDS_TREE: <span class="self">Self</span>::FieldsTree;
-	<span class="doccomment">/// The type of the primary key for this resource:
-	/// either Resref for top-level or i64 for sub-resources.
-	</span><span class="kw">type </span>Primary: ToSql + FromSql + Display + Copy;
 	<span class="doccomment">/// Given an object inserted into the database,
 	/// insert its sub-resources. Generated by macro.
 	/// and mutually recursive with `(subresources)::insert_as_subresource`.
@@ -4430,14 +4424,14 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 	<span class="doccomment">/// Complete a partially-initialized object from the db
 	/// by reading all its sub-resource fields. Generated by macro.
 	</span><span class="kw">fn </span>select_subresources(<span class="kw-2">&amp;mut </span><span class="self">self</span>, branches: <span class="kw-2">&amp;mut </span><span class="self">Self</span>::StatementForest&lt;<span class="lifetime">&#39;_</span>&gt;,
-		primary: <span class="self">Self</span>::Primary)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt;;
+		primary: <span class="kw">impl </span>ToSql+Copy)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt;;
 	<span class="doccomment">/// Inserts a top-level resource.
 	/// This differs from subresources in that the primary key (resref) is
 	/// known.
 	///
 	/// This is the entry point called when populating the database;
 	/// this function is not called recursively.
-	</span><span class="kw">fn </span>insert_as_topresource(<span class="kw-2">&amp;</span><span class="self">self</span>, db: <span class="kw-2">&amp;</span>Connection, tree: <span class="kw-2">&amp;mut </span>Tree&lt;<span class="self">Self</span>::StatementForest&lt;<span class="lifetime">&#39;_</span>&gt;&gt;, resref: <span class="self">Self</span>::Primary)-&gt;<span class="prelude-ty">Result</span>&lt;usize&gt; {
+	</span><span class="kw">fn </span>insert_as_topresource(<span class="kw-2">&amp;</span><span class="self">self</span>, db: <span class="kw-2">&amp;</span>Connection, tree: <span class="kw-2">&amp;mut </span>Tree&lt;<span class="self">Self</span>::StatementForest&lt;<span class="lifetime">&#39;_</span>&gt;&gt;, resref: <span class="kw">impl </span>ToSql+Copy+Display)-&gt;<span class="prelude-ty">Result</span>&lt;usize&gt; {
 		<span class="kw">let </span>n = <span class="self">self</span>.bind_execute1(<span class="kw-2">&amp;mut </span>tree.content, resref)<span class="question-mark">?</span>;
 		<span class="kw">if </span>n == <span class="number">0 </span>{
 			<span class="macro">warn!</span>(<span class="string">&quot;skipped inserting {resref}&quot;</span>);
@@ -4460,26 +4454,32 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 		<span class="self">self</span>.insert_subresources(db, <span class="kw-2">&amp;mut </span>tree.branches, primary)<span class="question-mark">?</span>;
 		<span class="prelude-val">Ok</span>(())
 	}
-	<span class="kw">fn </span>read_rows&lt;<span class="lifetime">&#39;a</span>:<span class="lifetime">&#39;r</span>,<span class="lifetime">&#39;b</span>:<span class="lifetime">&#39;r</span>,<span class="lifetime">&#39;r</span>&gt;(tree: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw-2">mut </span>Tree&lt;<span class="self">Self</span>::StatementForest&lt;<span class="lifetime">&#39;b</span>&gt;&gt;, params: <span class="kw">impl </span>rusqlite::Params)-&gt;<span class="prelude-ty">Result</span>&lt;RecursiveRows&lt;<span class="lifetime">&#39;r</span>,<span class="lifetime">&#39;a</span>,<span class="lifetime">&#39;b</span>,<span class="self">Self</span>&gt;&gt;
+	<span class="doccomment">/// Returns an iterator over rows of the database,
+	/// returning (key, payload) pairs, with the payload fully structured.
+	///
+	/// `K` is the type for primary key of subresources (`i64` except
+	/// when reading one of the root trees where it is `Resref`).
+	</span><span class="kw">fn </span>read_rows&lt;<span class="lifetime">&#39;a</span>:<span class="lifetime">&#39;r</span>,<span class="lifetime">&#39;b</span>:<span class="lifetime">&#39;r</span>,<span class="lifetime">&#39;r</span>, K: FromSql+ToSql+Copy&gt;(tree: <span class="kw-2">&amp;</span><span class="lifetime">&#39;a </span><span class="kw-2">mut </span>Tree&lt;<span class="self">Self</span>::StatementForest&lt;<span class="lifetime">&#39;b</span>&gt;&gt;, params: <span class="kw">impl </span>rusqlite::Params)-&gt;<span class="prelude-ty">Result</span>&lt;RecursiveRows&lt;<span class="lifetime">&#39;r</span>,<span class="lifetime">&#39;a</span>,<span class="lifetime">&#39;b</span>,<span class="self">Self</span>,K&gt;&gt;
 	{
 		<span class="kw">let </span>rows = tree.content.query(params)<span class="question-mark">?</span>;
 		<span class="prelude-val">Ok</span>(RecursiveRows{ rows: rows.into(), branches: <span class="kw-2">&amp;mut </span>tree.branches })
 	}
-	<span class="kw">fn </span>collect_all(tree: <span class="kw-2">&amp;mut </span>Tree&lt;<span class="self">Self</span>::StatementForest&lt;<span class="lifetime">&#39;_</span>&gt;&gt;, params: <span class="kw">impl </span>rusqlite::Params)-&gt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="self">Self</span>&gt;&gt; {
-		<span class="self">Self</span>::read_rows(tree, params)<span class="question-mark">?</span>.map(|x| <span class="prelude-val">Ok</span>(x<span class="question-mark">?</span>.<span class="number">1</span>)).collect()
+	<span class="doccomment">/// Collect fully structured subresources from the statement tree.
+	</span><span class="kw">fn </span>collect_all(tree: <span class="kw-2">&amp;mut </span>Tree&lt;<span class="self">Self</span>::StatementForest&lt;<span class="lifetime">&#39;_</span>&gt;&gt;, params: <span class="kw">impl </span>rusqlite::Params)-&gt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="self">Self</span>&gt;&gt; {
+		<span class="self">Self</span>::read_rows::&lt;i64&gt;(tree, params)<span class="question-mark">?</span>.map(|x| <span class="prelude-val">Ok</span>(x<span class="question-mark">?</span>.<span class="number">1</span>)).collect()
 	}
 }
 <span class="doccomment">/// An iterator building full recursive resources from a statement tree.
 ///
 /// TODO: clean the lifetime mess here.
 </span><span class="attr">#[allow(missing_debug_implementations)]
-</span><span class="kw">pub struct </span>RecursiveRows&lt;<span class="lifetime">&#39;a</span>,<span class="lifetime">&#39;b</span>:<span class="lifetime">&#39;a</span>,<span class="lifetime">&#39;c</span>:<span class="lifetime">&#39;a</span>, T: ResourceTree&gt; {
-	rows: SelectRows&lt;<span class="lifetime">&#39;a</span>,T::Primary,T&gt;,
+</span><span class="kw">pub struct </span>RecursiveRows&lt;<span class="lifetime">&#39;a</span>,<span class="lifetime">&#39;b</span>:<span class="lifetime">&#39;a</span>,<span class="lifetime">&#39;c</span>:<span class="lifetime">&#39;a</span>, T: ResourceTree, K: FromSql+ToSql+Copy&gt; {
+	rows: SelectRows&lt;<span class="lifetime">&#39;a</span>,K,T&gt;,
 	branches: <span class="kw-2">&amp;</span><span class="lifetime">&#39;b </span><span class="kw-2">mut </span>T::StatementForest&lt;<span class="lifetime">&#39;c</span>&gt;,
 }
-<span class="kw">impl</span>&lt;T: ResourceTree&gt; Iterator <span class="kw">for </span>RecursiveRows&lt;<span class="lifetime">&#39;_</span>,<span class="lifetime">&#39;_</span>,<span class="lifetime">&#39;_</span>,T&gt; {
-	<span class="kw">type </span>Item = <span class="prelude-ty">Result</span>&lt;(T::Primary,T)&gt;; <span class="comment">// or could be (T::Primary, T) instead?
-	</span><span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
+<span class="kw">impl</span>&lt;T: ResourceTree,K: FromSql+ToSql+Copy&gt; Iterator <span class="kw">for </span>RecursiveRows&lt;<span class="lifetime">&#39;_</span>,<span class="lifetime">&#39;_</span>,<span class="lifetime">&#39;_</span>,T,K&gt; {
+	<span class="kw">type </span>Item = <span class="prelude-ty">Result</span>&lt;(K,T)&gt;;
+	<span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>)-&gt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt; {
 		<span class="kw">match </span><span class="self">self</span>.rows.next() {
 			<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>((primary, <span class="kw-2">mut </span>resource))) =&gt; {
 				<span class="kw">match </span>resource.select_subresources(<span class="self">self</span>.branches, primary) {
@@ -4494,7 +4494,9 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 		</span>}
 	}
 }
-<span class="attr">#[derive(Debug)]
+<span class="doccomment">/// A hierarchical collection of similar objects, organized in parallel
+/// with the resources and subresources in the database.
+</span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>Tree&lt;T: ByName&gt; {
 	<span class="kw">pub </span>content: T::In,
 	<span class="kw">pub </span>branches: T,
@@ -4596,21 +4598,17 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 	<span class="attr">#[allow(dead_code)]
 	</span>parent_name: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str,
 	root: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str,
-	table_type: <span class="kw">crate</span>::schemas::TableType,
+	parent_root: <span class="prelude-ty">Option</span>&lt;(String, <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str)&gt;,
 }
 <span class="kw">impl </span>SchemaBuildState {
-	<span class="kw">fn </span>descend(state: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="self">Self</span>&gt;, ext: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str, name: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str)-&gt;<span class="self">Self </span>{
-		<span class="kw">use </span><span class="kw">crate</span>::schemas::TableType;
+	<span class="kw">fn </span>descend(state: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="self">Self</span>&gt;, name: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str)-&gt;<span class="self">Self </span>{
 		<span class="kw">if let </span><span class="prelude-val">Some</span>(parent) = state {
 			<span class="self">Self </span>{
 				level: parent.level+<span class="number">1</span>,
 				table_name: <span class="macro">format!</span>(<span class="string">&quot;{}_{name}&quot;</span>, parent.table_name),
 				parent_name: name,
 				root: parent.root,
-				table_type: TableType::Sub {
-					parent: parent.table_name.clone(),
-					root: parent.root
-				},
+				parent_root: <span class="prelude-val">Some</span>((parent.table_name.clone(), parent.root)),
 			}
 		} <span class="kw">else </span>{
 			<span class="self">Self </span>{
@@ -4618,16 +4616,14 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 				table_name: name.to_owned(),
 				parent_name: name,
 				root: name,
-				table_type: TableType::Top {
-					extension: ext,
-				},
+				parent_root: <span class="prelude-val">None</span>,
 			}
 		}
 	}
 	<span class="kw">fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>, fields: <span class="kw-2">&amp;</span>Fields)-&gt;Schema {
 		Schema {
 			level: <span class="self">self</span>.level,
-			table_type: <span class="self">self</span>.table_type.clone(),
+			parent_root: <span class="self">self</span>.parent_root.clone(),
 			fields: <span class="kw-2">*</span>fields,
 			name: <span class="self">self</span>.table_name.clone(),
 		}
@@ -4635,26 +4631,50 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 }
 <span class="doccomment">/// The definition of schemas for all in-game resources.
 </span><span class="kw">pub static </span>ALL_SCHEMAS: Lazy&lt;RootForest&lt;Schema&gt;&gt; = Lazy::new(|| {
-	<span class="kw">crate</span>::restypes::Root::FIELDS_TREE.branches.recurse(|row_data,name,state| {
-		<span class="kw">let </span>new_state = SchemaBuildState::descend(state.as_ref(), row_data.ext, name);
-		<span class="kw">let </span>schema = new_state.schema(<span class="kw-2">&amp;</span>row_data.fields);
+	<span class="kw">crate</span>::restypes::Root::FIELDS_TREE.branches.recurse(|fields,name,state| {
+		<span class="kw">let </span>new_state = SchemaBuildState::descend(state.as_ref(), name);
+		<span class="kw">let </span>schema = new_state.schema(fields);
 		infallible((<span class="prelude-val">Some</span>(new_state), schema))
 	}, <span class="string">&quot;&quot;</span>, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>).unwrap()
 });
 
 <span class="doccomment">/// A trait containing resource I/O functions.
 ///
-/// This is only available for top-level resources.
-</span><span class="kw">pub trait </span>ResourceIO: ResourceTree&lt;Primary=Resref&gt; {
-	<span class="kw">const </span>EXTENSION: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str;
-	<span class="kw">const </span>RESTYPE: Restype;
+/// Each top-level resource as defined in `restypes.rs` should implement
+/// this (inside `restypes.rs`).
+</span><span class="kw">pub trait </span>ResourceIO: ResourceTree {
+	<span class="doccomment">/// The file extension attached to this resource (e.g. `&quot;.itm&quot;`).
+	</span><span class="kw">const </span>EXTENSION: <span class="kw-2">&amp;</span><span class="lifetime">&#39;static </span>str;
+	<span class="doccomment">/// The 16-bit resource type (e.g. `0x03ed`).
+	</span><span class="kw">const </span>RESTYPE: Restype;
 	<span class="comment">// Required methods
 	</span><span class="doccomment">/// Loads a resource from filesystem.
 	</span><span class="kw">fn </span>load(io: <span class="kw">impl </span>Read+Seek)-&gt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;;
 	<span class="doccomment">/// Saves a resource to filesystem.
 	</span><span class="kw">fn </span>save(<span class="kw-2">&amp;mut </span><span class="self">self</span>, io: <span class="kw">impl </span>Write+Seek+Debug)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt;;
 	<span class="comment">// Provided methods
-	</span><span class="doccomment">/// Entry point for loading: loads from filesystem, inserts into
+	</span><span class="doccomment">/// Deletes from current directory all resources marked as &#39;orphan&#39; in
+	/// the database. This also clears the list of orphan resources.
+	</span><span class="kw">fn </span>clear_orphans(db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, name: <span class="kw-2">&amp;</span>str)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
+		<span class="kw">let </span><span class="kw-2">mut </span>stmt = db.prepare(
+			<span class="macro">format!</span>(<span class="string">r#&quot;select &quot;name&quot; from &quot;orphan_{name}&quot;&quot;#</span>))<span class="question-mark">?</span>;
+		<span class="kw">let </span><span class="kw-2">mut </span>rows = stmt.query(())<span class="question-mark">?</span>;
+		<span class="kw">while let </span><span class="prelude-val">Some</span>(row) = rows.next() <span class="question-mark">? </span>{
+			<span class="kw">let </span><span class="kw-2">mut </span>file = row.get::&lt;<span class="kw">_</span>,String&gt;(<span class="number">0</span>)
+				.with_context(|| <span class="macro">format!</span>(<span class="string">r#&quot;bad entry in &quot;orphan_{name}&quot;&quot;#</span>))<span class="question-mark">?</span>;
+			file.push(<span class="string">&#39;.&#39;</span>);
+			file.push_str(<span class="self">Self</span>::EXTENSION);
+			fs::remove_file(<span class="kw-2">&amp;</span>file).or_else(|e| <span class="kw">match </span>e.kind() {
+				io::ErrorKind::NotFound =&gt; {
+					<span class="macro">warn!</span>(<span class="string">r#&quot;should have removed orphan file &quot;{file}&quot;&quot;#</span>);
+					<span class="prelude-val">Ok</span>(())
+				},
+				<span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(e)
+			}).with_context(|| <span class="macro">format!</span>(<span class="string">r#&quot;cannot remove file &quot;{file}&quot;&quot;#</span>))<span class="question-mark">?</span>;
+		}
+		<span class="prelude-val">Ok</span>(())
+	}
+	<span class="doccomment">/// Entry point for loading: loads from filesystem, inserts into
 	/// database.
 	///
 	/// Could be implemented ad-hoc for not allocating vectors, but this
@@ -4668,9 +4688,11 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 		// TODO: increase counter if possible
 		</span><span class="prelude-val">Ok</span>(())
 	}
-	<span class="kw">fn </span>save_all_dirty(tree: <span class="kw-2">&amp;mut </span>Tree&lt;<span class="self">Self</span>::StatementForest&lt;<span class="lifetime">&#39;_</span>&gt;&gt;)-&gt;<span class="prelude-ty">Result</span>&lt;usize&gt; {
+	<span class="doccomment">/// Saves all dirty resources to filesystem, and clears the `orphan_x`
+	/// and `dirty_x` tables.
+	</span><span class="kw">fn </span>save_all_dirty(tree: <span class="kw-2">&amp;mut </span>Tree&lt;<span class="self">Self</span>::StatementForest&lt;<span class="lifetime">&#39;_</span>&gt;&gt;, db: <span class="kw-2">&amp;</span><span class="kw">impl </span>DbInterface, name: <span class="kw-2">&amp;</span>str)-&gt;<span class="prelude-ty">Result</span>&lt;usize&gt; {
 		<span class="kw">let </span><span class="kw-2">mut </span>n_saved = <span class="number">0</span>;
-		<span class="kw">for </span>(resref, <span class="kw-2">mut </span>resource) <span class="kw">in </span><span class="self">Self</span>::read_rows(tree, ())<span class="question-mark">?</span>.flatten() {
+		<span class="kw">for </span>(resref, <span class="kw-2">mut </span>resource) <span class="kw">in </span><span class="self">Self</span>::read_rows::&lt;Resref&gt;(tree, ())<span class="question-mark">?</span>.flatten() {
 			<span class="kw">let </span>filename = <span class="macro">format!</span>(<span class="string">&quot;{resref}.{ext}&quot;</span>, ext=<span class="self">Self</span>::EXTENSION);
 			<span class="macro">println!</span>(<span class="string">&quot;saving to {filename:?}&quot;</span>);
 			<span class="kw">let </span><span class="kw-2">mut </span>file = File::create(<span class="kw-2">&amp;</span>filename)
@@ -4678,7 +4700,18 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 			resource.save(<span class="kw-2">&amp;mut </span>file)<span class="question-mark">?</span>;
 			n_saved+= <span class="number">1</span>;
 		}
+		<span class="self">Self</span>::clear_orphans(db, name)<span class="question-mark">?</span>;
+		db.exec(<span class="macro">format!</span>(<span class="string">r#&quot;delete from &quot;dirty_{name}&quot;&quot;#</span>))<span class="question-mark">?</span>;
+		db.exec(<span class="macro">format!</span>(<span class="string">r#&quot;delete from &quot;orphan_{name}&quot;&quot;#</span>))<span class="question-mark">?</span>;
 		<span class="prelude-val">Ok</span>(n_saved)
+	}
+	<span class="doccomment">/// Detects restype.
+	</span><span class="kw">fn </span>is_restype(restype: <span class="kw">crate</span>::gamefiles::HandleRestype&lt;<span class="lifetime">&#39;_</span>&gt;)-&gt;bool {
+		<span class="kw">match </span>restype {
+			<span class="kw">crate</span>::gamefiles::HandleRestype::Numeric(r) =&gt; r == <span class="self">Self</span>::RESTYPE,
+			<span class="kw">crate</span>::gamefiles::HandleRestype::Extension(ext) =&gt;
+				ext.eq_ignore_ascii_case(<span class="self">Self</span>::EXTENSION),
+		}
 	}
 }
 
@@ -4705,9 +4738,7 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 <span class="doccomment">/// A game string as present in a .tlk file.
 </span><span class="attr">#[derive(Debug,Default,Clone,Pack,SqlRow)]
 </span><span class="kw">pub struct </span>GameString {
-<span class="comment">// #[column(&quot;primary key&quot;)]
-// 	strref: NotPacked::&lt;i32&gt;,
-	</span>flags: u16,
+	flags: u16,
 	sound: Resref,
 	volume: i32,
 	pitch: i32,
@@ -4767,9 +4798,7 @@ end&quot;#</span>))<span class="question-mark">?</span>;
 		.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;cannot open strings file: {path:?}&quot;</span>))<span class="question-mark">?</span>;
 	<span class="kw">let </span><span class="kw-2">mut </span>stmt = GameString::insert_statement::&lt;Strref&gt;(db,
 		<span class="macro">lazy_format!</span>(<span class="string">&quot;load_strings_{langname}&quot;</span>), <span class="string">&quot;strref&quot;</span>)<span class="question-mark">?</span>;
-<span class="comment">// 	let mut q = db.prepare(GameString::FIELDS9.insert_sql(
-// 		lazy_format!(&quot;load_strings_{langname}&quot;), r#&quot;&quot;strref&quot;,&quot;#, 1))?;
-	</span><span class="kw">let </span>itr = GameStringsIterator::try_from(bytes.as_ref())<span class="question-mark">?</span>;
+	<span class="kw">let </span>itr = GameStringsIterator::try_from(bytes.as_ref())<span class="question-mark">?</span>;
 	<span class="kw">let </span>pb = Progress::new(itr.len(), langname);
 	db.execute(<span class="string">r#&quot;update &quot;global&quot; set &quot;strref_count&quot;=?&quot;#</span>, (itr.len(),))<span class="question-mark">?</span>;
 	<span class="kw">let </span><span class="kw-2">mut </span>n_strings = <span class="number">0</span>;
@@ -4973,15 +5002,12 @@ from &quot;new_strings&quot;
 				db.prepare(<span class="kw-2">&amp;</span>schema.insert_sql(<span class="string">&quot;load_&quot;</span>))
 					.with_context(|| <span class="macro">format!</span>(<span class="string">&quot;insert statement for table &#39;{schema}&#39;&quot;</span>)))<span class="question-mark">?</span>;
 			game.for_each(<span class="kw">move </span>|restype, handle| {
-				<span class="macro">trace!</span>(<span class="string">&quot;found resource {}.{:#04x}&quot;</span>, handle.resref, restype.<span class="number">0</span>);
+				<span class="macro">trace!</span>(<span class="string">&quot;found resource {}.{:?}&quot;</span>, handle.resref, restype);
 <span class="comment">// 				base.register(&amp;resref)
 // 					.with_context(|| format!(&quot;could not register resref:{resref}&quot;))?;
-				</span><span class="attr">#[allow(clippy::single_match)]
-				</span><span class="kw">match </span>restype {
-				Item::RESTYPE =&gt;
-					Item::load_and_insert(db, <span class="kw-2">&amp;mut </span>tables.items, handle)<span class="question-mark">?</span>,
-				<span class="kw">_ </span>=&gt; (),
-				};
+				</span><span class="kw">if </span>Item::is_restype(restype) {
+					Item::load_and_insert(db, <span class="kw-2">&amp;mut </span>tables.items, handle)<span class="question-mark">?
+				</span>}
 				<span class="prelude-val">Ok</span>(())
 			})<span class="question-mark">?</span>;
 			pb.inc(<span class="number">1</span>);
@@ -5089,45 +5115,6 @@ update &quot;new_strings&quot; set &quot;strref&quot;=-1 where &quot;strref&quot
 		<span class="macro">info!</span>(<span class="string">&quot;translated {n_resrefs} resrefs&quot;</span>);
 		<span class="prelude-val">Ok</span>(())
 	}
-	<span class="doccomment">/// Deletes from current directory all resources marked as &#39;orphan&#39; in
-	/// the database. This also clears the list of orphan resources.
-	</span><span class="kw">fn </span>clear_orphan_resources(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-		ALL_SCHEMAS.try_map(|schema| {
-			<span class="kw">let </span>extension = <span class="kw">match </span>schema.table_type {
-				<span class="kw">crate</span>::schemas::TableType::Top { extension, .. } =&gt; extension,
-				<span class="kw">_ </span>=&gt; <span class="kw">return </span>any_ok(())
-			};
-			<span class="kw">let </span><span class="kw-2">mut </span>stmt = <span class="self">self</span>.prepare(
-				<span class="macro">format!</span>(<span class="string">r#&quot;select &quot;name&quot; from &quot;orphan_{schema}&quot;&quot;#</span>))<span class="question-mark">?</span>;
-			<span class="kw">let </span><span class="kw-2">mut </span>rows = stmt.query(())<span class="question-mark">?</span>;
-			<span class="kw">while let </span><span class="prelude-val">Some</span>(row) = rows.next() <span class="question-mark">? </span>{
-				<span class="kw">let </span><span class="kw-2">mut </span>file = row.get::&lt;<span class="kw">_</span>,String&gt;(<span class="number">0</span>)
-					.with_context(|| <span class="macro">format!</span>(<span class="string">r#&quot;bad entry in &quot;orphan_{schema}&quot;&quot;#</span>))<span class="question-mark">?</span>;
-				file.push(<span class="string">&#39;.&#39;</span>);
-				file.push_str(extension);
-				fs::remove_file(<span class="kw-2">&amp;</span>file).or_else(|e| <span class="kw">match </span>e.kind() {
-					io::ErrorKind::NotFound =&gt; {
-						<span class="macro">warn!</span>(<span class="string">r#&quot;should have removed orphan file &quot;{file}&quot;&quot;#</span>);
-						<span class="prelude-val">Ok</span>(())
-					},
-					<span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(e)
-				}).with_context(|| <span class="macro">format!</span>(<span class="string">r#&quot;cannot remove file &quot;{file}&quot;&quot;#</span>))<span class="question-mark">?</span>;
-			}
-			any_ok(())
-		}).context(<span class="string">&quot;cannot clear orphan resources&quot;</span>)<span class="question-mark">?</span>;
-		<span class="prelude-val">Ok</span>(())
-	}
-	<span class="doccomment">/// Cleans the dirty bit from all resources after saving.
-	</span><span class="kw">fn </span>unmark_dirty_resources(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
-		ALL_SCHEMAS.try_map(|schema| {
-			<span class="kw">if </span><span class="macro">matches!</span>(schema.table_type, <span class="kw">crate</span>::schemas::TableType::Top { .. }) {
-				<span class="self">self</span>.exec(<span class="macro">format!</span>(<span class="string">r#&quot;delete from &quot;dirty_{schema}&quot;&quot;#</span>))<span class="question-mark">?</span>;
-				<span class="self">self</span>.exec(<span class="macro">format!</span>(<span class="string">r#&quot;delete from &quot;orphan_{schema}&quot;&quot;#</span>))<span class="question-mark">?</span>;
-			};
-			any_ok(())
-		})<span class="question-mark">?</span>;
-		any_ok(())
-	}
 }
 <span class="kw">impl</span>&lt;T: Deref&lt;Target=Connection&gt;&gt;  DbInterface <span class="kw">for </span>T {
 	<span class="kw">fn </span>db(<span class="kw-2">&amp;</span><span class="self">self</span>)-&gt;<span class="kw-2">&amp;</span>Connection { <span class="self">self</span>.deref() }
@@ -5208,7 +5195,7 @@ begin&quot;#</span>);
 <span class="kw">use </span><span class="kw">crate</span>::prelude::<span class="kw-2">*</span>;
 <span class="kw">use </span><span class="kw">crate</span>::resources::{ALL_SCHEMAS,ByName,Recurse};
 <span class="kw">use </span><span class="kw">crate</span>::restypes::{RootForest};
-<span class="kw">use </span><span class="kw">crate</span>::schemas::{Schema,TableType};
+<span class="kw">use </span><span class="kw">crate</span>::schemas::{Schema};
 <span class="kw">use </span><span class="kw">crate</span>::sql_rows::{AsParams};
 <span class="doccomment">/// Small simplification for frequent use in callbacks.
 </span><span class="macro">macro_rules! </span>fail {
@@ -5597,7 +5584,7 @@ begin&quot;#</span>);
 		<span class="comment">// Step 2: build the sub-schema relations
 		// We do this in a second pass since by now all resource tables exist
 		</span>ALL_SCHEMAS.try_map_mut(|schema| {
-			<span class="kw">if let </span>TableType::Sub {  .. } = schema.table_type {
+			<span class="kw">if let </span><span class="prelude-val">Some</span>((_parent, _root)) = schema.parent_root.as_ref() {
 				<span class="macro">todo!</span>()
 			}
 			mlua_ok(())
@@ -5653,7 +5640,7 @@ begin&quot;#</span>);
 	<span class="kw">let </span><span class="kw-2">mut </span>tables = ALL_SCHEMAS.try_map(|schema|
 		db.prepare(schema.select_dirty_sql())
 	)<span class="question-mark">?</span>;
-	Item::save_all_dirty(<span class="kw-2">&amp;mut </span>tables.items)<span class="question-mark">?</span>;
+	Item::save_all_dirty(<span class="kw-2">&amp;mut </span>tables.items, db, <span class="string">&quot;items&quot;</span>)<span class="question-mark">?</span>;
 	pb.inc(<span class="number">1</span>);
 	<span class="prelude-val">Ok</span>(())
 }
@@ -5670,15 +5657,15 @@ begin&quot;#</span>);
 
 		<span class="comment">// save in a temp directory before moving everything to override
 		</span><span class="kw">let </span>tmpdir = game.tempdir()<span class="question-mark">?</span>;
-		gamefiles::with_dir(<span class="kw-2">&amp;</span>tmpdir, || {
+		with_dir(<span class="kw-2">&amp;</span>tmpdir, || {
 			<span class="macro">debug!</span>(<span class="string">&quot;saving to temporary directory {:?}&quot;</span>, tmpdir);
 			save_resources(db, game)
 		})<span class="question-mark">?</span>;
 		<span class="macro">debug!</span>(<span class="string">&quot;installing resources saved in temporary directory {:?}&quot;</span>, tmpdir);
 		game.restore(tmpdir)<span class="question-mark">?</span>;
-		db.clear_orphan_resources()<span class="question-mark">?</span>;
-		db.unmark_dirty_resources()<span class="question-mark">?</span>;
-		<span class="prelude-val">Ok</span>(())
+<span class="comment">// 		db.clear_orphan_resources()?;
+// 		db.unmark_dirty_resources()?;
+		</span><span class="prelude-val">Ok</span>(())
 	})
 }
 <span class="kw">fn </span>command_save_diff(game: <span class="kw-2">&amp;</span>GameIndex, <span class="kw-2">mut </span>db: GameDB)-&gt;<span class="prelude-ty">Result</span>&lt;()&gt; {
@@ -5686,17 +5673,15 @@ begin&quot;#</span>);
 		db.translate_resrefs()<span class="question-mark">?</span>;
 		db.translate_strrefs()<span class="question-mark">?</span>;
 		<span class="kw">let </span>override_dir = game.root.join(<span class="string">&quot;override&quot;</span>);
-		gamefiles::with_dir(<span class="kw-2">&amp;</span>override_dir, || {
+		with_dir(<span class="kw-2">&amp;</span>override_dir, || {
 			<span class="macro">debug!</span>(<span class="string">&quot;differential save to {override_dir:?}&quot;</span>);
 			<span class="comment">// clear orphan resources **before** installing new resources —
 			// a resource might legitimately be both orphan and still existing
 			// (if it was removed and then added again in the DB), in which case we
 			// want to save it to override:
-			</span>db.clear_orphan_resources()<span class="question-mark">?</span>;
-			save_resources(db, game)
+			</span>save_resources(db, game)
 		})<span class="question-mark">?</span>;
 		<span class="macro">debug!</span>(<span class="string">&quot;resources saved!&quot;</span>);
-		db.unmark_dirty_resources()<span class="question-mark">?</span>;
 		<span class="prelude-val">Ok</span>(())
 	})
 }
@@ -5779,9 +5764,6 @@ begin&quot;#</span>);
 <span class="kw">fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <span class="comment">// 	use crate::resources::{ALL_SCHEMAS,ResourceTree};
 // 	println!(&quot;{:?}&quot;, *ALL_SCHEMAS);
-// 	ALL_SCHEMAS9.recurse(|x,_n,_state| {
-// 		x.describe(); infallible(nothing2)
-// 	}, &quot;&quot;, &amp;())?;
 // 	if 1 &gt; 0 { return Ok(nothing) }
 	</span><span class="kw">let </span><span class="kw-2">mut </span>options = RuntimeOptions::parse();
 	<span class="kw">if </span>options.database.is_none() {
