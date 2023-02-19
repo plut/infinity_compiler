@@ -533,27 +533,20 @@ pub trait AsParams {
 	}
 }
 
-/// Data statically attached to the schema of a table.
-#[derive(Debug,Clone,Copy)]
-pub struct SqlRowData {
-	/// Columns of this table
-	pub fields: crate::schemas::Fields,
-	/// Extension for a top-resource, or empty string
-	pub ext: &'static str,
-}
 /// Structure which can be read from (part of) a SQL row,
 /// or bound to (part of) a SQL statement.
+///
+/// Implemented by the derive macro.
 pub trait SqlRow: Sized {
-	const FIELDS: SqlRowData;
 	/// The description of the columns that this binds to.
-	const FIELDS9: crate::schemas::Fields;
+	const FIELDS: crate::schemas::Fields;
 	/// Binds to columns [offset, ...] of statement.
 	fn bind_at(&self, s: &mut Statement<'_>, offset: usize)->Result<()>;
 	/// Reads from columns [offset, ... ] of row.
 	fn collect_at(s: &Row<'_>, offset: usize)->Result<Self>;
 	/// Checks that the number of columns is good.
 	fn check_parameter_count(s: &mut Statement<'_>, extra: usize)->Result<()> {
-		let found = Self::FIELDS.fields.len() + extra;
+		let found = Self::FIELDS.len() + extra;
 		let expected = s.parameter_count();
 		if found == expected {
 			Ok(())
@@ -583,8 +576,8 @@ pub trait SqlRow: Sized {
 	fn insert_statement<'db,K:ToSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>)->Result<InsertStatement<'db,K,Self>> {
 		let mut sql = format!(r#"insert into "{name}"("#);
 		K::write_headers(&mut sql, hdr)?;
-		write!(&mut sql, r#"{cols}) values ("#, cols = Self::FIELDS.fields)?;
-		for i in 0..K::WIDTH + Self::FIELDS.fields.len() {
+		write!(&mut sql, r#"{cols}) values ("#, cols = Self::FIELDS)?;
+		for i in 0..K::WIDTH + Self::FIELDS.len() {
 			if i > 0 { sql.push(',') }
 			sql.push('?')
 		}
@@ -599,8 +592,7 @@ pub trait SqlRow: Sized {
 	fn select_statement<'db,K:FromSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>, condition: impl Display)->Result<SelectStatement<'db,K,Self>> {
 		let mut sql = String::from("select ");
 		K::write_headers(&mut sql, hdr)?;
-		write!(&mut sql, r#"{cols} from "{name}" {condition}"#,
-			cols = Self::FIELDS.fields)?;
+		write!(&mut sql, r#"{cols} from "{name}" {condition}"#, cols=Self::FIELDS)?;
 		Ok(SelectStatement {
 			statement: db.prepare(&sql)?,
 			_key: PhantomData, _row: PhantomData,
@@ -1227,14 +1219,6 @@ impl<T: Display> Display for FieldsWithPrefix<T> {
 	}
 }
 
-/// Identifies whether this is a top resource or a sub-resource.
-#[derive(Debug,Clone)]
-pub enum TableType {
-	/// A top-level resource (associated to a given file extension).
-	Top { extension: &'static str, },
-	/// A sub-resource
-	Sub { parent: String, root: &'static str, },
-}
 /// The full database description of a game resource.
 ///
 /// This contains all relevant information to fully define a resource
@@ -1248,8 +1232,8 @@ pub struct Schema {
 	pub level: usize,
 	/// Name of the SQL table mapped to this data.
 	pub name: String,
-	/// Position of the schema in the arborescence.
-	pub table_type: TableType,
+	/// Position of the schema in the arborescence: (parent, root)
+	pub parent_root: Option<(String, &'static str)>,
 	/// Description of the SQL table for this data.
 	pub fields: Fields,
 }
@@ -1259,11 +1243,11 @@ impl Display for Schema {
 impl Schema {
 	/// `true` iff this is not a top-level resource.
 	pub fn is_subresource(&self)->bool {
-		matches!(self.table_type, TableType::Sub { .. })
+		self.parent_root.is_some()
 	}
 	/// Displays a full description of the schema on stdout.
 	pub fn describe(&self) {
-		println!("name={self}\nheader = {:?}", self.table_type);
+		println!("name={self}\nheader = {:?}", self.parent_root);
 		for (i, f) in self.fields.iter().enumerate() {
 			println!("{i:2} {:<20} {}", f.fname, f.ftype.description());
 		}
@@ -1271,7 +1255,7 @@ impl Schema {
 	/// Creates a table with this schema and an arbitrary name.
 	pub fn create_table(&self, name: impl Display, more: impl Display)->String {
 		let mut sql = format!("create table \"{name}\" (");
-		if let TableType::Sub { parent, .. } = &self.table_type {
+		if let Some((parent, _root)) = &self.parent_root {
 			uwrite!(&mut sql, r#"
 	"id" integer primary key,
 	"position" integer,
@@ -1293,7 +1277,7 @@ impl Schema {
 		let mut sql = format!(r#"create view "{self}" as
 	select "source"."id""#);
 		let source_position: &'static str;
-		if let TableType::Sub { parent, .. } = &self.table_type {
+		if let Some((parent, _root)) = &self.parent_root {
 			source_position = r#""parent", "position", "#;
 			uwrite!(&mut sql, r#",
 	"{parent}"."root" as "root",
@@ -1312,7 +1296,7 @@ impl Schema {
 from
 	(select "id", {source_position}{fields} from "load_{self}" union select "id", {source_position}{fields} from "add_{self}")
 as "source""#, fields = self.fields);
-		if let TableType::Sub{ parent, .. } = &self.table_type {
+		if let Some((parent, _root)) = &self.parent_root {
 			uwrite!(&mut sql, r#"
 	inner join "{parent}" on "source"."parent" = "{parent}"."id""#);
 		}
@@ -1369,8 +1353,8 @@ left join "strref_dict" as {b} on {a} = {b}."native""#);
 		f(format!(r#"create table "edit_{self}" ("source" text, "line", "field" text, "value")"#))?;
 		f(self.create_main_view())?;
 		f(self.create_save_view())?;
-		let root = match self.table_type {
-			TableType::Sub { root, .. } => root,
+		let root = match self.parent_root.as_ref() {
+			Some((_parent, root)) => *root,
 			_ => {
 			// only for top-level resource: create the dirty and orphan tables
 			f(format!(r#"create table "dirty_{self}" ("name" text primary key on conflict ignore)"#))?;
@@ -1440,9 +1424,9 @@ end"#))?;
 	/// this is used when initializing the database to ignore resources
 	/// which are superseded by override files.
 	pub fn insert_sql(&self, prefix: impl Display)->String {
-		let (more, more_n) = match self.table_type {
-			TableType::Top { .. } => (r#""id", "#, 1),
-			TableType::Sub { .. } => (r#""parent", "position", "#, 2),
+		let (more, more_n) = match self.parent_root {
+			None => (r#""id", "#, 1),
+			Some(_) => (r#""parent", "position", "#, 2),
 		};
 		self.fields.insert_sql(lazy_format!("{prefix}{self}"), more, more_n)
 	}
@@ -1461,9 +1445,9 @@ end"#))?;
 	pub fn append_new_strings_trigger(&self, w: &mut impl fmt::Write) {
 		let mut is_first_field = true;
 		for Field { fname, ftype, .. } in self.fields.iter() {
-			let root = match self.table_type {
-				TableType::Sub { root, .. }=> root,
-				TableType::Top { .. }  => &self.name
+			let root = match self.parent_root.as_ref() {
+				Some((_parent,root)) => *root,
+				None  => &self.name
 			};
 			if *ftype != FieldType::Strref { continue }
 			if is_first_field {
@@ -1480,10 +1464,10 @@ end"#))?;
 	}
 	/// Returns the SQL statement for saving resources to filesystem.
 	pub fn select_dirty_sql(&self)->String {
-		match self.table_type {
-			TableType::Top { .. } =>
+		match self.parent_root {
+			None =>
 			format!(r#"select "id", {cols} from "save_{self}" where "id" in "dirty_{self}""#, cols = self.fields),
-			TableType::Sub { .. } =>
+			Some(_) =>
 			format!(r#"select "id", {cols} from "save_{self}" where "parent"=? order by "position""#, cols = self.fields),
 		}
 	}
@@ -1504,7 +1488,7 @@ use crate::restypes::{RootForest};
 ///
 /// This trait is implemented by the corresponding derive macro.
 pub trait ResourceTree: SqlRow {
-	/// Always `Tree<FooForest<SqlRowData>>`.
+	/// Always `Tree<FooForest<Fields>>`.
 	type FieldsTree;
 	/// SQL statements in the database, linked to all the resources tables.
 	/// Always `FooForest<Statement<'a>>`.
@@ -1693,21 +1677,17 @@ struct SchemaBuildState {
 	#[allow(dead_code)]
 	parent_name: &'static str,
 	root: &'static str,
-	table_type: crate::schemas::TableType,
+	parent_root: Option<(String, &'static str)>,
 }
 impl SchemaBuildState {
-	fn descend(state: Option<&Self>, ext: &'static str, name: &'static str)->Self {
-		use crate::schemas::TableType;
+	fn descend(state: Option<&Self>, name: &'static str)->Self {
 		if let Some(parent) = state {
 			Self {
 				level: parent.level+1,
 				table_name: format!("{}_{name}", parent.table_name),
 				parent_name: name,
 				root: parent.root,
-				table_type: TableType::Sub {
-					parent: parent.table_name.clone(),
-					root: parent.root
-				},
+				parent_root: Some((parent.table_name.clone(), parent.root)),
 			}
 		} else {
 			Self {
@@ -1715,16 +1695,14 @@ impl SchemaBuildState {
 				table_name: name.to_owned(),
 				parent_name: name,
 				root: name,
-				table_type: TableType::Top {
-					extension: ext,
-				},
+				parent_root: None,
 			}
 		}
 	}
 	fn schema(&self, fields: &Fields)->Schema {
 		Schema {
 			level: self.level,
-			table_type: self.table_type.clone(),
+			parent_root: self.parent_root.clone(),
 			fields: *fields,
 			name: self.table_name.clone(),
 		}
@@ -1732,9 +1710,9 @@ impl SchemaBuildState {
 }
 /// The definition of schemas for all in-game resources.
 pub static ALL_SCHEMAS: Lazy<RootForest<Schema>> = Lazy::new(|| {
-	crate::restypes::Root::FIELDS_TREE.branches.recurse(|row_data,name,state| {
-		let new_state = SchemaBuildState::descend(state.as_ref(), row_data.ext, name);
-		let schema = new_state.schema(&row_data.fields);
+	crate::restypes::Root::FIELDS_TREE.branches.recurse(|fields,name,state| {
+		let new_state = SchemaBuildState::descend(state.as_ref(), name);
+		let schema = new_state.schema(fields);
 		infallible((Some(new_state), schema))
 	}, "", &None).unwrap()
 });
@@ -1751,6 +1729,27 @@ pub trait ResourceIO: ResourceTree {
 	/// Saves a resource to filesystem.
 	fn save(&mut self, io: impl Write+Seek+Debug)->Result<()>;
 	// Provided methods
+	/// Deletes from current directory all resources marked as 'orphan' in
+	/// the database. This also clears the list of orphan resources.
+	fn clear_orphans(db: &impl DbInterface, name: &str)->Result<()> {
+		let mut stmt = db.prepare(
+			format!(r#"select "name" from "orphan_{name}""#))?;
+		let mut rows = stmt.query(())?;
+		while let Some(row) = rows.next() ? {
+			let mut file = row.get::<_,String>(0)
+				.with_context(|| format!(r#"bad entry in "orphan_{name}""#))?;
+			file.push('.');
+			file.push_str(Self::EXTENSION);
+			fs::remove_file(&file).or_else(|e| match e.kind() {
+				io::ErrorKind::NotFound => {
+					warn!(r#"should have removed orphan file "{file}""#);
+					Ok(())
+				},
+				_ => Err(e)
+			}).with_context(|| format!(r#"cannot remove file "{file}""#))?;
+		}
+		Ok(())
+	}
 	/// Entry point for loading: loads from filesystem, inserts into
 	/// database.
 	///
@@ -1765,7 +1764,7 @@ pub trait ResourceIO: ResourceTree {
 		// TODO: increase counter if possible
 		Ok(())
 	}
-	fn save_all_dirty(tree: &mut Tree<Self::StatementForest<'_>>)->Result<usize> {
+	fn save_all_dirty(tree: &mut Tree<Self::StatementForest<'_>>, db: &impl DbInterface, name: &str)->Result<usize> {
 		let mut n_saved = 0;
 		for (resref, mut resource) in Self::read_rows::<Resref>(tree, ())?.flatten() {
 			let filename = format!("{resref}.{ext}", ext=Self::EXTENSION);
@@ -1775,6 +1774,9 @@ pub trait ResourceIO: ResourceTree {
 			resource.save(&mut file)?;
 			n_saved+= 1;
 		}
+		Self::clear_orphans(db, name)?;
+		db.exec(format!(r#"delete from "dirty_{name}""#))?;
+		db.exec(format!(r#"delete from "orphan_{name}""#))?;
 		Ok(n_saved)
 	}
 }
@@ -1864,8 +1866,6 @@ fn load_language(db: &impl DbInterface, langname: &str, path: &(impl AsRef<Path>
 		.with_context(|| format!("cannot open strings file: {path:?}"))?;
 	let mut stmt = GameString::insert_statement::<Strref>(db,
 		lazy_format!("load_strings_{langname}"), "strref")?;
-// 	let mut q = db.prepare(GameString::FIELDS9.insert_sql(
-// 		lazy_format!("load_strings_{langname}"), r#""strref","#, 1))?;
 	let itr = GameStringsIterator::try_from(bytes.as_ref())?;
 	let pb = Progress::new(itr.len(), langname);
 	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
@@ -2186,45 +2186,6 @@ update "new_strings" set "strref"=-1 where "strref" is null"#))
 		info!("translated {n_resrefs} resrefs");
 		Ok(())
 	}
-	/// Deletes from current directory all resources marked as 'orphan' in
-	/// the database. This also clears the list of orphan resources.
-	fn clear_orphan_resources(&self)->Result<()> {
-		ALL_SCHEMAS.try_map(|schema| {
-			let extension = match schema.table_type {
-				crate::schemas::TableType::Top { extension, .. } => extension,
-				_ => return any_ok(())
-			};
-			let mut stmt = self.prepare(
-				format!(r#"select "name" from "orphan_{schema}""#))?;
-			let mut rows = stmt.query(())?;
-			while let Some(row) = rows.next() ? {
-				let mut file = row.get::<_,String>(0)
-					.with_context(|| format!(r#"bad entry in "orphan_{schema}""#))?;
-				file.push('.');
-				file.push_str(extension);
-				fs::remove_file(&file).or_else(|e| match e.kind() {
-					io::ErrorKind::NotFound => {
-						warn!(r#"should have removed orphan file "{file}""#);
-						Ok(())
-					},
-					_ => Err(e)
-				}).with_context(|| format!(r#"cannot remove file "{file}""#))?;
-			}
-			any_ok(())
-		}).context("cannot clear orphan resources")?;
-		Ok(())
-	}
-	/// Cleans the dirty bit from all resources after saving.
-	fn unmark_dirty_resources(&self)->Result<()> {
-		ALL_SCHEMAS.try_map(|schema| {
-			if matches!(schema.table_type, crate::schemas::TableType::Top { .. }) {
-				self.exec(format!(r#"delete from "dirty_{schema}""#))?;
-				self.exec(format!(r#"delete from "orphan_{schema}""#))?;
-			};
-			any_ok(())
-		})?;
-		any_ok(())
-	}
 }
 impl<T: Deref<Target=Connection>>  DbInterface for T {
 	fn db(&self)->&Connection { self.deref() }
@@ -2305,7 +2266,7 @@ use std::collections::HashMap;
 use crate::prelude::*;
 use crate::resources::{ALL_SCHEMAS,ByName,Recurse};
 use crate::restypes::{RootForest};
-use crate::schemas::{Schema,TableType};
+use crate::schemas::{Schema};
 use crate::sql_rows::{AsParams};
 /// Small simplification for frequent use in callbacks.
 macro_rules! fail {
@@ -2694,7 +2655,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		// Step 2: build the sub-schema relations
 		// We do this in a second pass since by now all resource tables exist
 		ALL_SCHEMAS.try_map_mut(|schema| {
-			if let TableType::Sub {  .. } = schema.table_type {
+			if let Some((_parent, _root)) = schema.parent_root.as_ref() {
 				todo!()
 			}
 			mlua_ok(())
@@ -2750,7 +2711,7 @@ fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	let mut tables = ALL_SCHEMAS.try_map(|schema|
 		db.prepare(schema.select_dirty_sql())
 	)?;
-	Item::save_all_dirty(&mut tables.items)?;
+	Item::save_all_dirty(&mut tables.items, db, "items")?;
 	pb.inc(1);
 	Ok(())
 }
@@ -2773,8 +2734,8 @@ fn command_save_full(game: &GameIndex, mut db: GameDB)->Result<()> {
 		})?;
 		debug!("installing resources saved in temporary directory {:?}", tmpdir);
 		game.restore(tmpdir)?;
-		db.clear_orphan_resources()?;
-		db.unmark_dirty_resources()?;
+// 		db.clear_orphan_resources()?;
+// 		db.unmark_dirty_resources()?;
 		Ok(())
 	})
 }
@@ -2789,11 +2750,9 @@ fn command_save_diff(game: &GameIndex, mut db: GameDB)->Result<()> {
 			// a resource might legitimately be both orphan and still existing
 			// (if it was removed and then added again in the DB), in which case we
 			// want to save it to override:
-			db.clear_orphan_resources()?;
 			save_resources(db, game)
 		})?;
 		debug!("resources saved!");
-		db.unmark_dirty_resources()?;
 		Ok(())
 	})
 }
@@ -2876,9 +2835,6 @@ use arguments::*;
 fn main() -> Result<()> {
 // 	use crate::resources::{ALL_SCHEMAS,ResourceTree};
 // 	println!("{:?}", *ALL_SCHEMAS);
-// 	ALL_SCHEMAS9.recurse(|x,_n,_state| {
-// 		x.describe(); infallible(nothing2)
-// 	}, "", &())?;
 // 	if 1 > 0 { return Ok(nothing) }
 	let mut options = RuntimeOptions::parse();
 	if options.database.is_none() {

@@ -516,11 +516,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	}
 	let code = quote! {
 		impl crate::sql_rows::SqlRow for #ident {
-			const FIELDS: crate::sql_rows::SqlRowData = crate::sql_rows::SqlRowData {
-				fields: crate::schemas::Fields(&[ #fields_def ]),
-				ext: ""
-			};
-			const FIELDS9: crate::schemas::Fields =
+			const FIELDS: crate::schemas::Fields = 
 				crate::schemas::Fields(&[ #fields_def ]);
 			fn bind_at(&self, s: &mut Statement<'_>, offset: usize)->Result<()> {
 				#bind_at
@@ -609,7 +605,7 @@ impl ToTokens for DeriveResourceTree {
 				}
 			}
 			impl crate::resources::ResourceTree for #ident {
-				type FieldsTree = crate::resources::Tree<#forestname<crate::sql_rows::SqlRowData>>;
+				type FieldsTree = crate::resources::Tree<#forestname<crate::schemas::Fields>>;
 				const FIELDS_TREE: Self::FieldsTree = Self::FieldsTree {
 					content: <Self as crate::sql_rows::SqlRow>::FIELDS,
 					branches: #forestname {
@@ -631,13 +627,6 @@ impl ToTokens for DeriveResourceTree {
 					Ok(())
 				}
 			} // impl ResourceTree
-			impl<X :Debug> #forestname<X> {
-				pub fn shallow_try_map<E,F>(&self, f: F)->Result<(),E>
-				where F: Fn(&X, &'static str)->Result<(),E> {
-					#(f(&self.#field.content, stringify!(#field))?;)*
-					Ok(())
-				}
-			}
 // -- end of quote:
 		}.to_tokens(dest)
 	}
