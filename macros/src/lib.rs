@@ -1,68 +1,28 @@
 #![allow(
 	clippy::single_match,
 // 	unreachable_code,
-	dead_code,
-	unused_variables,
-	unused_imports,
+// 	dead_code,
+// 	unused_variables,
+// 	unused_imports,
 // 	unused_macros,
 // 	unused_parens,
 // 	unused_mut,
 // 	unused_attributes,
-	unused_assignments,
+// 	unused_assignments,
 )]
 use proc_macro::TokenStream;
 use proc_macro2 as pm2;
 use pm2::Span;
 type TS = pm2::TokenStream;
-use regex::Regex;
+// use regex::Regex;
 use quote::{quote, ToTokens};
 use syn::{self, DeriveInput, parse_macro_input, Attribute};
 use syn::{Data::Struct, DataStruct};
 use syn::{Expr, ExprLit, ExprPath};
-use syn::{Ident, Type, Field, Fields::Named, Fields::Unnamed};
-use syn::{punctuated::Punctuated, token::Comma};
 use extend::ext;
 
-use std::cell::RefCell;
 use std::fmt::Display;
 
-#[derive(Debug)]
-struct TopResource {
-	table_name: String,
-	type_name: String,
-	ext: String,
-	resref: u16,
-}
-impl TopResource {
-	/// Reads a #[topresource(table_name, "itm", 0x03ed)] attribute.
-	fn from(ident: &syn::Ident, mut parser: AttrParser)->Self {
-		let table_name = match parser.get::<syn::Expr>() {
-			Some(AttrArg::Ident(s)) => s,
-			Some(AttrArg::Str(s)) => s,
-			_ => panic!("bad topresource parameter 1, expected ident")
-		};
-		let ext = match parser.get::<syn::Expr>() {
-			Some(AttrArg::Str(s)) => s,
-			_ => panic!("bad topresource parameter 2, expected string")
-		};
-		let resref = match parser.get::<syn::Expr>() {
-			Some(AttrArg::Int(n)) => n as u16,
-			_ => panic!("bad topresource parameter 3, expected integer")
-		};
-		Self {
-			type_name: ident.to_string(),
-			table_name, ext, resref
-		}
-	}
-	/// Stores this resource in the global table.
-	fn store(self) {
-		TOP.with(|v| v.borrow_mut().push(self))
-	}
-}
-thread_local! {
-	static TOP: RefCell<Vec<TopResource>> =
-	RefCell::new(Vec::<TopResource>::new());
-}
 // use std::any::type_name;
 // fn type_of<T>(_:&T)->&'static str { type_name::<T>() }
 
@@ -632,30 +592,13 @@ impl ToTokens for DeriveResourceTree {
 	}
 }
 
-/// The macro deriving `Resource`.
-#[proc_macro_derive(ResourceTree,attributes(topresource))]
+/// The macro deriving `ResourceTree`.
+#[proc_macro_derive(ResourceTree)]
 pub fn derive_resource(tokens: TokenStream)->TokenStream {
-	let DeriveInput{ ident, data, attrs,.. } = parse_macro_input!(tokens);
+	let DeriveInput{ ident, data, .. } = parse_macro_input!(tokens);
 	let fields = Fields::from(data);
-	let mut ext = String::new();
-	for (name, args) in attrs.iter().map(parse_attr) {
-		match name.as_str() {
-			"topresource" => {
-				let top = TopResource::from(&ident, args);
-				ext = top.ext.clone();
-				top.store();
-			},
-			_ => ()
-		}
-	}
 	let mut derive_forest = DeriveResourceTree::new(&ident);
 	for FieldRef { name, ty, .. } in fields.iter() {
-		// Read attributes for this field
-// 		for (name, mut _args) in attrs.iter().map(parse_attr) {
-// 			match name.as_str() {
-// 				_ => ()
-// 			} // match
-// 		} // for
 		if let Some(eltype) = ty.vec_eltype() {
 			derive_forest.push(name.ident(), eltype);
 		}
