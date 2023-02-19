@@ -72,6 +72,7 @@ pub enum Error{
 	BadParameterCount { expected: usize, found: usize },
 	CallbackMissingArgument,
 	UnknownField { field: String },
+	RowNotFound { key: String},
 }
 impl Display for Error {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
@@ -2327,6 +2328,7 @@ impl<'lua> Value<'lua> {
 /// This would be more properly written with *two* lifetime parameters
 /// `'a` and `'lua`, but we have no use for this right now, so for the
 /// sake of simplicity we keep only the shortest lifetime `'a`.
+#[derive(Clone,Copy)]
 pub struct LuaValueRef<'a>(&'a Value<'a>);
 impl<'a> From<&'a Value<'a>> for LuaValueRef<'a> {
 	fn from(source: &'a Value<'a>)->Self { Self(source) }
@@ -2423,11 +2425,16 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>> {
 		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
 		let mut rows = self.0.query(args.as_params())?;
-		let ret = lua.create_table()?;
-		while let Some(row) = rows.next()? {
-			let v_sql = row.get_ref(0)?;
-			let v_lua = sql_to_lua(v_sql, lua)?;
-			ret.push(v_lua)?;
+		let ret = lua.create_table()
+			.context("cannot create table")?;
+		while let Some(row) = rows.next()
+				.context("read row")? {
+			let v_sql = row.get_ref(0)
+				.context("get first column")?;
+			let v_lua = sql_to_lua(v_sql, lua)
+				.context("convert to Lua")?;
+			ret.push(v_lua)
+				.context("insert into table")?;
 		}
 		Ok(Value::Table(ret))
 	}
@@ -2466,6 +2473,42 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 		}
 	}
 }
+/// Implementation of `simod.read_field`.
+#[derive(Debug)]
+struct ReadField<'a>(HashMap<&'a str, Statement<'a>>);
+impl<'a> Callback<'a> for ReadField<'a> {
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+		let mut h = HashMap::<&str, Statement<'_>>::
+			with_capacity(schema.fields.len());
+		for field in schema.fields.iter() {
+			h.insert(field.fname, db.prepare(&format!(
+				r#"select {field} from "{schema}" where "id"=?"#))?);
+		}
+		Ok(Self(h))
+	}
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
+		Self::expect_arguments(&args, 4)?;
+		let arg0 = args.pop_front().unwrap(); // take ownership of first argument
+		let fieldname = match arg0 {
+			Value::String(ref s) => s.to_str()?,
+			other => fail!(BadArgumentType { position: 2, expected: "string",
+				found: format!("{other:?}")}),
+		};
+		let stmt = match self.0.get_mut(fieldname) {
+			Some(s) => s,
+			_ => fail!(UnknownField { field: fieldname.into(), }),
+		};
+		let arg1 = LuaValueRef(args.get(0).unwrap());
+		let mut rows = stmt.query((arg1,))?;
+		let row = match rows.next()? {
+			Some(row) => row,
+			None => fail!(RowNotFound { key: format!("{arg1:?}") }),
+		};
+		let val = row.get_ref(0)?;
+		sql_to_lua(val, lua)
+	}
+}
+
 /// Implementation of `simod.insert`.
 #[derive(Debug)]
 struct InsertRow<'a>(&'a Connection, Statement<'a>,&'a Schema);
@@ -2599,9 +2642,13 @@ impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
 // 		scope.create_function_mut(|lua, args|
 // 			self.prepare(lua, args).to_lua_err())
 // 	}
-		table.set(name, scope.create_function_mut(move |lua, args|
-			self.execute(lua, args)
-				.with_context(|| format!(r#"In callback "{name}":"#)).to_lua_err())?)
+		table.set(name, scope.create_function_mut(move |lua, args| {
+			let r = self.execute(lua, args);
+			if r.is_err() {
+				println!("{r:?}");
+			}
+			r.with_context(|| format!(r#"In callback "{name}":"#)).to_lua_err()
+		})?)
 	}
 }
 
@@ -2677,7 +2724,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		// We do this in a second pass since by now all resource tables exist
 		ALL_SCHEMAS.try_map_mut(|schema| {
 			if let Some((_parent, _root)) = schema.parent_root.as_ref() {
-				todo!()
+// 				todo!()
 			}
 			mlua_ok(())
 		})?;

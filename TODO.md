@@ -1,28 +1,4 @@
-# Recursive schema
- - likely useful because of convenience for saving + building Lua schema
- + build code for root type `RootNode`
- + build code for const (schema) base case `ALL_SCHEMAS`
- + port most functions to use this instead of old const `SCHEMAS`
- + then remove code from `TopResource` and see how to rec. i/o from db
- + reinstate some code deleted since `69789`
  - a command-line option to make it headless (disable progress bars)
- - we need a proper `Table` type with
-  - a FromSqlMulti + ToSqlMulti type for indexing,
-  - a SqlRow for payload,
-  - automatic select, insert, create procedures
-# Override
- - [x] improve backup procedure: a full backup as part of init
- - [x] a mod `base_types` for chaff such as SqlType etc.
- - [x] a mod `schema` for Schema + Resource
- - [x] deleted resources
-  - [x] we need to know which resources have been deleted since last save
-  - [x] this needs to be updated even when deleting from underlying
-        tables (e.g. `add_items`)
- - [x] differential compilation
-  - [x] incompatible with atomicity, a choice must be done (pass an option and do differential by default)
-  - [x] clear dirty bit
- - [+] atomic save to override
- - [+] they need to be read as resource handles
 # Lua side
  - [ ] make every field access lazy (this is probably simplest way)
  - [ ] decide when conversion from native to strref (etc.1
@@ -44,7 +20,6 @@
  - [ ] expand `current` to add file+line reference to Lua code
  - [ ] see if need to split bitfields
 ## Strings
- - [x] fill language strings tables
  - [ ] decide how to convert `.po` to sql
 	- the {M} and {F} markers work in this conversion (sql treats all
 		languages as separate)
@@ -64,8 +39,6 @@
    metadata: name, categorization, description, code (function or string),
    compatibility
 # Other functions
- - [ ] rename `gametypes` as `resources`
- - [ ] debug output is a bit of a mess: clean it
  - add a few functions:
   - [ ] `translate`: lua to .po
    - [ ] write a minimal Lua lexer to identify all `_(str)` calls
@@ -78,7 +51,6 @@
  - [ ] a global option to limit languages
  - [ ] for binaries: have a special variant of Resref which does interact with
 	 the db in a different way
-# Rust linting
 # Rust resources
 	 itertools? paste? bitflags
 	 lexopt/clap/pico-args for argument parsing
