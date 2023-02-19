@@ -203,27 +203,31 @@ function simod_simul.insert(tbl, fields, context)
 end
 
 --««1 Methods for resources
--- Resource objects have the following form:
--- { _table = "items", _key = "sw1h34" }
--- They all share the same metatable (for now)
+
+simod.schema.items.default_key = "name"
 
 local function todo() error("todo!") end
 -- the metatable of `resource_mt`.
 local root_mt = {}
 
+-- Resource objects have the following form:
+-- { _table = "items", _key = "sw1h34" }
+-- They all share the same metatable (for now)
+
 local resource_mt = { _table = "" }
 setmetatable(resource_mt, root_mt)
-function resource_mt:__index(field)
+function resource_mt:__index(fieldname)
 -- 	print(green("indexing a value with _table = ", self._table, ":", field))
 	local sch = table_schema(self._table)
-	local ty = sch[field]
+	local fields = sch.fields
+	local ty = fields[fieldname]
 	if ty == nil then
-		error('field "'..field..'" not found in table "'..self._table..'"')
+		error('field "'..fieldname..'" not found in table "'..self._table..'"')
 	end
 	if ty == "subresource" then
 		todo()
 	end
-	return simod.get(self._table, field, self._key)
+	return simod.get(self._table, fieldname, self._key)
 end
 function resource_mt:__call(key)
 	-- Creates a resource from a database row.
@@ -235,18 +239,58 @@ function resource_mt:__call(key)
 	local new = { _table = self._table, _key = key }
 	return setmetatable(new, self)
 end
+local function normalize_changes(changes, dk)
+	-- when passed a table of changes from a resource template,
+	-- together with the table's default key name,,
+	-- normalizes the changes (modifying the input table)
+	--
+	-- This assumes that dk is not nil.
+	--
+	-- This returns a pair:
+	-- (new row id, modified table)
+		-- in all cases we return (new id, new changes):
+	if type(changes) == "string" then -- sword("carsomyr")
+		return changes, { [dk] = changes }
+	end
+	local changes1 = changes[1]
+	if changes1 ~= nil then
+		changes[1] = nil -- this key is now useless, erase it
+		-- sword{ "carsomyr", ... } sets name to "carsomyr"
+		if changes[dk] == nil then changes[dk] = changes1 end
+		return changes1, changes
+	end
+	local changes_dk = changes[dk]
+	if changes_dk ~= nil then
+		-- sword { name = "carsomyr", ... }
+		return changes_dk, changes
+	end
+	error("no id given for new resource")
+end
 function resource_mt:clone_resource(args)
 	-- Clones a resource, modifying values passed as arguments.
 	print(yellow("cloning a resource: ", strdump(self)))
 	print("  with modifiers: ", strdump(args))
+	local sch = table_schema(self._table)
+	local fields = sch.fields
+	local dk = sch.default_key
+	if dk == nil then
+		error("only resources with a defined default_key can be cloned")
+	end
+	print("for table "..self._table.." dk is ", dk)
+	dump(sch)
+	local id, changes = normalize_changes(args, dk)
+	
 	local values = simod.select(self._table, self._key)
-	dump(values)
-	for k,v in pairs(args) do
+	for k,v in pairs(changes) do
 		if values[k] == nil then
 			error('field "'..k..'" is absent in target')
 		end
 		values[k] = v
 	end
+	-- TODO: also clone subresources (recursively)
+	-- TODO: if there are any vector data for subresource fields, use it
+	-- TODO: insert this into table
+	return setmetatable({ _table = self._table, _key = id }, getmetatable(self))
 end
 function resource_mt:create_resource_type(init)
 	local new = type(init) == "table" and init or {}
@@ -256,6 +300,12 @@ function resource_mt:create_resource_type(init)
 end
 
 local item = resource_mt:create_resource_type{ _table = "items" }
+for k,v in pairs(simod.schema) do
+	print("schema: ", k, v)
+	for k1, v1 in pairs(v) do
+		print("\t", k1, v1)
+	end
+end
 
 
 
@@ -585,7 +635,7 @@ local albruin = item("sw1h34")
 dump(albruin)
 -- print(getmetatable(albruin)==item_mt)
 print(albruin.weight)
-dump(albruin{weight=100})
+dump(albruin{"toto", weight=100})
 
 -- print(getmetatable(albruin)==item_mt)
 -- print(getmetatable(albruin)==resource_mt)

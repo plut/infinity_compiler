@@ -9,14 +9,6 @@ a string `table` containing the name of one of the game's resource tables
 (`"items"`, `"item_abilities"` etc.).
 String matching is case-sensitive.
 
-## `simod.insert`: insertin a new game object
-
-`simod.insert(table, row)`
-
-`row` is a table containing the row to be inserted, as key-value
-pairs; the keys are strings matching the column headers for this table
-(with the same case).
-
 ## `simod.list(table, [parent])`: list primary keys in a table
 
 If `table` describes a top-level resource (e.g. `"items"`) then
@@ -31,6 +23,23 @@ matches this primary key.
 
 If no rows match the query, then an empty table is returned.
 
+## `simod.insert(table, row)`: insert a new game object
+
+`row` is a table containing the row to be inserted, as key-value
+pairs; the keys are strings matching the column headers for this table
+(with the same case).
+
+This returns the number of lines inserted.
+If the row does not match the format for this table then an error is
+thrown.
+
+## `simod.get(table, fieldname, primary)`: read a single field entry
+
+This returns the value of column `fieldname`
+on the line where the primary key is `primary`.
+
+If no such line (or column) exists then an error is thrown.
+
 ## `simod.select(table, primary)`: read one row in a table
 
 This returns the content of the row with primary key `primary`
@@ -39,7 +48,7 @@ corresponding to the table's column names.
 
 If no row with the given primary key exists, then an error is thrown.
 
-## `simod.update(table, fieldname, primary, value)`: modify an entry in a table.
+## `simod.set(table, fieldname, primary, value)`: modify an entry in a table.
 
 This updates the row with primary key `primary` in the given table,
 setting the field with column name `fieldname` to the given `value`.

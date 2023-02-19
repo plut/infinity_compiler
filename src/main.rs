@@ -2714,6 +2714,9 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		let marker_strref = lua.create_string("strref")?;
 		let marker_resref = lua.create_string("resref")?;
 		let marker_subresource = lua.create_string("subresource")?;
+		// constant key entries for schema table; same behaviour:
+		let fields_key = lua.create_string("fields")?;
+		let is_subresource_key = lua.create_string("is_subresource")?;
 
 		let simod = lua.create_table()?;
 
@@ -2721,8 +2724,8 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		// there are a lot of `clone()` calls in there: all those values are
 		// really `LuaRef()`, which _should_ implement `Copy`, but are cheap
 		// to clone anyway (a pointer + an integer).
-		ALL_SCHEMAS.recurse_mut(|schema, name, parent_table| {
-			let table = lua.create_table()?;
+		ALL_SCHEMAS.recurse_mut(|schema, name, parent_fields| {
+			let fields = lua.create_table()?;
 			for f in schema.fields.iter() {
 				use crate::sql_rows::FieldType;
 				let marker = match f.ftype {
@@ -2731,17 +2734,21 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 					FieldType::Resref => marker_resref.clone(),
 					FieldType::Strref => marker_strref.clone(),
 				};
-				table.set(f.fname, marker)?;
+				fields.set(f.fname, marker)?;
 			}
+			// store this in `simod.schema.X.fields`:
+			let this_schema = lua.create_table()?;
+			this_schema.set(fields_key.clone(), fields.clone())?;
 			// we mark ourself as a subresource for the parent (note that the
 			// `recurse_mut` function does not allow easily doing this on the
 			// parent side; we use the `parent_table` we got as our state):
 			if let Some((_parent, _root)) = schema.parent_root.as_ref() {
-				parent_table.set(name, marker_subresource.clone())?;
+				parent_fields.set(name, marker_subresource.clone())?;
+				this_schema.set(is_subresource_key.clone(), true)?;
 			}
+			simod_schema.set(schema.name.as_str(), this_schema)?;
 			// pass the resulting table to our branches, and return nothing:
-			simod_schema.set(schema.name.as_str(), table.clone())?;
-			mlua_ok((table, nothing))
+			mlua_ok((fields, nothing))
 		}, "", &simod_schema)?;
 		simod.set("schema", simod_schema)?;
 		simod.set("dump", scope.create_function(
