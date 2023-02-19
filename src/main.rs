@@ -583,7 +583,6 @@ pub trait SqlRow: Sized {
 			sql.push('?')
 		}
 		sql.push(')');
-		println!("sql = {sql}");
 		Ok(InsertStatement {
 			statement: db.prepare(&sql)?,
 			_key: PhantomData, _row: PhantomData,
@@ -2487,7 +2486,7 @@ impl<'a> Callback<'a> for ReadField<'a> {
 		Ok(Self(h))
 	}
 	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
-		Self::expect_arguments(&args, 4)?;
+		Self::expect_arguments(&args, 3)?;
 		let arg0 = args.pop_front().unwrap(); // take ownership of first argument
 		let fieldname = match arg0 {
 			Value::String(ref s) => s.to_str()?,
@@ -2571,6 +2570,7 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 /// a small mod, this should save time for large mods on average,
 /// and using prepared statements is safer anyway.
 /// (Besides, the memory storage req for a prepared statement is small).
+#[derive(Debug)]
 struct UpdateRow<'a>(HashMap<&'a str, Statement<'a>>);
 impl<'a> Callback<'a> for UpdateRow<'a> {
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
@@ -2601,6 +2601,7 @@ impl<'a> Callback<'a> for UpdateRow<'a> {
 	}
 }
 /// Implementation of `simod.delete`.
+#[derive(Debug)]
 struct DeleteRow<'a>(Statement<'a>);
 impl<'a> Callback<'a> for DeleteRow<'a> {
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
@@ -2644,9 +2645,8 @@ impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
 // 	}
 		table.set(name, scope.create_function_mut(move |lua, args| {
 			let r = self.execute(lua, args);
-			if r.is_err() {
-				println!("{r:?}");
-			}
+			// `to_lua_err()` does not display full backtrace:
+			if r.is_err() { eprintln!("{r:?}"); }
 			r.with_context(|| format!(r#"In callback "{name}":"#)).to_lua_err()
 		})?)
 	}
@@ -2667,9 +2667,10 @@ struct LuaStatements<'a> {
 	/// Prepared statements for `simod.list`.
 	list_keys: RootForest<ListKeys<'a>>,
 	select_row: RootForest<SelectRow<'a>>,
+	read_field: RootForest<ReadField<'a>>,
 	insert_row: RootForest<InsertRow<'a>>,
-	update_row: RootForest<InsertRow<'a>>,
-	delete_row: RootForest<InsertRow<'a>>,
+	update_row: RootForest<UpdateRow<'a>>,
+	delete_row: RootForest<DeleteRow<'a>>,
 }
 impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface)->Result<Self> {
@@ -2677,6 +2678,7 @@ impl<'a> LuaStatements<'a> {
 // 			schemas,
 			list_keys: RootForest::<_>::prepare(db)?,
 			select_row: RootForest::<_>::prepare(db)?,
+			read_field: RootForest::<_>::prepare(db)?,
 			insert_row: RootForest::<_>::prepare(db)?,
 			update_row: RootForest::<_>::prepare(db)?,
 			delete_row: RootForest::<_>::prepare(db)?,
@@ -2722,12 +2724,24 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		})?;
 		// Step 2: build the sub-schema relations
 		// We do this in a second pass since by now all resource tables exist
+		let lua_subresources = lua.create_table()?;
 		ALL_SCHEMAS.try_map_mut(|schema| {
-			if let Some((_parent, _root)) = schema.parent_root.as_ref() {
-// 				todo!()
+			// root is &&str
+			// parent is &String
+			// schema is &schema
+			lua_subresources.set::<&str,_>(schema.name.as_ref(),
+				lua.create_table()?)?;
+			if let Some((parent, _root)) = schema.parent_root.as_ref() {
+				if let Some(suffix) = schema.name.strip_prefix(parent.as_str()) {
+					if suffix.as_bytes()[0] == b'_' {
+						lua_subresources.get::<&str,mlua::Table<'_>>(parent.as_str())?
+							.set(&suffix[1..], true)?
+					}
+				}
 			}
 			mlua_ok(())
 		})?;
+		simod.set("subresources", lua_subresources)?;
 		simod.set("schema", lua_schema)?;
 		simod.set("dump", scope.create_function(
 		|_lua, (query,): (String,)| {
@@ -2741,8 +2755,9 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		})?)?;
 		statements.list_keys.install_callback(scope, &simod, "list")?;
 		statements.select_row.install_callback(scope, &simod, "select")?;
-		statements.insert_row.install_callback(scope, &simod, "insert")?;
-		statements.update_row.install_callback(scope, &simod, "update")?;
+		statements.read_field.install_callback(scope, &simod, "get")?;
+		statements.insert_row.install_callback(scope, &simod, "append")?;
+		statements.update_row.install_callback(scope, &simod, "set")?;
 		statements.delete_row.install_callback(scope, &simod, "delete")?;
 		lua.globals().set("simod", simod)?;
 
