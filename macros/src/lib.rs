@@ -539,14 +539,13 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 #[derive(Debug)]
 struct DeriveResourceTree {
 	ident: syn::Ident,
-	primary: TS,
 	field: Vec<syn::Ident>,
 	ty: Vec<syn::Type>,
 }
 impl DeriveResourceTree {
-	fn new(ident: &syn::Ident, primary: &TS)->Self {
+	fn new(ident: &syn::Ident)->Self {
 		Self {
-			ident: ident.clone(), primary: primary.clone(),
+			ident: ident.clone(),
 			field: Vec::new(), ty: Vec::new(),
 		}
 	}
@@ -557,7 +556,7 @@ impl DeriveResourceTree {
 }
 impl ToTokens for DeriveResourceTree {
 	fn to_tokens(&self, dest: &mut TS) {
-		let Self { ident, field, ty, primary } = self;
+		let Self { ident, field, ty } = self;
 		let forestname = ident.extend("Forest");
 		let subforest = ty.iter().map(|x| x.extend("Forest"))
 			.collect::<Vec<_>>();
@@ -642,7 +641,6 @@ impl ToTokens for DeriveResourceTree {
 pub fn derive_resource(tokens: TokenStream)->TokenStream {
 	let DeriveInput{ ident, data, attrs,.. } = parse_macro_input!(tokens);
 	let fields = Fields::from(data);
-	let mut primary = quote!{ i64 };
 	let mut ext = String::new();
 	for (name, args) in attrs.iter().map(parse_attr) {
 		match name.as_str() {
@@ -650,12 +648,11 @@ pub fn derive_resource(tokens: TokenStream)->TokenStream {
 				let top = TopResource::from(&ident, args);
 				ext = top.ext.clone();
 				top.store();
-				primary = quote!{ crate::gamefiles::Resref };
 			},
 			_ => ()
 		}
 	}
-	let mut derive_forest = DeriveResourceTree::new(&ident, &primary);
+	let mut derive_forest = DeriveResourceTree::new(&ident);
 	for FieldRef { name, ty, .. } in fields.iter() {
 		// Read attributes for this field
 // 		for (name, mut _args) in attrs.iter().map(parse_attr) {
