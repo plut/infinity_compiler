@@ -78,7 +78,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">2.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="lua_core.html"><strong aria-hidden="true">2.2.</strong> Core functions</a></li><li class="chapter-item expanded "><a href="lua_objects.html"><strong aria-hidden="true">2.3.</strong> Object-oriented front-end</a></li></ol></li><li class="chapter-item expanded "><div><strong aria-hidden="true">3.</strong> API for translators</div></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">4.</strong> Design goals</a></li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">5.</strong> Internals: Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><div><strong aria-hidden="true">5.1.</strong> Implementation of namespacing</div></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">5.2.</strong> Game strings</a></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">5.3.</strong> Translations</a></li></ol></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="workflow.html"><strong aria-hidden="true">1.</strong> Workflow for mod installation</a></li><li class="chapter-item expanded "><a href="lua.html"><strong aria-hidden="true">2.</strong> API for modders</a></li><li><ol class="section"><li class="chapter-item expanded "><a href="resrefs.html"><strong aria-hidden="true">2.1.</strong> Resource identifiers and namespacing</a></li><li class="chapter-item expanded "><a href="strrefs.html"><strong aria-hidden="true">2.2.</strong> Game strings</a></li></ol></li><li class="chapter-item expanded "><div><strong aria-hidden="true">3.</strong> API for translators</div></li><li class="chapter-item expanded "><a href="design.html"><strong aria-hidden="true">4.</strong> Design goals</a></li><li class="spacer"></li><li class="chapter-item expanded affix "><li class="part-title">Internals</li><li class="chapter-item expanded "><a href="database.html"><strong aria-hidden="true">5.</strong> Database structure</a></li><li><ol class="section"><li class="chapter-item expanded "><div><strong aria-hidden="true">5.1.</strong> Implementation of namespacing</div></li></ol></li><li class="chapter-item expanded "><a href="translations.html"><strong aria-hidden="true">6.</strong> Translations</a></li><li class="chapter-item expanded "><div><strong aria-hidden="true">7.</strong> LUA API</div></li><li><ol class="section"><li class="chapter-item expanded "><a href="lua_core.html"><strong aria-hidden="true">7.1.</strong> Core functions</a></li><li class="chapter-item expanded "><a href="lua_objects.html"><strong aria-hidden="true">7.2.</strong> Object-oriented front-end</a></li></ol></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -219,83 +219,46 @@ longrefs (no slash character is prepended; rule 3. above actually removes
 the slash character).
 This means that longrefs without a slash always designate base resources,
 while longrefs with a slash always designate mod-owned resources.</p>
-<div style="break-before: page; page-break-before: always;"></div><h1 id="core-functions-in-the-lua-api"><a class="header" href="#core-functions-in-the-lua-api">Core functions in the LUA API</a></h1>
-<p>The <code>simod</code> library contains the lowest-level API exported to Lua mod
-scripts. The remainder of the API is built on top of these functions.</p>
-<p>Most of the functions in this library take, as their first parameter,
-a string <code>table</code> containing the name of one of the game's resource tables
-(<code>&quot;items&quot;</code>, <code>&quot;item_abilities&quot;</code> etc.).
-String matching is case-sensitive.</p>
-<h2 id="simodlisttable-parent-list-primary-keys-in-a-table"><a class="header" href="#simodlisttable-parent-list-primary-keys-in-a-table"><code>simod.list(table, [parent])</code>: list primary keys in a table</a></h2>
-<p>If <code>table</code> describes a top-level resource (e.g. <code>&quot;items&quot;</code>) then
-the <code>[parent]</code> value is not allowed.
-This will return an array containing the list of all primary keys
-appearing in this table.</p>
-<p>If <code>table</code> describes a sub-resource (e.g. <code>&quot;item_abilities&quot;</code>) then
-<code>[parent]</code> is a primary key for the table's parent;
-this will return a list of all sub-resources whose parent attribute
-matches this primary key.</p>
-<p>If no rows match the query, then an empty table is returned.</p>
-<h2 id="simodinserttable-row-insert-a-new-game-object"><a class="header" href="#simodinserttable-row-insert-a-new-game-object"><code>simod.insert(table, row)</code>: insert a new game object</a></h2>
-<p><code>row</code> is a table containing the row to be inserted, as key-value
-pairs; the keys are strings matching the column headers for this table
-(with the same case).</p>
-<p>This returns the number of lines inserted.
-If the row does not match the format for this table then an error is
-thrown.</p>
-<h2 id="simodgettable-fieldname-primary-read-a-single-field-entry"><a class="header" href="#simodgettable-fieldname-primary-read-a-single-field-entry"><code>simod.get(table, fieldname, primary)</code>: read a single field entry</a></h2>
-<p>This returns the value of column <code>fieldname</code>
-on the line where the primary key is <code>primary</code>.</p>
-<p>If no such line (or column) exists then an error is thrown.</p>
-<h2 id="simodselecttable-primary-read-one-row-in-a-table"><a class="header" href="#simodselecttable-primary-read-one-row-in-a-table"><code>simod.select(table, primary)</code>: read one row in a table</a></h2>
-<p>This returns the content of the row with primary key <code>primary</code>
-in the table, as a Lua table whose keys are strings
-corresponding to the table's column names.</p>
-<p>If no row with the given primary key exists, then an error is thrown.</p>
-<h2 id="simodsettable-fieldname-primary-value-modify-an-entry-in-a-table"><a class="header" href="#simodsettable-fieldname-primary-value-modify-an-entry-in-a-table"><code>simod.set(table, fieldname, primary, value)</code>: modify an entry in a table.</a></h2>
-<p>This updates the row with primary key <code>primary</code> in the given table,
-setting the field with column name <code>fieldname</code> to the given <code>value</code>.
-The <code>fieldname</code> must be a string corresponding to one of the table's
-column names (otherwise an error is thrown).</p>
-<p>This returns a boolean value, which is <code>true</code> if a row was updated
-and <code>false</code> if no row with the given primary key was found.</p>
-<h2 id="simoddeletetable-primary-delete-an-entry-in-a-table"><a class="header" href="#simoddeletetable-primary-delete-an-entry-in-a-table"><code>simod.delete(table, primary)</code>: delete an entry in a table.</a></h2>
-<p>This deletes the row with the given primary key from the table.</p>
-<p>This returns a boolean value, which is <code>true</code> if a row was deleted,
-and <code>false</code> otherwise.</p>
-<p>Note that rows from the base game (those present in the <code>load_*</code> tables)
-currently cannot be deleted,
-since the data they represent is stored in the BIF files
-and not in the override directory.</p>
-<h2 id="simodschema"><a class="header" href="#simodschema"><code>simod.schema</code></a></h2>
-<p>This contains the description for the format of the game resource tables.
-For example, the entry <code>simod.schema.items</code> contains the description of
-items, as the following fields:</p>
-<ul>
-<li><code>simod.schema.items.fields</code>: list of fields and types, as key-pair values;</li>
-<li><code>simod.schema.items.is_subresource</code>: <code>nil</code> since this is not a
-subresource (otherwise <code>true</code>);</li>
-</ul>
-<div style="break-before: page; page-break-before: always;"></div><h1 id="representation-of-objects-for-the-lua-api"><a class="header" href="#representation-of-objects-for-the-lua-api">Representation of objects for the Lua API</a></h1>
-<h2 id="resources"><a class="header" href="#resources">Resources</a></h2>
-<p>Resources are stored as a table <code>{_table, _key}</code>,
-where <code>_table</code> is a string containing the name of the SQL table
-to which the resource is attached,
-and <code>_key</code> contains the primary key for the row mapped to the resource.</p>
-<p>Access to the contents of the resource via <code>resource.field</code>
-is overloaded to a function which returns
-the value currently found in a database.
-Thus, the value of <code>resource.field</code> will remain up-to-date
-even if a SQL operation modified the contents of the database.</p>
-<h2 id="resource-vectors"><a class="header" href="#resource-vectors">Resource vectors</a></h2>
-<p>Resource vectors (e.g. the list of abilities of an item)
-are stored as a table <code>{_table, _parent}</code>,
-where <code>_table</code> is a string containing the name of the SQL table
-containing this kind of resource (e.g. <code>&quot;items_abilities&quot;</code>)
-and <code>_parent</code> is the primary key of the parent resource.</p>
-<p>Accessing the <code>i</code>-th entry of this resource vector
-triggers a SQL request which retrieves the corresponding
-primary key.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="string-references"><a class="header" href="#string-references">String references</a></h1>
+<p>In-game strings are collected in one or two files, <code>dialog.tlk</code> and
+(depending on user language) <code>dialogF.tlk</code>,
+and referred to by 4-byte integers (“strrefs”) in game structures.</p>
+<blockquote>
+<p>In the database, strings are identified by <strong>“native strings”</strong>,
+which are arbitrary strings.
+(The native string is usually the game string itself
+in the mod's native language).</p>
+</blockquote>
+<h3 id="namespacing-1"><a class="header" href="#namespacing-1">Namespacing</a></h3>
+<p>Since game strings are not used as references,
+namespacing rules do not apply for native strings.
+The only rule is that strings from different namespaces will never be merged.</p>
+<h2 id="conversion-to-strref"><a class="header" href="#conversion-to-strref">Conversion to strref</a></h2>
+<p>The <code>strref_dict</code> table is the dictionary
+between native strings and strrefs.</p>
+<p>The <code>new_strings</code> view is a list of all the native strings
+introduced by currently installed mods,
+together with their game flags (<strong>TODO</strong> explain why the flags).</p>
+<p>As a part of the <code>save</code> operation,
+the compiler rebuilds <code>strref_dict</code>
+from the list of strings present in <code>new_strings</code>.
+This procedure happens in two steps:</p>
+<ol>
+<li>entries absent from <code>new_strings</code>
+and entries with a too-high <code>strref</code> value
+are purged from the dictionary,</li>
+<li>then entries form <code>new_strings</code> are inserted in <code>strref_dict</code>,
+each one successively using the lowest available strref.</li>
+</ol>
+<p>For step 1:
+Let \(C\) be the number of constant strrefs
+(e.g. \(C=34000\) for a BG1EE install)
+and \(S\) be the number of entries in <code>new_strings</code>.
+Then the new resrefs need to be allocated in the interval
+\([0,C+S-1]\).
+This means that entries where \(\mathtt{strref} \geq C+S \)
+need to be purged from the <code>strref_dict</code> table.</p>
+<p>The <code>string_keys</code> view is used for sequential generation of strrefs.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="design-goals"><a class="header" href="#design-goals">Design goals</a></h1>
 <p>Obviously, there already exists a perfectly fine tool for IE modding.
 However, starting from scratch allows us to design
@@ -314,7 +277,7 @@ cost).</p>
 mods are trying to access the same resource.</p>
 <p>(This is still <strong>TODO</strong> however; mostly, we need to fix an interface
 about what to do in the case of conflict).</p>
-<h3 id="namespacing-1"><a class="header" href="#namespacing-1">Namespacing</a></h3>
+<h3 id="namespacing-2"><a class="header" href="#namespacing-2">Namespacing</a></h3>
 <p>Identifiers for game resources and strings are abstracted as strings
 and namespaced per mod component.
 This completely removes the need for using mod prefixes
@@ -470,46 +433,6 @@ under which the resource will be saved.</p>
 <li>2da,</li>
 <li>script (de)compiling,</li>
 </ul>
-<div style="break-before: page; page-break-before: always;"></div><h1 id="string-references"><a class="header" href="#string-references">String references</a></h1>
-<p>In-game strings are collected in one or two files, <code>dialog.tlk</code> and
-(depending on user language) <code>dialogF.tlk</code>,
-and referred to by 4-byte integers (“strrefs”) in game structures.</p>
-<blockquote>
-<p>In the database, strings are identified by <strong>“native strings”</strong>,
-which are arbitrary strings.
-(The native string is usually the game string itself
-in the mod's native language).</p>
-</blockquote>
-<h3 id="namespacing-2"><a class="header" href="#namespacing-2">Namespacing</a></h3>
-<p>Since game strings are not used as references,
-namespacing rules do not apply for native strings.
-The only rule is that strings from different namespaces will never be merged.</p>
-<h2 id="conversion-to-strref"><a class="header" href="#conversion-to-strref">Conversion to strref</a></h2>
-<p>The <code>strref_dict</code> table is the dictionary
-between native strings and strrefs.</p>
-<p>The <code>new_strings</code> view is a list of all the native strings
-introduced by currently installed mods,
-together with their game flags (<strong>TODO</strong> explain why the flags).</p>
-<p>As a part of the <code>save</code> operation,
-the compiler rebuilds <code>strref_dict</code>
-from the list of strings present in <code>new_strings</code>.
-This procedure happens in two steps:</p>
-<ol>
-<li>entries absent from <code>new_strings</code>
-and entries with a too-high <code>strref</code> value
-are purged from the dictionary,</li>
-<li>then entries form <code>new_strings</code> are inserted in <code>strref_dict</code>,
-each one successively using the lowest available strref.</li>
-</ol>
-<p>For step 1:
-Let \(C\) be the number of constant strrefs
-(e.g. \(C=34000\) for a BG1EE install)
-and \(S\) be the number of entries in <code>new_strings</code>.
-Then the new resrefs need to be allocated in the interval
-\([0,C+S-1]\).
-This means that entries where \(\mathtt{strref} \geq C+S \)
-need to be purged from the <code>strref_dict</code> table.</p>
-<p>The <code>string_keys</code> view is used for sequential generation of strrefs.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="translations-1"><a class="header" href="#translations-1">Translations</a></h1>
 <h2 id="language-identifiers"><a class="header" href="#language-identifiers">Language identifiers</a></h2>
 <p>Languages are represented by their 5-letter name (as in <code>&quot;en_US&quot;</code>)
@@ -567,6 +490,83 @@ still bearing its empty marker.</p>
 <code>strref_dict</code> table in a way similar to the <code>resref_dict</code> table.
 The algorithm for generating new strrefs is of course different (the
 lowest available value is used).</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="core-functions-in-the-lua-api"><a class="header" href="#core-functions-in-the-lua-api">Core functions in the LUA API</a></h1>
+<p>The <code>simod</code> library contains the lowest-level API exported to Lua mod
+scripts. The remainder of the API is built on top of these functions.</p>
+<p>Most of the functions in this library take, as their first parameter,
+a string <code>table</code> containing the name of one of the game's resource tables
+(<code>&quot;items&quot;</code>, <code>&quot;item_abilities&quot;</code> etc.).
+String matching is case-sensitive.</p>
+<h2 id="simodlisttable-parent-list-primary-keys-in-a-table"><a class="header" href="#simodlisttable-parent-list-primary-keys-in-a-table"><code>simod.list(table, [parent])</code>: list primary keys in a table</a></h2>
+<p>If <code>table</code> describes a top-level resource (e.g. <code>&quot;items&quot;</code>) then
+the <code>[parent]</code> value is not allowed.
+This will return an array containing the list of all primary keys
+appearing in this table.</p>
+<p>If <code>table</code> describes a sub-resource (e.g. <code>&quot;item_abilities&quot;</code>) then
+<code>[parent]</code> is a primary key for the table's parent;
+this will return a list of all sub-resources whose parent attribute
+matches this primary key.</p>
+<p>If no rows match the query, then an empty table is returned.</p>
+<h2 id="simodinserttable-row-insert-a-new-game-object"><a class="header" href="#simodinserttable-row-insert-a-new-game-object"><code>simod.insert(table, row)</code>: insert a new game object</a></h2>
+<p><code>row</code> is a table containing the row to be inserted, as key-value
+pairs; the keys are strings matching the column headers for this table
+(with the same case).</p>
+<p>This returns the number of lines inserted.
+If the row does not match the format for this table then an error is
+thrown.</p>
+<h2 id="simodgettable-fieldname-primary-read-a-single-field-entry"><a class="header" href="#simodgettable-fieldname-primary-read-a-single-field-entry"><code>simod.get(table, fieldname, primary)</code>: read a single field entry</a></h2>
+<p>This returns the value of column <code>fieldname</code>
+on the line where the primary key is <code>primary</code>.</p>
+<p>If no such line (or column) exists then an error is thrown.</p>
+<h2 id="simodselecttable-primary-read-one-row-in-a-table"><a class="header" href="#simodselecttable-primary-read-one-row-in-a-table"><code>simod.select(table, primary)</code>: read one row in a table</a></h2>
+<p>This returns the content of the row with primary key <code>primary</code>
+in the table, as a Lua table whose keys are strings
+corresponding to the table's column names.</p>
+<p>If no row with the given primary key exists, then an error is thrown.</p>
+<h2 id="simodsettable-fieldname-primary-value-modify-an-entry-in-a-table"><a class="header" href="#simodsettable-fieldname-primary-value-modify-an-entry-in-a-table"><code>simod.set(table, fieldname, primary, value)</code>: modify an entry in a table.</a></h2>
+<p>This updates the row with primary key <code>primary</code> in the given table,
+setting the field with column name <code>fieldname</code> to the given <code>value</code>.
+The <code>fieldname</code> must be a string corresponding to one of the table's
+column names (otherwise an error is thrown).</p>
+<p>This returns a boolean value, which is <code>true</code> if a row was updated
+and <code>false</code> if no row with the given primary key was found.</p>
+<h2 id="simoddeletetable-primary-delete-an-entry-in-a-table"><a class="header" href="#simoddeletetable-primary-delete-an-entry-in-a-table"><code>simod.delete(table, primary)</code>: delete an entry in a table.</a></h2>
+<p>This deletes the row with the given primary key from the table.</p>
+<p>This returns a boolean value, which is <code>true</code> if a row was deleted,
+and <code>false</code> otherwise.</p>
+<p>Note that rows from the base game (those present in the <code>load_*</code> tables)
+currently cannot be deleted,
+since the data they represent is stored in the BIF files
+and not in the override directory.</p>
+<h2 id="simodschema"><a class="header" href="#simodschema"><code>simod.schema</code></a></h2>
+<p>This contains the description for the format of the game resource tables.
+For example, the entry <code>simod.schema.items</code> contains the description of
+items, as the following fields:</p>
+<ul>
+<li><code>simod.schema.items.fields</code>: list of fields and types, as key-pair values;</li>
+<li><code>simod.schema.items.is_subresource</code>: <code>nil</code> since this is not a
+subresource (otherwise <code>true</code>);</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="representation-of-objects-for-the-lua-api"><a class="header" href="#representation-of-objects-for-the-lua-api">Representation of objects for the Lua API</a></h1>
+<h2 id="resources"><a class="header" href="#resources">Resources</a></h2>
+<p>Resources are stored as a table <code>{_table, _key}</code>,
+where <code>_table</code> is a string containing the name of the SQL table
+to which the resource is attached,
+and <code>_key</code> contains the primary key for the row mapped to the resource.</p>
+<p>Access to the contents of the resource via <code>resource.field</code>
+is overloaded to a function which returns
+the value currently found in a database.
+Thus, the value of <code>resource.field</code> will remain up-to-date
+even if a SQL operation modified the contents of the database.</p>
+<h2 id="resource-vectors"><a class="header" href="#resource-vectors">Resource vectors</a></h2>
+<p>Resource vectors (e.g. the list of abilities of an item)
+are stored as a table <code>{_table, _parent}</code>,
+where <code>_table</code> is a string containing the name of the SQL table
+containing this kind of resource (e.g. <code>&quot;items_abilities&quot;</code>)
+and <code>_parent</code> is the primary key of the parent resource.</p>
+<p>Accessing the <code>i</code>-th entry of this resource vector
+triggers a SQL request which retrieves the corresponding
+primary key.</p>
 
                     </main>
 
