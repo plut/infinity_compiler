@@ -1,5 +1,6 @@
  - a command-line option to make it headless (disable progress bars)
 # Lua side
+ - [ ] add a primitive to check whether a key exists
  - [+] make every field access lazy (this is probably simplest way)
  - [ ] build a hierarchy of metatables accessed via  tables
    i.e. `item_mt.abilities.each == item_abilities_mt` etc.
