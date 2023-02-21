@@ -93,7 +93,7 @@ local blue = mkdisplay("34")
 local magenta = mkdisplay("35")
 local cyan = mkdisplay("36")
 local bold = mkdisplay("1")
-local function todo() error("todo!") end
+local function todo(text) error("todo!: "..tostring(text)) end
 --««1 Schema accessors
 local function table_schema(tbl)
 	local sch = simod.schema[tbl]
@@ -122,7 +122,6 @@ function resource_mt:index(fieldname)
 	if method ~= nil then
 		return method
 	end
-	print("   accessing payload field: ", fieldname, " in table ", self._table)
 	-- second case: we are accessing a content field
 	local sch = table_schema(self._table)
 	local fields = sch.fields
@@ -140,6 +139,17 @@ function resource_mt:index(fieldname)
 		return setmetatable(v, meta.subresources[fieldname])
 	end
 	return simod.get(self._table, fieldname, self._key)
+end
+function resource_mt:newindex(fieldname, value)
+	-- Updates one field of a resource.
+	-- This function ends up as meta(resource).__newindex.
+	local sch = table_schema(self._table)
+	local fields = sch.fields
+	local ft = fields[fieldname]
+	if ft == "subresource" then
+		todo("assigning to a subresource field")
+	end
+	simod.set(self._table, fieldname, self._key, value)
 end
 function resource_mt:clone_resource(args)
 	-- Clones a resource, modifying values passed as arguments.
@@ -172,11 +182,27 @@ function resource_mt:create_resource_mt(table)
 	local new = {}
 	new._table = table
 	new.__index = self.index
+	new.__newindex = self.newindex
 	new.__call = self.clone_resource
 	new.__dump = "[38;5;88m<resource_mt "..table..">[m"
 	new.subresources = {}
 -- 	return new
 	return setmetatable(new, self)
+end
+function resource_mt.load_rec(table, key)
+	local new = simod.select(table, key)
+	for fn, ft in pairs(simod.schema[table].fields) do
+		if ft == "subresource" then
+			local subtable = table..'_'..fn
+			local list = simod.list(subtable, key)
+			local subresource = {}
+			for k, v in pairs(list) do
+				subresource[k] = resource_mt.load_rec(subtable, v)
+			end
+			new[fn] = subresource
+		end
+	end
+	return new
 end
 
 --««1 Methods for resource vectors (resvecs)
@@ -218,6 +244,7 @@ function resvec_mt:create_resvec_mt(mt)
 	local new = { each = mt }
 	new.__dump = "[38;5;100m<resvec_mt "..mt._table..">[m"
 	new.__index = self.index
+	new.__newindex = self.newindex
 	new.__call = self.iterate
 	return setmetatable(new, self)
 end
@@ -321,37 +348,46 @@ end
 -- end
 -- 
 --««1 Test code
+local function group(x) print(red(bold("\ntesting "..x))) end
 function test_core()
-	function group(x) print(red(bold("\ntesting "..x))) end
-	group("simod.list")
-		print(blue("listing a few item IDs:"))
+-- 	group("simod.list")
+-- 		print(blue("listing a few item IDs:"))
 		local v = simod.list("items")
-		print(v[1], v[2], v[3], v[4])
+-- 		print(v[1], v[2], v[3], v[4])
+		assert(v[1] == "abazring")
+		assert(v[2] == "abisred1")
+		assert(v[3] == "acidbl")
 -- 	local obj = simod.select("items", "sw1h34")
 -- 	dump(obj)
-		print(blue("listing abilities from sw1h34:"))
+-- 		print(blue("listing abilities from sw1h34:"))
 		local v2 = simod.list("items_abilities", "sw1h34")
-		dump(v2)
-		print(blue("listing effects of ability ", v2[2]))
+		assert(v2[1] == 808 and v2[2] == 809)
+-- 		dump(v2)
+-- 		print(blue("listing effects of ability ", v2[2]))
 		local v3 = simod.list("items_abilities_effects", v2[2])
-		dump(v3)
-	group("simod.select")
-		print(blue("selecting item sw1h34:"))
+		assert(v3[1] == 1879 and v3[2] == 1880 and v3[3] == 1881)
+-- 		dump(v3)
+-- 	group("simod.select")
+-- 		print(blue("selecting item sw1h34:"))
 		local x = simod.select("items", "sw1h34")
-		dump(x)
-	group("simod.get")
+		assert(x.description_icon == "csw1h34" and x.min_intelligence == 0
+			and x.stack_amount == 1 and x.price == 10000)
+-- 		dump(x)
+-- 	group("simod.get")
 		local x = simod.get("items", "name", "sw1h34")
-		dump(x)
-	group("simod.set")
+		assert(x == 31707)
+-- 		dump(x)
+-- 	group("simod.set")
 		local x = simod.set("items", "name", "sw1h34", "strange sword!")
-		dump(x)
-		print(blue("now sw1h34 name is:"))
+-- 		dump(x)
+-- 		print(blue("now sw1h34 name is:"))
 		local x = simod.get("items", "name", "sw1h34")
-		dump(x)
-	group("simod.schema is:")
-		dump(simod.schema)
+		assert(x == "strange sword!")
+-- 		dump(x)
+-- 	group("simod.schema is:")
+-- 		dump(simod.schema)
 end
-function test_objects()
+function test_objects0()
 	-- show schema
 	for k, v in pairs(simod.schema) do
 		print(k, v.primary, strdump(v.context))
@@ -385,27 +421,46 @@ function test_objects()
 	carsomyr2:delete()
 	print("after delete")
 end
--- test_core()
-local albruin = setmetatable({_table="items", _key="sw1h34"}, all_resources_mt.items)
-
-function all_resources_mt:foo()
-	print("called all_resources_mt:foo() on:", strdump(self))
+function test_resources()
+-- 	group("resource builder")
+		local albruin = setmetatable({_table="items", _key="sw1h34"}, all_resources_mt.items)
+		assert(albruin._table == "items")
+-- 	group("resource getindex")
+-- 		dump(albruin.weight)
+-- 		dump(albruin.abilities)
+		assert(albruin.weight == 8)
+		assert(albruin.abilities._table == "items_abilities")
+-- 	group("resource setindex")
+		albruin.weight = 12345
+-- 		dump(albruin.weight)
+		assert(albruin.weight == 12345)
+-- 	group("resvec indexing")
+		local ab_list = albruin.abilities
+-- 		dump(ab_list[1])
+-- 		dump(ab_list[1].use_icon)
+		assert(ab_list[1]._key == 808)
+		assert(ab_list[1].use_icon == "isw1h34")
+		ab_list[1].use_icon="useicon"
+		assert(ab_list[1].use_icon == "useicon")
+-- 		dump(ab_list[1].use_icon)
+-- 		dump(ab_list[1])
+	group("resvec iteration")
+		for a in ab_list do dump(a) end
+		print("  second pass:")
+		for a in ab_list do dump(a) end
 end
-function all_resources_mt.items:foo()
-	print("called item:foo() on:", strdump(self))
+function test_inherit()
+	function all_resources_mt:foo()
+		print("called all_resources_mt:foo() on:", strdump(self))
+	end
+	function all_resources_mt.items:foo()
+		print("called item:foo() on:", strdump(self))
+	end
+	local albruin = setmetatable({_table="items", _key="sw1h34"}, all_resources_mt.items)
+	albruin:foo()
 end
-ab = albruin.abilities
-dump(ab)
-for i in ab do
-	print(strdump(i))
-end
-print(blue("iterating (again)"))
-for i in ab do; print(strdump(i)) end
--- dump(albruin.abilities)
--- print(magenta("getmetatable(albruin):"))
--- dump(getmetatable(albruin))
--- print(magenta("getmetatable(albruin.abilities):"))
--- dump(getmetatable(ab))
--- ab1 = ab[1]
--- dump(ab1.use_icon)
--- albruin:foo()
+test_core()
+test_resources()
+dump(resource_mt.load_rec("items", "sw1h34"),0, 5)
+-- simod.dump("select * from edit_items_abilities")
+-- simod.dump("select * from edit_items")
