@@ -1,4 +1,3 @@
-//! Compiler between IE game files and a SQLite database.
 #![allow(
 	unused_attributes,
 // 	unused_imports,
@@ -9,6 +8,7 @@
 // 	unused_must_use,
 // 	unused_mut,
 )]
+//! Compiler between IE game files and a SQLite database.
 #![warn(
 	explicit_outlives_requirements,
 	single_use_lifetimes,
@@ -2279,7 +2279,7 @@ pub mod lua_api {
 //! Any error occurring during execution of one of those functions
 //! (including SQL errors) is passed back to Lua in the form of a
 //! callback error.
-use mlua::{Lua,FromLua,ToLua,ExternalResult,Value,MultiValue};
+use mlua::{Lua,FromLua,ToLua,ToLuaMulti,ExternalResult,Value,MultiValue};
 use rusqlite::{ToSql, types::ToSqlOutput};
 
 use std::collections::HashMap;
@@ -2343,6 +2343,7 @@ impl Debug for LuaValueRef<'_> {
 impl ToSql for LuaValueRef<'_> {
 	fn to_sql(&self)->rusqlite::Result<ToSqlOutput<'_>> { self.0.to_sql_owned() }
 }
+
 /// Value conversion in the Sql->Lua direction.
 ///
 /// Note that this function needs access to the `[mlua::Lua]` instance so
@@ -2357,7 +2358,6 @@ fn sql_to_lua<'lua>(v: rusqlite::types::ValueRef<'_>, lua: &'lua Lua)->Result<Va
 		_ => Err(rusqlite::types::FromSqlError::InvalidType.into()),
 	}
 }
-
 /// Helper function for reading arguments passed to Lua callbacks.
 ///
 /// Reads an argument as the given `FromLua` type and returns it,
@@ -2368,6 +2368,7 @@ fn pop_arg_as<'lua, T: FromLua<'lua>>(args: &mut MultiValue<'lua>, lua:&'lua Lua
 		format!("cannot convert argument to type {}", std::any::type_name::<T>()))?;
 	Ok(r)
 }
+
 /// Small simplification for [`MultiValue`] impl of [`AsParams`].
 type MluaMultiIter<'a,'lua> = std::iter::Rev<std::slice::Iter<'a,Value<'lua>>>;
 impl<'lua> AsParams for MultiValue<'lua> {
@@ -2386,11 +2387,13 @@ impl<'lua> AsParams for MultiValue<'lua> {
 /// The extension trait for `RootForest<Callback>` defined later takes
 /// care of dispatching all callback invocations to the correct table.
 pub trait Callback<'a>: Sized {
+	/// The type returned by the `execute` call
+	type RetType<'lua>: ToLuaMulti<'lua>+Debug;
 	/// Builds the data for the callback from the table schema.
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self>;
 	/// Runs the callback (from the selected table, etc.) and builds the
 	/// resulting Lua value.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>>;
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Self::RetType<'lua>>;
 	/// Utility function to check that arguments match statement.
 	fn expect_arguments(args: &MultiValue<'_>, expected: usize)->Result<()> {
 		// We assume that one argument was discarded (table name).
@@ -2406,6 +2409,7 @@ pub trait Callback<'a>: Sized {
 #[derive(Debug)]
 struct ListKeys<'a>(Statement<'a>);
 impl<'a> Callback<'a> for ListKeys<'a> {
+	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let mut s = format!(r#"select "id" from "{schema}""#);
 		if schema.is_subresource() {
@@ -2442,6 +2446,7 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 #[derive(Debug)]
 struct SelectRow<'a>(Statement<'a>);
 impl<'a> Callback<'a> for SelectRow<'a> {
+	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let sql = format!(r#"select {cols} from "{schema}" where "id"=?"#,
 			cols = schema.fields);
@@ -2476,6 +2481,7 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 #[derive(Debug)]
 struct ReadField<'a>(HashMap<&'a str, Statement<'a>>);
 impl<'a> Callback<'a> for ReadField<'a> {
+	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let mut h = HashMap::<&str, Statement<'_>>::
 			with_capacity(schema.fields.len());
@@ -2507,11 +2513,11 @@ impl<'a> Callback<'a> for ReadField<'a> {
 		sql_to_lua(val, lua)
 	}
 }
-
 /// Implementation of `simod.insert`.
 #[derive(Debug)]
 struct InsertRow<'a>(&'a Connection, Statement<'a>,&'a Schema);
 impl<'a> Callback<'a> for InsertRow<'a> {
+	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let s = schema.insert_sql(lazy_format!(""));
 		// TODO: use a restricted form of insertion where primary is not
@@ -2573,6 +2579,7 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 #[derive(Debug)]
 struct UpdateRow<'a>(HashMap<&'a str, Statement<'a>>);
 impl<'a> Callback<'a> for UpdateRow<'a> {
+	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let mut h = HashMap::<&str, Statement<'_>>::
 			with_capacity(schema.fields.len());
@@ -2604,6 +2611,7 @@ impl<'a> Callback<'a> for UpdateRow<'a> {
 #[derive(Debug)]
 struct DeleteRow<'a>(Statement<'a>);
 impl<'a> Callback<'a> for DeleteRow<'a> {
+	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		db.prepare(&format!(r#"delete from "{schema}" where "id"=?"#))
 			.map(Self)
@@ -2612,6 +2620,30 @@ impl<'a> Callback<'a> for DeleteRow<'a> {
 		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
 		let n = self.0.execute(args.as_params())?;
 		Ok((n > 0).to_lua(lua)?)
+	}
+}
+/// Implementation of `simod.next_key`.
+#[derive(Debug)]
+struct NextKey<'a>(Statement<'a>);
+impl<'a> Callback<'a> for NextKey<'a> {
+	type RetType<'lua> = MultiValue<'lua>;
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+		db.prepare(&format!(r#"select "position","id" from "{schema}" where "parent"=?1 and "position">?2 order by "position" limit 1"#))
+			.map(Self)
+	}
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<MultiValue<'lua>> {
+		Self::expect_arguments(&args, 3)?;
+		let arg1 = LuaValueRef(args.get(0).unwrap());
+		let arg2 = LuaValueRef(args.get(1).unwrap());
+		let mut rows = self.0.query((arg1, arg2))?;
+		let row = match rows.next()? {
+			Some(row) => row,
+			None => return Ok(Value::Nil.to_lua_multi(lua)?),
+		};
+		let pos = row.get_ref(0)?;
+		let id = row.get_ref(1)?;
+		(sql_to_lua(pos, lua)?, sql_to_lua(id, lua)?).to_lua_multi(lua)
+			.context("create Lua multivalue")
 	}
 }
 /// This extension trait allows factoring the code for selecting the
@@ -2625,7 +2657,7 @@ impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
 	}
 	/// Selects the appropriate individual callback from the first argument
 	/// (table name) and runs it.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<T::RetType<'lua>> {
 		let table = pop_arg_as::<String>(&mut args, lua)
 			.context("first argument must be a string")?;
 		self.by_name_mut(&table)?
@@ -2671,6 +2703,7 @@ struct LuaStatements<'a> {
 	insert_row: RootForest<InsertRow<'a>>,
 	update_row: RootForest<UpdateRow<'a>>,
 	delete_row: RootForest<DeleteRow<'a>>,
+	next_key: RootForest<NextKey<'a>>,
 }
 impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface)->Result<Self> {
@@ -2682,6 +2715,7 @@ impl<'a> LuaStatements<'a> {
 			insert_row: RootForest::<_>::prepare(db)?,
 			update_row: RootForest::<_>::prepare(db)?,
 			delete_row: RootForest::<_>::prepare(db)?,
+			next_key: RootForest::<_>::prepare(db)?,
 		})
 	}
 }
@@ -2767,6 +2801,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		statements.insert_row.install_callback(scope, &simod, "append")?;
 		statements.update_row.install_callback(scope, &simod, "set")?;
 		statements.delete_row.install_callback(scope, &simod, "delete")?;
+		statements.next_key.install_callback(scope, &simod, "next_key")?;
 		lua.globals().set("simod", simod)?;
 
 		info!("loading file {lua_file:?}");
