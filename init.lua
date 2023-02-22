@@ -162,6 +162,7 @@ function resource_mt:save()
 	for fn, ft in pairs(fields) do
 		if ft == "subresource" then
 			local list = self[fn]
+			print("insert subresource: ", fn, #list)
 			for i, sub in ipairs(list) do
 				sub.parent = self.id
 				sub.position = i
@@ -358,6 +359,7 @@ albruin = resource_mt.load("items", "sw1h34")
 print(albruin.id)
 -- albruin.id = "no such id"
 albruin.name = "New name"
+dump(albruin.effects)
 foo = albruin:clone({"blah", weight=3})
 foo:save()
 -- dump(foo.id)

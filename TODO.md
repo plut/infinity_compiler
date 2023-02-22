@@ -1,3 +1,6 @@
+ - [ ] kill the `add_*` tables and write into the main `load_*` table
+ - [ ] just use a special value for the `owner` field to mark original
+   resources
  - a command-line option to make it headless (disable progress bars)
 # Lua side
  - [ ] add a primitive to check whether a key exists

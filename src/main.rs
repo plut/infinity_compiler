@@ -989,7 +989,7 @@ impl Iterator for FieldsIterator {
 	fn next(&mut self)->Option<Self::Item> {
 		match self.state {
 			Self::POSITION => { self.state = 0; Some(&Field::POSITION) },
-			x if x >= self.fields.len() => { return None },
+			x if x >= self.fields.len() => { None },
 			i => { let ret = &self.fields[i]; self.state+= 1; Some(ret) },
 		}
 	}
@@ -1155,6 +1155,14 @@ left join "strref_dict" as {b} on {a} = {b}."native""#);
 		// table of resources inserted by mods:
 		// (the extra field designates the mod)
 		f(self.create_table(format!("add_{self}"), r#", "source" text"#))?;
+		if self.is_subresource() {
+			// we simulate a primary key in sync with that from the load_* table:
+			f(format!(r#"create trigger "gen_id_{self}"
+after insert on "add_{self}"
+begin
+	update "add_{self}" set "id"=(select "{self}" from "counters") where rowid=new.rowid;
+end;"#))?;
+		}
 		// table of fields edited by mods:
 		f(format!(r#"create table "edit_{self}" ("source" text, "line", "field" text, "value")"#))?;
 		f(self.create_main_view())?;
@@ -2116,6 +2124,19 @@ create index "strref_dict_reverse" on "strref_dict" ("strref");
 				schema.create_tables_and_views(|s| db.exec(s))
 			}).context("cannot create main tables and views")?;
 			ALL_SCHEMAS.create_new_strings(|s| db.exec(s))?;
+			let mut counters = String::from(r#"create view "counters" as select
+	ifnull((select min("strref")+1 from "strref_dict"
+		where "strref"+1 not in (select "strref" from "strref_dict")),
+		(select "strref_count" from "global")) as "strref""#);
+			ALL_SCHEMAS.try_map_mut(|schema| {
+				if schema.is_subresource() {
+					write!(&mut counters, r#",
+	(select min("id")+1 from {schema}
+		where "id"+1 not in (select "id" from {schema})) as {schema}"#)?;
+				}
+				any_ok(())
+			})?;
+			db.execute(counters, ())?;
 			Ok(())
 		}).context("creating global tables")?;
 		db.create_language_tables(game).context("cannot create language tables")?;
@@ -2312,10 +2333,7 @@ begin"#);
 	instead of update of "strref" on "new_strings"
 	begin
 		insert into "strref_dict"("native","strref")
-		values (new."native",
-			ifnull((select min("strref")+1 from "strref_dict"
-				where "strref"+1 not in (select "strref" from "strref_dict")),
-				(select "strref_count" from "global")));
+		values (new."native", (select "strref" from "counters"));
 	end"#)?;
 		Ok(())
 	}
@@ -2589,14 +2607,28 @@ impl<'a> Callback<'a> for ReadField<'a> {
 }
 /// Implementation of `simod.insert`.
 #[derive(Debug)]
-struct InsertRow<'a>(&'a Connection, Statement<'a>,&'a Schema);
+struct InsertRow<'a> {
+	/// The main insert statement.
+	insert: Statement<'a>,
+	/// The statement generating the rowid (for subresources only).
+	counter: Option<Statement<'a>>,
+	/// We also need a reference to the resource schema.
+	schema: &'a Schema,
+}
 impl<'a> Callback<'a> for InsertRow<'a> {
 	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		let s = schema.insert_sql(lazy_format!(""));
+		let insert = schema.insert_sql(lazy_format!(""));
 		// TODO: use a restricted form of insertion where primary is not
 		// inserted
-		Ok(Self(db.db(), db.prepare(s)?, schema))
+		let counter = if schema.is_subresource() {
+			Some(db.prepare(format!(r#"select {schema} from "counters""#))?)
+		} else { None };
+		Ok(Self {
+			insert: db.prepare(insert)?,
+			counter,
+			schema,
+		})
 	}
 	fn execute<'lua>(&mut self, _lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
 		Self::expect_arguments(&args, 2)?;
@@ -2605,23 +2637,29 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 			other => fail!(BadArgumentType { position: 2, expected: "table",
 				found: format!("{other:?}")}),
 		};
-		let Self(db, stmt, schema) = self;
+		let Self { insert, counter, schema } = self;
 		// We could use two strategies here:
 		// 1. build an iterator from schema.fields, then map to SQL values,
 		//    then pass to [`rusqlite::params_from_iter`],
 		// 2. use a loop and raw bind to the statement.
 		// Since [`rusqlite::params_from_iter`] does not accept `Result`
 		// values, taking option 2 will produce better failure messages.
-		let expected = stmt.parameter_count();
+		let expected = insert.parameter_count();
 		let mut bind_field = |i, name| {
 			let v_lua: Value<'_> = table.get(name)?;
 			// Note that sqlite uses 1-based indexing.
-			stmt.raw_bind_parameter(i+1, v_lua.to_sql_owned()?)?;
+			insert.raw_bind_parameter(i+1, v_lua.to_sql_owned()?)?;
 			any_ok(())
 		};
 		// first bind the header fields:
 		if schema.is_subresource() {
 			bind_field(0, "parent")?; // `position` added as part of `pos_payload`
+			counter.as_mut().unwrap().query_row((), |row| {
+				let c = row.get::<_,usize>(0)?;
+				println!("generated id: {c}");
+				table.set("id", c).expect("unable to bind to Lua table");
+				Ok(())
+			})?;
 		} else {
 			bind_field(0, "id")?;
 		}
@@ -2634,11 +2672,7 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		for (i, field) in cols.enumerate() {
 			bind_field(i + offset, field.fname)?;
 		}
-		stmt.raw_execute()?;
-		if schema.is_subresource() {
-			println!("generated id from last rowid: {}", db.last_insert_rowid());
-			table.set("id", db.last_insert_rowid())?;
-		}
+		insert.raw_execute()?;
 		Ok(Value::Table(table))
 	}
 }
