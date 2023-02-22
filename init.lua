@@ -5,7 +5,7 @@ function loadstring(s) return load(s) end
  and newindex etc. wrappers as well!
 ]]--
 --««1 Display tools
-local function strdump(o, level, limit)
+local function strdump(o, limit, level)
 	if level == nil then level = 0 end
   if type(o) == 'table' then
 		local self_dump = rawget(o, "__dump")
@@ -29,7 +29,7 @@ local function strdump(o, level, limit)
 			if v == o then
 				s = s .. "[31m!self![m,"
 			else
-				s = s.. strdump(v, level+1, limit)..', '
+				s = s.. strdump(v, limit, level+1)..', '
 			end
     end
     return s .. '} '
@@ -107,7 +107,7 @@ function resource_mt:derive(table)
 	setmetatable(meta, self)
 	return meta
 end
-function resource_mt.load_rec(table, key)
+function resource_mt.load(table, key)
 	-- loads a resource from row `key` of table `table`, recursively with
 	-- all subresources.
 	local new = simod.select(table, key)
@@ -117,7 +117,7 @@ function resource_mt.load_rec(table, key)
 			local list = simod.list(subtable, key)
 			local subresource = {}
 			for k, v in pairs(list) do
-				subresource[k] = resource_mt.load_rec(subtable, v)
+				subresource[k] = resource_mt.load(subtable, v)
 			end
 			new[fn] = subresource
 		end
@@ -125,12 +125,13 @@ function resource_mt.load_rec(table, key)
 	return setmetatable(new, simod.schema[table].methods)
 end
 function resource_mt:save()
+	-- saves a resource to database, recursively with all its subresources.
 	local methods = getmetatable(self)
 	local table = methods._table
 	local schema = simod.schema[table]
 	local fields = schema.fields
-	print(red("saving to table ", table))
 	local id = self.id
+	print(red("saving to table ", table, " with id"), id, "parent:", self.parent)
 	local done = false
 	if id ~= nil then
 		local old = simod.select(table, id)
@@ -138,6 +139,7 @@ function resource_mt:save()
 			for fn, val in pairs(old) do
 				local new_val = self[fn]
 				if val ~= new_val then
+					print("value "..blue(fn).." has changed to ", new_val)
 					simod.update(table, fn, id, new_val)
 				end
 			end
@@ -149,67 +151,71 @@ function resource_mt:save()
 		for i = 2,8 do
 			id_tmp[i] = math.random(97, 122)
 		end
-		id = string.char(table.unpack(id_tmp))
+		id = string.char(unpack(id_tmp))
 		self.id = id
 		print("generated id: ", self.id)
-	end
-	for k, v in pairs(simod) do
-		print(k, v)
 	end
 	if not done then
 		simod.insert(table, self)
 	end
+	print("  after insert: id = ", self.id)
 	for fn, ft in pairs(fields) do
 		if ft == "subresource" then
 			local list = self[fn]
 			for i, sub in ipairs(list) do
+				sub.parent = self.id
 				sub.position = i
 				sub:save()
 			end
 		end
 	end
 end
-
-function resource_mt:clone_resource(args)
-	-- Clones a resource, modifying values passed as arguments.
-	print(yellow("cloning a resource: ", strdump(self)))
-	print("  with modifiers: ", strdump(args))
-	local sch = table_schema(self._table)
-	local fields = sch.fields
-	local dk = sch.default_key
-	if dk == nil then
-		error("only resources with a defined default_key can be cloned")
+local function normalize_changes(changes, dk)
+	-- default case: no ID provided
+	-- TODO: should we generate one here, or when saving to database?
+	if changes == nil then changes = {} end
+	if dk == nil then return nil, changes end
+	local id
+	if type(changes) == "string" then
+		-- sword("carsomyr")
+		id = changes
+		changes = { [dk] = changes }
+	elseif changes[dk] == nil and changes[1] ~= nil then
+		-- sword{"carsomyr", enchantment = 5 }
+		id = changes[1]
+		changes[dk] = id
+		changes[1] = nil
 	end
-	print("for table "..self._table.." dk is ", dk)
-	local id, changes = normalize_changes(args, dk)
-	
-	local values = simod.select(self._table, self._key)
-	for k,v in pairs(changes) do
-		if values[k] == nil then
-			error('field "'..k..'" is absent in target')
-		end
-		values[k] = v
-	end
-	-- TODO: also clone subresources (recursively)
-	-- TODO: if there are any vector data for subresource fields, use it
-	-- TODO: insert this into table
-	return setmetatable({ _table = self._table, _key = id }, getmetatable(self))
+	return id, changes
 end
-
---««1 Methods for resource vectors (resvecs)
--- Resource vectors have the following form:
--- { _table = "items_abilities", _parent = "sw1h34" }
-
-local resvec_mt = {}
-resvec_mt.__dump = "<resvec_mt>"
-function resvec_mt:create_resvec_mt(mt)
-	-- we pass the (already existing) metatable for the subresource
-	local new = { each = mt }
-	new.__dump = "[38;5;100m<resvec_mt "..mt._table..">[m"
-	new.__index = self.index
-	new.__newindex = self.newindex
-	new.__call = self.iterate
-	return setmetatable(new, self)
+function resource_mt:clone(args)
+	-- Clones a resource, using the changes passed as arguments.
+-- 	print(yellow("cloning a resource: ", strdump(self, 5)))
+-- 	print("  with modifiers: ", strdump(args, 5))
+	local methods = getmetatable(self)
+	local table = methods._table
+	local schema = table_schema(table)
+	local fields = schema.fields
+	local dk = schema.default_key
+-- 	print("for table "..self._table.." dk is ", dk)
+	local id, changes = normalize_changes(args, dk)
+	local new = { id = id }
+	for fn, ft in pairs(fields) do
+		if ft == "id" then
+			-- already generated
+		elseif changes[fn] ~= nil then
+			new[fn] = changes[fn]
+		elseif ft == "subresource" then
+			local vector = {}
+			for i, sub in ipairs(self[fn]) do
+				vector[i] = sub:clone()
+			end
+			new[fn] = vector
+		else
+			new[fn] = self[fn]
+		end
+	end
+	return setmetatable(new, getmetatable(self))
 end
 
 --««1 Methods for resource builders
@@ -260,6 +266,7 @@ for table, schema in pairs(simod.schema) do
 	schema.methods = resource_mt:derive(table)
 end
 
+simod.schema.items.default_key = "name"
 --««1 Test code
 local function group(x) print(red(bold("\ntesting "..x))) end
 function test_core()
@@ -347,9 +354,14 @@ function test_inherit()
 	local albruin = setmetatable({_table="items", _key="sw1h34"}, all_resources_mt.items)
 	albruin:foo()
 end
-albruin = resource_mt.load_rec("items", "sw1h34")
+albruin = resource_mt.load("items", "sw1h34")
 print(albruin.id)
-albruin.id = "no such id"
-albruin:save()
+-- albruin.id = "no such id"
+albruin.name = "New name"
+foo = albruin:clone({"blah", weight=3})
+foo:save()
+-- dump(foo.id)
+-- dump(foo.weight)
+-- albruin:save()
 -- simod.dump("select * from edit_items_abilities")
 -- simod.dump("select * from edit_items")

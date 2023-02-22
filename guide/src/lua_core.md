@@ -33,24 +33,23 @@ This returns the number of lines inserted.
 If the row does not match the format for this table then an error is
 thrown.
 
-## `simod.get(table, fieldname, primary)`: read a single field entry
-
-This returns the value of column `fieldname`
-on the line where the primary key is `primary`.
-
-If no such line (or column) exists then an error is thrown.
+Since subresources use automatically-generated row IDs as their primary
+keys,
+if the `table` describes a subresource then any existing `row.id` value
+is ignored when this function is called; when the function returns,
+the field will be (over)written with the rowid of the newly inserted row.
 
 ## `simod.select(table, primary)`: read one row in a table
 
-This returns the content of the row with primary key `primary`
+Returns the content of the row with primary key `primary`
 in the table, as a Lua table whose keys are strings
 corresponding to the table's column names.
 
-If no row with the given primary key exists, then an error is thrown.
+If no row with the given primary key exists, then `nil` is returned.
 
-## `simod.set(table, fieldname, primary, value)`: modify an entry in a table.
+## `simod.update(table, fieldname, primary, value)`: modify an entry in a table.
 
-This updates the row with primary key `primary` in the given table,
+Updates the row with primary key `primary` in the given table,
 setting the field with column name `fieldname` to the given `value`.
 The `fieldname` must be a string corresponding to one of the table's
 column names (otherwise an error is thrown).
@@ -60,7 +59,7 @@ and `false` if no row with the given primary key was found.
 
 ## `simod.delete(table, primary)`: delete an entry in a table.
 
-This deletes the row with the given primary key from the table.
+Deletes the row with the given primary key from the table.
 
 This returns a boolean value, which is `true` if a row was deleted,
 and `false` otherwise.
@@ -79,3 +78,13 @@ items, as the following fields:
  - `simod.schema.items.fields`: list of fields and types, as key-pair values;
  - `simod.schema.items.is_subresource`: `nil` since this is not a
    subresource (otherwise `true`);
+
+The type of a given field is indicated as a string; it is one of
+`"integer"`, `"text"`, `"strref"`, `"resref"`, or `"subresource"`.
+The `"subresource"` value is special: it indicates that the field's value
+in a concrete resource will be a vector of values of the subresource
+type.
+The subresource will use the schema built as `name_subresource`;
+for example, since `simod.schema.items.abilities = "subresource"`,
+for each item, say `ring04`, `ring04.abilities` is a vector
+whose elements follow the `simod.schema.items_abilities` schema.

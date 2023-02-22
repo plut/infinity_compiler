@@ -973,23 +973,25 @@ impl FieldsIterator {
 	fn with_prefix<T: Display>(self, prefix: T)->FieldsWithPrefix<T> {
 		FieldsWithPrefix(self, prefix)
 	}
-	pub fn len(&self)->usize { self.fields.len() }
+	pub fn len(&self)->usize {
+		// only call this when the iterator is not started yet...
+		match self.state {
+			Self::POSITION => 1 + self.fields.len(),
+			0 => self.fields.len(),
+			_ => panic!("FieldsIterator: len() only works on un-started iter"),
+		}
+	}
 	pub fn is_empty(&self)->bool { self.len() == 0 }
 	const POSITION: usize = usize::MAX >> 1;
 }
 impl Iterator for FieldsIterator {
 	type Item = &'static Field;
 	fn next(&mut self)->Option<Self::Item> {
-		if self.state == Self::POSITION {
-			self.state = 0;
-			return Some(&Field::POSITION)
+		match self.state {
+			Self::POSITION => { self.state = 0; Some(&Field::POSITION) },
+			x if x >= self.fields.len() => { return None },
+			i => { let ret = &self.fields[i]; self.state+= 1; Some(ret) },
 		}
-		if self.state >= self.fields.len() {
-			return None
-		}
-		let ret = &self.fields[self.state];
-		self.state+= 1;
-		Some(ret)
 	}
 }
 impl Display for FieldsIterator {
@@ -2634,6 +2636,7 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		}
 		stmt.raw_execute()?;
 		if schema.is_subresource() {
+			println!("generated id from last rowid: {}", db.last_insert_rowid());
 			table.set("id", db.last_insert_rowid())?;
 		}
 		Ok(Value::Table(table))
