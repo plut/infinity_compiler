@@ -1,19 +1,8 @@
 function loadstring(s) return load(s) end
 --[[ todo
-
- - each res/subres is aware of its SQL primary key
-   (needed for update)
- - it also has an `index` which serves only for sorting
- 
- - subresources
- - control type on assignment
- - assign an object to a resref field: use obj.resref
-
-API for subresources:
- - item.abilities.len(...)
- - item.abilities.push(...)
- - item.abilities[i] i = 0...
- - item.abilities.iterate()
+ fat Lua objects
+ what is needed: x:save()
+ and newindex etc. wrappers as well!
 ]]--
 --««1 Display tools
 local function strdump(o, level, limit)
@@ -37,7 +26,11 @@ local function strdump(o, level, limit)
       else
         s = s..'[[38;5;65m'..k..'[m]='
       end
-      s = s.. strdump(v, level+1, limit)..', '
+			if v == o then
+				s = s .. "[31m!self![m,"
+			else
+				s = s.. strdump(v, level+1, limit)..', '
+			end
     end
     return s .. '} '
   elseif type(o) == 'string' then
@@ -104,53 +97,79 @@ local function table_schema(tbl)
 end
 
 --««1 Methods for resources
--- Resource objects have the following form:
--- { _table = "items", _key = "sw1h34" }
 local resource_mt = {}
-resource_mt.__index = resource_mt -- sets up inheritance
--- the metatable of `resource_mt`.
--- local root_mt = {}
--- setmetatable(resource_mt, root_mt)
-function resource_mt:index(fieldname)
-	-- Returns one field of a resource.
-	-- This function ends up as meta(resource).__index.
-	-- first case: we are accessing a method; look it up in the metatable
-	local meta = getmetatable(self)
-	-- this will look up either in the metatable, or — if the
-	-- metametatable's __index method is set, in the appropriate place:
-	local method = meta[fieldname]
-	if method ~= nil then
-		return method
-	end
-	-- second case: we are accessing a content field
-	local sch = table_schema(self._table)
-	local fields = sch.fields
-	local ft = fields[fieldname]
-	if ft == nil then
-		error('field "'..fieldname..'" not found in table "'..self._table..'"')
-	end
-	if ft == "subresource" then
-		local v = {}
-		v._table = self._table..'_'..fieldname
-		v._parent = self._key
-		v._position = -1
--- 		print("indexing with the metatable for resvec: ", strdump(meta))
-		local mt = {} -- TODO
-		return setmetatable(v, meta.subresources[fieldname])
-	end
-	return simod.get(self._table, fieldname, self._key)
+resource_mt.__index = resource_mt -- let derived classes inherit from this
+function resource_mt:derive(table)
+	-- builds a derived class from `resource_mt`
+	local meta = { _table = table }
+	meta.__index = meta -- this is a class
+	-- in other words: member:method() will look in the metatable
+	setmetatable(meta, self)
+	return meta
 end
-function resource_mt:newindex(fieldname, value)
-	-- Updates one field of a resource.
-	-- This function ends up as meta(resource).__newindex.
-	local sch = table_schema(self._table)
-	local fields = sch.fields
-	local ft = fields[fieldname]
-	if ft == "subresource" then
-		todo("assigning to a subresource field")
+function resource_mt.load_rec(table, key)
+	-- loads a resource from row `key` of table `table`, recursively with
+	-- all subresources.
+	local new = simod.select(table, key)
+	for fn, ft in pairs(simod.schema[table].fields) do
+		if ft == "subresource" then
+			local subtable = table..'_'..fn
+			local list = simod.list(subtable, key)
+			local subresource = {}
+			for k, v in pairs(list) do
+				subresource[k] = resource_mt.load_rec(subtable, v)
+			end
+			new[fn] = subresource
+		end
 	end
-	simod.set(self._table, fieldname, self._key, value)
+	return setmetatable(new, simod.schema[table].methods)
 end
+function resource_mt:save()
+	local methods = getmetatable(self)
+	local table = methods._table
+	local schema = simod.schema[table]
+	local fields = schema.fields
+	print(red("saving to table ", table))
+	local id = self.id
+	local done = false
+	if id ~= nil then
+		local old = simod.select(table, id)
+		if old ~= nil then -- an existing row was found for this id
+			for fn, val in pairs(old) do
+				local new_val = self[fn]
+				if val ~= new_val then
+					simod.update(table, fn, id, new_val)
+				end
+			end
+			done = true
+		end
+	else -- id not attributed yet: generate a primary key
+		local id_tmp = { 95 } -- '_' character
+		-- TODO: generate a proper base-64 (or something) string
+		for i = 2,8 do
+			id_tmp[i] = math.random(97, 122)
+		end
+		id = string.char(table.unpack(id_tmp))
+		self.id = id
+		print("generated id: ", self.id)
+	end
+	for k, v in pairs(simod) do
+		print(k, v)
+	end
+	if not done then
+		simod.insert(table, self)
+	end
+	for fn, ft in pairs(fields) do
+		if ft == "subresource" then
+			local list = self[fn]
+			for i, sub in ipairs(list) do
+				sub.position = i
+				sub:save()
+			end
+		end
+	end
+end
+
 function resource_mt:clone_resource(args)
 	-- Clones a resource, modifying values passed as arguments.
 	print(yellow("cloning a resource: ", strdump(self)))
@@ -176,34 +195,6 @@ function resource_mt:clone_resource(args)
 	-- TODO: insert this into table
 	return setmetatable({ _table = self._table, _key = id }, getmetatable(self))
 end
-function resource_mt:create_resource_mt(table)
-	-- create_resource_mt("items")
-	-- creates the metatable bound to this .
-	local new = {}
-	new._table = table
-	new.__index = self.index
-	new.__newindex = self.newindex
-	new.__call = self.clone_resource
-	new.__dump = "[38;5;88m<resource_mt "..table..">[m"
-	new.subresources = {}
--- 	return new
-	return setmetatable(new, self)
-end
-function resource_mt.load_rec(table, key)
-	local new = simod.select(table, key)
-	for fn, ft in pairs(simod.schema[table].fields) do
-		if ft == "subresource" then
-			local subtable = table..'_'..fn
-			local list = simod.list(subtable, key)
-			local subresource = {}
-			for k, v in pairs(list) do
-				subresource[k] = resource_mt.load_rec(subtable, v)
-			end
-			new[fn] = subresource
-		end
-	end
-	return new
-end
 
 --««1 Methods for resource vectors (resvecs)
 -- Resource vectors have the following form:
@@ -211,34 +202,6 @@ end
 
 local resvec_mt = {}
 resvec_mt.__dump = "<resvec_mt>"
-function resvec_mt:index(i)
-	-- TODO: write an iter() method
-	if type(i) ~= "number" then
-		error("resvec index must be an integer")
-	end
-	local list = simod.list(self._table, self._parent)
-	if i < 1 or i > #list then
-		error("resvec index out of bounds")
-	end
-	local v = { _table = self._table, _key = list[i] }
-	-- TODO: compute the appropriate metatable
-	return setmetatable(v, getmetatable(self).each)
-end
-function resvec_mt:iterate()
-	-- Makes resource vector behave as an iterator.
-	-- This function is called with only the implicit `self` parameter,
-	-- and must return the next resource from the list
-	-- 
-	-- Two cases:
-	--  - we begin iteration: the `current` field is nil,
-	--  - we continue existing iteration: this field is set.
-	local pos = self._position
-	newpos, id  = simod.next_key(self._table, self._parent, self._position)
-	self._position = newpos or -1
-	if newpos == nil then return nil end
-	return setmetatable({ _table = self._table, _key = id },
-		getmetatable(self).each)
-end
 function resvec_mt:create_resvec_mt(mt)
 	-- we pass the (already existing) metatable for the subresource
 	local new = { each = mt }
@@ -292,61 +255,11 @@ function resource_mt:create_resource(key)
 end
 
 --««1 Updating `simod.schema` and creating all the metatables
-
-
-local item_mt = resource_mt:create_resource_mt("items")
-simod.schema.items.default_key = "name"
-
-local all_resources_mt = {}
-for tablename, schema in pairs(simod.schema) do
-	-- first pass: create all the (isolated) resource metatables
-	all_resources_mt[tablename] = resource_mt:create_resource_mt(tablename)
-end
-for tablename, schema in pairs(simod.schema) do
-	for fn, ft in pairs(schema.fields) do
-		if ft == "subresource" then
-			all_resources_mt[tablename].subresources[fn] =
-				resvec_mt:create_resvec_mt(all_resources_mt[tablename..'_'..fn])
-		end
-	end
+-- compute all metatables for resources:
+for table, schema in pairs(simod.schema) do
+	schema.methods = resource_mt:derive(table)
 end
 
-
--- function select_all(tbl, parent)
--- 	-- returns an iterator over all rows from `tbl` with given parent key
--- 	local keys = simod.list(tbl, parent)
--- 	local i = 0
--- 	return function()
--- 		i = i+1
--- 		local k = keys[i]
--- 		if k == nil then return end
--- 		return simod.select(tbl, k)
--- 	end
--- end
--- function item(resref)
--- 	-- the main item creation function
--- 	local fields = simod.select("items", resref)
--- 	local ab = {}
--- 	local eff = {}
--- 	for t in select_all("item_abilities", resref) do
--- 		t.itemref = nil
--- 		t.effects = {}
--- 		table.insert(ab, t)
--- 	end
--- 	for t in select_all("item_effects", resref) do
--- 		t.itemref = nil
--- 		local i = t.abref; t.abref = nil
--- 		if i ~= 0 then
--- 			table.insert(ab[i].effects, t)
--- 		else
--- 			table.insert(eff, t)
--- 		end
--- 	end
--- 	fields.abilities = ab
--- 	fields.effects = eff
--- 	return setmetatable({ _fields = fields, _context = {} }, item_mt)
--- end
--- 
 --««1 Test code
 local function group(x) print(red(bold("\ntesting "..x))) end
 function test_core()
@@ -423,31 +336,6 @@ function test_objects0()
 end
 function test_resources()
 -- 	group("resource builder")
-		local albruin = setmetatable({_table="items", _key="sw1h34"}, all_resources_mt.items)
-		assert(albruin._table == "items")
--- 	group("resource getindex")
--- 		dump(albruin.weight)
--- 		dump(albruin.abilities)
-		assert(albruin.weight == 8)
-		assert(albruin.abilities._table == "items_abilities")
--- 	group("resource setindex")
-		albruin.weight = 12345
--- 		dump(albruin.weight)
-		assert(albruin.weight == 12345)
--- 	group("resvec indexing")
-		local ab_list = albruin.abilities
--- 		dump(ab_list[1])
--- 		dump(ab_list[1].use_icon)
-		assert(ab_list[1]._key == 808)
-		assert(ab_list[1].use_icon == "isw1h34")
-		ab_list[1].use_icon="useicon"
-		assert(ab_list[1].use_icon == "useicon")
--- 		dump(ab_list[1].use_icon)
--- 		dump(ab_list[1])
-	group("resvec iteration")
-		for a in ab_list do dump(a) end
-		print("  second pass:")
-		for a in ab_list do dump(a) end
 end
 function test_inherit()
 	function all_resources_mt:foo()
@@ -459,8 +347,9 @@ function test_inherit()
 	local albruin = setmetatable({_table="items", _key="sw1h34"}, all_resources_mt.items)
 	albruin:foo()
 end
-test_core()
-test_resources()
-dump(resource_mt.load_rec("items", "sw1h34"),0, 5)
+albruin = resource_mt.load_rec("items", "sw1h34")
+print(albruin.id)
+albruin.id = "no such id"
+albruin:save()
 -- simod.dump("select * from edit_items_abilities")
 -- simod.dump("select * from edit_items")

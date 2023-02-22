@@ -432,279 +432,6 @@ impl<const N: usize> Generator<N> {
 	}
 }
 }// mod staticstrings
-pub mod sql_rows {
-//! Basic types for interaction with SQL and binary files.
-//! The main entry points for this module are the traits [`Pack`]
-//! and [`SqlRow`].
-use crate::prelude::*;
-use rusqlite::{ToSql};
-use rusqlite::types::{FromSql,ValueRef};
-
-/// An extension trait allowing to dump a row from SQL.
-pub trait RowExt {
-	fn dump(&self) {
-		println!("{}", self.dump_to_string());
-	}
-	fn dump_to_string(&self)->String;
-}
-impl RowExt for Row<'_> {
-	/// Dumps all values found in a single row to stdout.
-	fn dump_to_string(&self)->String {
-		let mut r = String::new();
-		for (i, c) in self.as_ref().column_names().iter().enumerate() {
-			match self.get_ref(i) {
-				Ok(ValueRef::Null) =>
-					writeln!(&mut r, "  [{i:3}] {c} = \x1b[31mNull\x1b[m"),
-				Ok(ValueRef::Text(s)) =>
-					writeln!(&mut r, "  [{i:3}] {c} = Text(\"{}\")",
-					std::str::from_utf8(s).unwrap()),
-				Ok(x) => writeln!(&mut r, "  [{i:3}] {c} = {x:?}"),
-				_ => break
-			}.unwrap();
-		}
-		r
-	}
-}
-/// An utility enum defining SQL behaviour for a given resource field type.
-///
-/// This is somewhat different from [`rusqlite::types::Type`]:
-///  - not all SQLite types exist here;
-///  - the `Strref` variant can accept either a string or an integer,
-/// etc.
-#[derive(Debug,Clone,Copy,PartialEq)]
-#[non_exhaustive]
-pub enum FieldType {
-	/// Plain integer.
-	Integer,
-	/// Plain text.
-	Text,
-	/// A resource reference: a string translated using `resref_dict`.
-	Resref,
-	/// A string reference: either an integer or a string translated using
-	/// `strref_dict`.
-	Strref,
-}
-impl FieldType {
-	/// Describes this type to SQLite.
-	pub const fn affinity(self)->&'static str {
-		match self {
-			Self::Integer | Self::Strref => r#"integer default 0"#,
-			Self::Text | Self::Resref => r#"text default """#,
-		}
-	}
-	/// Describes this type as a string.
-	pub const fn description(self)->&'static str {
-		match self {
-			FieldType::Integer => "integer",
-			FieldType::Text => "text",
-			FieldType::Resref => "resref",
-			FieldType::Strref => "strref",
-		}
-	}
-}
-/// A leaf SQL type: this can be converted from, to SQL and knows its own
-/// affinity.
-pub trait SqlLeaf: FromSql + ToSql {
-	/// How this field is handled database-side.
-	const FIELD_TYPE: FieldType;
-}
-impl SqlLeaf for Resref { const FIELD_TYPE: FieldType = FieldType::Resref; }
-impl SqlLeaf for Strref { const FIELD_TYPE: FieldType = FieldType::Strref; }
-// impl SqlLeaf for &str { const FIELD_TYPE: FieldType = FieldType::Text; }
-impl SqlLeaf for String { const FIELD_TYPE: FieldType = FieldType::Text; }
-macro_rules! sqlleaf_int { ($($T:ty),*) => { $(
-	impl SqlLeaf for $T { const FIELD_TYPE: FieldType = FieldType::Integer; }
-)* } }
-sqlleaf_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
-
-/// Converting an object to something implementing [`rusqlite::Params`].
-///
-/// Since we cannot implement the [`rusqlite::Params`] trait ourselves,
-/// this is the closest we can do.
-pub trait AsParams {
-	/// Element type of the iterator we use to map to SQL.
-	type Elt<'a>: ToSql where Self: 'a;
-	/// Iterator we use to map to SQL.
-	type Iter<'a>: Iterator<Item=Self::Elt<'a>> where Self: 'a;
-	/// Converts this to an iterator.
-	fn params_iter(&self)->Self::Iter<'_>;
-	/// Converts this to some object implementing [`rusqlite::Params`].
-	fn as_params(&self)->rusqlite::ParamsFromIter<Self::Iter<'_>> {
-		rusqlite::params_from_iter(self.params_iter())
-	}
-}
-
-/// Structure which can be read from (part of) a SQL row,
-/// or bound to (part of) a SQL statement.
-///
-/// Implemented by the derive macro.
-pub trait SqlRow: Sized {
-	/// The description of the columns that this binds to.
-	const FIELDS: crate::schemas::Fields;
-	/// Binds to columns [offset, ...] of statement.
-	fn bind_at(&self, s: &mut Statement<'_>, offset: usize)->Result<()>;
-	/// Reads from columns [offset, ... ] of row.
-	fn collect_at(s: &Row<'_>, offset: usize)->Result<Self>;
-	/// Checks that the number of columns is good.
-	fn check_parameter_count(s: &mut Statement<'_>, extra: usize)->Result<()> {
-		let found = Self::FIELDS.len() + extra;
-		let expected = s.parameter_count();
-		if found == expected {
-			Ok(())
-		} else {
-			Err(rusqlite::Error::InvalidParameterCount(found, expected).into())
-		}
-	}
-	/// Binds this object with a header of a single parameter, and executes
-	/// the statement.
-	fn bind_execute1<P: ToSql>(&self, stmt: &mut Statement<'_>, ctx: P)->Result<usize> {
-		Self::check_parameter_count(stmt, 1)?;
-		stmt.raw_bind_parameter(1, ctx)?;
-		self.bind_at(stmt, 1)?;
-		stmt.raw_execute().context("raw_execute")
-	}
-	/// Binds this object with a header of two parameters, and executes the
-	/// statement.
-	fn bind_execute2<P1: ToSql, P2: ToSql>(&self, stmt: &mut Statement<'_>, c1: P1, c2: P2)->Result<usize> {
-		Self::check_parameter_count(stmt, 2)?;
-		stmt.raw_bind_parameter(1, c1)?;
-		stmt.raw_bind_parameter(2, c2)?;
-		self.bind_at(stmt, 2)?;
-		stmt.raw_execute().context("raw_execute")
-	}
-	/// Returns a SQL statement restricted to type `(K, Self)` and built
-	/// from matching columns.
-	fn insert_statement<'db,K:ToSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>)->Result<InsertStatement<'db,K,Self>> {
-		let mut sql = format!(r#"insert into "{name}"("#);
-		K::write_headers(&mut sql, hdr)?;
-		write!(&mut sql, r#"{cols}) values ("#, cols = Self::FIELDS)?;
-		for i in 0..K::WIDTH + Self::FIELDS.len() {
-			if i > 0 { sql.push(',') }
-			sql.push('?')
-		}
-		sql.push(')');
-		Ok(InsertStatement {
-			statement: db.prepare(&sql)?,
-			_key: PhantomData, _row: PhantomData,
-		})
-	}
-	/// Returns a SQL select statement restricted to type `(K, Self)`.
-	fn select_statement<'db,K:FromSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>, condition: impl Display)->Result<SelectStatement<'db,K,Self>> {
-		let mut sql = String::from("select ");
-		K::write_headers(&mut sql, hdr)?;
-		write!(&mut sql, r#"{cols} from "{name}" {condition}"#, cols=Self::FIELDS)?;
-		Ok(SelectStatement {
-			statement: db.prepare(&sql)?,
-			_key: PhantomData, _row: PhantomData,
-		})
-	}
-}
-
-pub trait ToSqlMulti {
-	const WIDTH: usize;
-	type Headers<'a>;
-	fn write_headers(dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result;
-	fn raw_bind_to(&self, statement: &mut Statement<'_>)->rusqlite::Result<()>;
-}
-impl<T: ToSql> ToSqlMulti for T {
-	const WIDTH: usize = 1;
-	type Headers<'a> = &'a str;
-	fn write_headers(mut dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result {
-		write!(dest, r#""{hdr}","#)
-	}
-	fn raw_bind_to(&self, statement: &mut Statement<'_>)->rusqlite::Result<()> {
-		// 1-INDEXED
-		statement.raw_bind_parameter(1, self)
-	}
-}
-/// A `insert` statement restricted to its struct type + primary key.
-#[derive(Debug)]
-pub struct InsertStatement<'a,K: ToSqlMulti, R:SqlRow> {
-	statement: Statement<'a>,
-	_key: PhantomData<K>,
-	_row: PhantomData<R>,
-}
-impl<K: ToSqlMulti, R: SqlRow> InsertStatement<'_,K,R> {
-	/// type-constrained version of execution of statement:
-	pub fn execute(&mut self, key: K, data: R)->Result<usize> {
-		key.raw_bind_to(&mut self.statement)?;
-		data.bind_at(&mut self.statement, K::WIDTH)?;
-		self.statement.raw_execute().map_err(|e| e.into())
-	}
-}
-
-pub trait FromSqlMulti: Sized {
-	const WIDTH: usize;
-	type Headers<'a>;
-	fn write_headers(dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result;
-	fn raw_collect(row: &Row<'_>)->Result<Self>;
-}
-impl<T: FromSql> FromSqlMulti for T {
-	const WIDTH: usize = 1;
-	type Headers<'a> = &'a str;
-	fn write_headers(mut dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result {
-		write!(dest, r#""{hdr}","#)
-	}
-	fn raw_collect(row: &Row<'_>)->Result<Self> {
-		// 0-INDEXED
-		row.get::<_,Self>(0).context("raw_collect at 0-based index 0")
-	}
-}
-/// A strongly typed `select` statement, tied to a payload + primary key.
-#[derive(Debug)]
-pub struct SelectStatement<'a,K: FromSqlMulti, R:SqlRow> {
-	statement: Statement<'a>,
-	_key: PhantomData<K>,
-	_row: PhantomData<R>,
-}
-impl<K: FromSqlMulti, R: SqlRow> SelectStatement<'_,K,R> {
-	pub fn query(&mut self, params: impl rusqlite::Params)->Result<SelectRows<'_,K,R>> {
-		Ok(SelectRows {
-			rows: self.statement.query(params)?,
-			_key: PhantomData, _row: PhantomData,
-		})
-	}
-}
-/// A strongly typed iterator, returning `(key, payload)` pairs.
-#[allow(missing_debug_implementations)]
-pub struct SelectRows<'a, K: FromSqlMulti, R: SqlRow> {
-	rows: rusqlite::Rows<'a>,
-	_key: PhantomData<K>,
-	_row: PhantomData<R>,
-}
-impl<'a, K:FromSqlMulti, R:SqlRow> From<rusqlite::Rows<'a>> for SelectRows<'a,K,R> {
-	fn from(rows: rusqlite::Rows<'a>)->Self {
-		Self { rows, _key: PhantomData, _row: PhantomData }
-	}
-}
-impl<'a, K:FromSqlMulti, R:SqlRow> SelectRows<'a,K,R> {
-	fn read_row(row: &Row<'a>)->Result<(K,R)> {
-		let key = K::raw_collect(row)?;
-		let payload = R::collect_at(row, K::WIDTH)?;
-		Ok((key, payload))
-	}
-}
-impl<K:FromSqlMulti, R:SqlRow> Iterator for SelectRows<'_,K,R> {
-	type Item = Result<(K,R)>;
-	fn next(&mut self)->Option<Self::Item> {
-		loop {
-			let row = match self.rows.next() {
-				Ok(None) => return None,
-				Ok(Some(row)) => row,
-				Err(e) => return Some(Err(e.into()))
-			};
-			match Self::read_row(row) {
-				Err(e) => {
-					println!("cannot read a {T} from row: {e:?} {dump}",
-						T = std::any::type_name::<(K,R)>(), dump = row.dump_to_string());
-					continue },
-				good => return Some(good)
-			}
-		}
-	}
-}
-
-} // mod sql_rows
 pub mod gamefiles {
 //! Access to the KEY/BIF side of the database.
 //!
@@ -1182,6 +909,12 @@ pub struct Field {
 	/// Any extra information given to SQLite when creating the table.
 	pub create: &'static str,
 }
+impl Field {
+	/// The `"position"` field used for sorting subresources.
+	const POSITION: Self = Self {
+		fname: "position", ftype: FieldType::Integer, create: ""
+	};
+}
 /// Displays the quoted field name.
 /// This is a useful help for writing SQL statements.
 impl Display for Field {
@@ -1193,19 +926,22 @@ impl Display for Field {
 /// A newtype around a slice of [`Field`] values,
 /// allowing us to simplify some SQL writing.
 #[derive(Debug,Clone,Copy)]
-pub struct Fields(pub &'static [Field]);
+pub struct Fields (pub &'static [Field]);
 impl Fields {
-	pub(crate) fn len(&self)->usize { self.0.len() }
-	pub fn iter(&self)->std::slice::Iter<'_,Field> { self.0.iter() }
-	fn with_prefix<T: Display>(self, prefix: T)->FieldsWithPrefix<T> {
-		FieldsWithPrefix(self, prefix)
+	pub fn iter(&self, flag: FieldsItr)->FieldsIterator {
+		FieldsIterator { fields: self.0,
+			state: match flag {
+				FieldsItr::Payload => 0,
+				FieldsItr::Position => FieldsIterator::POSITION,
+			},
+		}
 	}
 	/// Returns the SQL insert statement for these columns, as a String.
 	pub fn insert_sql(self, name: impl Display,
 		more: impl Display, more_n: usize)->String {
-		let mut sql = format!("insert into \"{name}\" ({more}{self})
-	values(");
-		for c in 0..self.len() + more_n  {
+		let itr = self.iter(FieldsItr::Payload);
+		let mut sql = format!("insert into \"{name}\" ({more}{itr}) values(");
+		for c in 0..itr.len() + more_n  {
 			if c > 0 { sql.push(','); }
 			sql.push('?');
 		}
@@ -1213,18 +949,61 @@ impl Fields {
 		sql
 	}
 }
-impl Display for Fields {
+/// A marker describing which fields are iterated.
+#[derive(Debug,Clone,Copy)]
+pub enum FieldsItr {
+	/// only payload fields
+	Payload,
+	/// (position) + payload
+	Position,
+}
+// uses of iteraton on fields:
+// - create table: (id,position,parent|id) + payload
+// - main view: (source.parent, source.position) + payload
+// - save view: (parent, position) + payload
+// - create strref: only payload
+// - lua schema: only payload
+/// The iterator for fields
+#[derive(Debug,Clone,Copy)]
+pub struct FieldsIterator {
+	state: usize,
+	fields: &'static [Field],
+}
+impl FieldsIterator {
+	fn with_prefix<T: Display>(self, prefix: T)->FieldsWithPrefix<T> {
+		FieldsWithPrefix(self, prefix)
+	}
+	pub fn len(&self)->usize { self.fields.len() }
+	pub fn is_empty(&self)->bool { self.len() == 0 }
+	const POSITION: usize = usize::MAX >> 1;
+}
+impl Iterator for FieldsIterator {
+	type Item = &'static Field;
+	fn next(&mut self)->Option<Self::Item> {
+		if self.state == Self::POSITION {
+			self.state = 0;
+			return Some(&Field::POSITION)
+		}
+		if self.state >= self.fields.len() {
+			return None
+		}
+		let ret = &self.fields[self.state];
+		self.state+= 1;
+		Some(ret)
+	}
+}
+impl Display for FieldsIterator {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		Display::fmt(&self.with_prefix(NullDisplay()), f)
 	}
 }
 /// A helper type to insert new."fields" inside a query.
 #[derive(Debug)]
-pub struct FieldsWithPrefix<T: Display>(Fields, T);
+pub struct FieldsWithPrefix<T: Display>(FieldsIterator, T);
 impl<T: Display> Display for FieldsWithPrefix<T> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		let mut isfirst = true;
-		for element in self.0.iter() {
+		for element in self.0 {
 			if isfirst { isfirst = false; } else { write!(f, ",")?; }
 			write!(f, r#" {prefix}{element}"#, prefix = self.1)?;
 		}
@@ -1258,10 +1037,22 @@ impl Schema {
 	pub fn is_subresource(&self)->bool {
 		self.parent_root.is_some()
 	}
+	/// Returns an iterator over the payload fields (only).
+	pub fn payload(&self)->FieldsIterator { self.fields.iter(FieldsItr::Payload) }
+	/// Returns an iterator over the `position` field (if subresource) then
+	/// the payload fields.
+	pub fn pos_payload(&self)->FieldsIterator {
+		let flag = if self.is_subresource() {
+			FieldsItr::Position
+		} else {
+			FieldsItr::Payload
+		};
+		self.fields.iter(flag)
+	}
 	/// Displays a full description of the schema on stdout.
 	pub fn describe(&self) {
 		println!("name={self}\nheader = {:?}", self.parent_root);
-		for (i, f) in self.fields.iter().enumerate() {
+		for (i, f) in self.pos_payload().enumerate() {
 			println!("{i:2} {:<20} {}", f.fname, f.ftype.description());
 		}
 	}
@@ -1279,7 +1070,7 @@ impl Schema {
 			// that an insertion fails and skip inserting sub-resources
 			uwrite!(&mut sql, r#""id" string primary key on conflict ignore"#);
 		}
-		for Field { fname, ftype, create, .. } in self.fields.iter() {
+		for Field { fname, ftype, create, .. } in self.payload() {
 			uwrite!(&mut sql, ",\n \"{fname}\" {} {create}", ftype.affinity());
 		}
 		uwrite!(&mut sql, "{more})");
@@ -1301,14 +1092,14 @@ impl Schema {
 			uwrite!(&mut sql, r#",
 	"source"."id" as "root""#);
 		}
-		for Field { fname, .. } in self.fields.iter() {
+		for Field { fname, .. } in self.payload() {
 			uwrite!(&mut sql, r#",
 	ifnull((select "value" from "edit_{self}" where "line"="source"."id" and "field"='{fname}' order by rowid desc limit 1), "source"."{fname}") as "{fname}""#);
 		}
 		uwrite!(&mut sql, r#"
 from
 	(select "id", {source_position}{fields} from "load_{self}" union select "id", {source_position}{fields} from "add_{self}")
-as "source""#, fields = self.fields);
+as "source""#, fields = self.payload());
 		if let Some((parent, _root)) = &self.parent_root {
 			uwrite!(&mut sql, r#"
 	inner join "{parent}" on "source"."parent" = "{parent}"."id""#);
@@ -1320,7 +1111,7 @@ as "source""#, fields = self.fields);
 		let mut select = format!(r#"create view "save_{self}" as select "id","#);
 		let mut source = format!(r#"
 from "{self}" as "a""#);
-		for Field { fname: f, ftype, .. } in self.fields.iter() {
+		for Field { fname: f, ftype, .. } in self.payload() {
 			match ftype {
 				FieldType::Resref => {
 					let a = format!(r#""a"."{f}""#);
@@ -1358,10 +1149,10 @@ left join "strref_dict" as {b} on {a} = {b}."native""#);
 	/// game files.
 	pub fn create_tables_and_views<T>(&self, f: impl Fn(String)->Result<T>)->Result<()> {
 		// read-only table of initial resources:
-		f(self.create_table(&format!("load_{self}"), NullDisplay()))?;
+		f(self.create_table(format!("load_{self}"), NullDisplay()))?;
 		// table of resources inserted by mods:
 		// (the extra field designates the mod)
-		f(self.create_table(&format!("add_{self}"), r#", "source" text"#))?;
+		f(self.create_table(format!("add_{self}"), r#", "source" text"#))?;
 		// table of fields edited by mods:
 		f(format!(r#"create table "edit_{self}" ("source" text, "line", "field" text, "value")"#))?;
 		f(self.create_main_view())?;
@@ -1385,7 +1176,7 @@ end"#))?;
 		// `trans` (for update triggers) and `trans_insert` (for insert
 		// trigger).
 		let mut trans_insert = String::new();
-		for Field {fname, ftype, ..} in self.fields.iter() {
+		for Field { fname, ftype, .. } in self.pos_payload() {
 			let trans = match ftype {
 			FieldType::Resref => format!(
 	r#"insert or ignore into "resref_dict" values (new."{fname}", null);"#),
@@ -1411,7 +1202,7 @@ begin
 	{trans_insert}
 	insert into "add_{self}" ({cols}) values ({newcols});
 	insert or ignore into "dirty_{root}" values (new."root");
-end"#, cols = self.fields, newcols = self.fields.with_prefix("new.")))?;
+end"#, cols = self.pos_payload(), newcols = self.pos_payload().with_prefix("new.")))?;
 		f(format!(
 r#"create trigger "delete_{self}"
 instead of delete on "{self}"
@@ -1445,7 +1236,7 @@ end"#))?;
 	}
 	/// Helper function for generating `new_strings` view.
 	pub fn append_new_strings_schema(&self, w: &mut impl fmt::Write, is_first: &mut bool) {
-		for Field { fname, ftype, .. } in self.fields.iter() {
+		for Field { fname, ftype, .. } in self.payload() {
 			if *ftype != FieldType::Strref { continue }
 			if *is_first { *is_first = false; }
 			else { uwrite!(w, "\n\tunion "); }
@@ -1457,7 +1248,7 @@ end"#))?;
 	/// Helper function for generating `new_strings` triggers.
 	pub fn append_new_strings_trigger(&self, w: &mut impl fmt::Write) {
 		let mut is_first_field = true;
-		for Field { fname, ftype, .. } in self.fields.iter() {
+		for Field { fname, ftype, .. } in self.payload() {
 			let root = match self.parent_root.as_ref() {
 				Some((_parent,root)) => *root,
 				None  => &self.name
@@ -1479,14 +1270,290 @@ end"#))?;
 	pub fn select_dirty_sql(&self)->String {
 		match self.parent_root {
 			None =>
-			format!(r#"select "id", {cols} from "save_{self}" where "id" in "dirty_{self}""#, cols = self.fields),
+			format!(r#"select "id", {cols} from "save_{self}" where "id" in "dirty_{self}""#, cols = self.payload()),
 			Some(_) =>
-			format!(r#"select "id", {cols} from "save_{self}" where "parent"=? order by "position""#, cols = self.fields),
+			format!(r#"select "id", {cols} from "save_{self}" where "parent"=? order by "position""#, cols = self.payload()),
 		}
 	}
 }
 
 } // mod schemas
+pub mod sql_rows {
+//! Basic types for interaction with SQL and binary files.
+//! The main entry points for this module are the traits [`Pack`]
+//! and [`SqlRow`].
+use crate::prelude::*;
+use rusqlite::{ToSql};
+use rusqlite::types::{FromSql,ValueRef};
+use crate::schemas::{Fields,FieldsItr};
+
+/// An extension trait allowing to dump a row from SQL.
+pub trait RowExt {
+	fn dump(&self) {
+		println!("{}", self.dump_to_string());
+	}
+	fn dump_to_string(&self)->String;
+}
+impl RowExt for Row<'_> {
+	/// Dumps all values found in a single row to stdout.
+	fn dump_to_string(&self)->String {
+		let mut r = String::new();
+		for (i, c) in self.as_ref().column_names().iter().enumerate() {
+			match self.get_ref(i) {
+				Ok(ValueRef::Null) =>
+					writeln!(&mut r, "  [{i:3}] {c} = \x1b[31mNull\x1b[m"),
+				Ok(ValueRef::Text(s)) =>
+					writeln!(&mut r, "  [{i:3}] {c} = Text(\"{}\")",
+					std::str::from_utf8(s).unwrap()),
+				Ok(x) => writeln!(&mut r, "  [{i:3}] {c} = {x:?}"),
+				_ => break
+			}.unwrap();
+		}
+		r
+	}
+}
+/// An utility enum defining SQL behaviour for a given resource field type.
+///
+/// This is somewhat different from [`rusqlite::types::Type`]:
+///  - not all SQLite types exist here;
+///  - the `Strref` variant can accept either a string or an integer,
+/// etc.
+#[derive(Debug,Clone,Copy,PartialEq)]
+#[non_exhaustive]
+pub enum FieldType {
+	/// Plain integer.
+	Integer,
+	/// Plain text.
+	Text,
+	/// A resource reference: a string translated using `resref_dict`.
+	Resref,
+	/// A string reference: either an integer or a string translated using
+	/// `strref_dict`.
+	Strref,
+}
+impl FieldType {
+	/// Describes this type to SQLite.
+	pub const fn affinity(self)->&'static str {
+		match self {
+			Self::Integer | Self::Strref => r#"integer default 0"#,
+			Self::Text | Self::Resref => r#"text default """#,
+		}
+	}
+	/// Describes this type as a string.
+	pub const fn description(self)->&'static str {
+		match self {
+			FieldType::Integer => "integer",
+			FieldType::Text => "text",
+			FieldType::Resref => "resref",
+			FieldType::Strref => "strref",
+		}
+	}
+}
+/// A leaf SQL type: this can be converted from, to SQL and knows its own
+/// affinity.
+pub trait SqlLeaf: FromSql + ToSql {
+	/// How this field is handled database-side.
+	const FIELD_TYPE: FieldType;
+}
+impl SqlLeaf for Resref { const FIELD_TYPE: FieldType = FieldType::Resref; }
+impl SqlLeaf for Strref { const FIELD_TYPE: FieldType = FieldType::Strref; }
+// impl SqlLeaf for &str { const FIELD_TYPE: FieldType = FieldType::Text; }
+impl SqlLeaf for String { const FIELD_TYPE: FieldType = FieldType::Text; }
+macro_rules! sqlleaf_int { ($($T:ty),*) => { $(
+	impl SqlLeaf for $T { const FIELD_TYPE: FieldType = FieldType::Integer; }
+)* } }
+sqlleaf_int!{i8,i16,i32,i64,u8,u16,u32,u64,usize}
+
+/// Converting an object to something implementing [`rusqlite::Params`].
+///
+/// Since we cannot implement the [`rusqlite::Params`] trait ourselves,
+/// this is the closest we can do.
+pub trait AsParams {
+	/// Element type of the iterator we use to map to SQL.
+	type Elt<'a>: ToSql where Self: 'a;
+	/// Iterator we use to map to SQL.
+	type Iter<'a>: Iterator<Item=Self::Elt<'a>> where Self: 'a;
+	/// Converts this to an iterator.
+	fn params_iter(&self)->Self::Iter<'_>;
+	/// Converts this to some object implementing [`rusqlite::Params`].
+	fn as_params(&self)->rusqlite::ParamsFromIter<Self::Iter<'_>> {
+		rusqlite::params_from_iter(self.params_iter())
+	}
+}
+
+/// Structure which can be read from (part of) a SQL row,
+/// or bound to (part of) a SQL statement.
+///
+/// Implemented by the derive macro.
+pub trait SqlRow: Sized {
+	/// The description of the columns that this binds to.
+	const FIELDS: Fields;
+	/// Binds to columns [offset, ...] of statement.
+	fn bind_at(&self, s: &mut Statement<'_>, offset: usize)->Result<()>;
+	/// Reads from columns [offset, ... ] of row.
+	fn collect_at(s: &Row<'_>, offset: usize)->Result<Self>;
+	/// Checks that the number of columns is good.
+	fn check_parameter_count(s: &mut Statement<'_>, extra: usize)->Result<()> {
+		let found = Self::FIELDS.iter(FieldsItr::Payload).len() + extra;
+		let expected = s.parameter_count();
+		if found == expected {
+			Ok(())
+		} else {
+			Err(rusqlite::Error::InvalidParameterCount(found, expected).into())
+		}
+	}
+	/// Binds this object with a header of a single parameter, and executes
+	/// the statement.
+	fn bind_execute1<P: ToSql>(&self, stmt: &mut Statement<'_>, ctx: P)->Result<usize> {
+		Self::check_parameter_count(stmt, 1)?;
+		stmt.raw_bind_parameter(1, ctx)?;
+		self.bind_at(stmt, 1)?;
+		stmt.raw_execute().context("raw_execute")
+	}
+	/// Binds this object with a header of two parameters, and executes the
+	/// statement.
+	fn bind_execute2<P1: ToSql, P2: ToSql>(&self, stmt: &mut Statement<'_>, c1: P1, c2: P2)->Result<usize> {
+		Self::check_parameter_count(stmt, 2)?;
+		stmt.raw_bind_parameter(1, c1)?;
+		stmt.raw_bind_parameter(2, c2)?;
+		self.bind_at(stmt, 2)?;
+		stmt.raw_execute().context("raw_execute")
+	}
+	/// Returns a SQL statement restricted to type `(K, Self)` and built
+	/// from matching columns.
+	fn insert_statement<'db,K:ToSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>)->Result<InsertStatement<'db,K,Self>> {
+		let mut sql = format!(r#"insert into "{name}"("#);
+		K::write_headers(&mut sql, hdr)?;
+		let cols = Self::FIELDS.iter(FieldsItr::Payload);
+		write!(&mut sql, r#"{cols}) values ("#)?;
+		for i in 0..K::WIDTH + cols.len() {
+			if i > 0 { sql.push(',') }
+			sql.push('?')
+		}
+		sql.push(')');
+		Ok(InsertStatement {
+			statement: db.prepare(&sql)?,
+			_key: PhantomData, _row: PhantomData,
+		})
+	}
+	/// Returns a SQL select statement restricted to type `(K, Self)`.
+	fn select_statement<'db,K:FromSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>, condition: impl Display)->Result<SelectStatement<'db,K,Self>> {
+		let mut sql = String::from("select ");
+		K::write_headers(&mut sql, hdr)?;
+		let cols = Self::FIELDS.iter(FieldsItr::Payload);
+		write!(&mut sql, r#"{cols} from "{name}" {condition}"#)?;
+		Ok(SelectStatement {
+			statement: db.prepare(&sql)?,
+			_key: PhantomData, _row: PhantomData,
+		})
+	}
+}
+
+pub trait ToSqlMulti {
+	const WIDTH: usize;
+	type Headers<'a>;
+	fn write_headers(dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result;
+	fn raw_bind_to(&self, statement: &mut Statement<'_>)->rusqlite::Result<()>;
+}
+impl<T: ToSql> ToSqlMulti for T {
+	const WIDTH: usize = 1;
+	type Headers<'a> = &'a str;
+	fn write_headers(mut dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result {
+		write!(dest, r#""{hdr}","#)
+	}
+	fn raw_bind_to(&self, statement: &mut Statement<'_>)->rusqlite::Result<()> {
+		// 1-INDEXED
+		statement.raw_bind_parameter(1, self)
+	}
+}
+/// A `insert` statement restricted to its struct type + primary key.
+#[derive(Debug)]
+pub struct InsertStatement<'a,K: ToSqlMulti, R:SqlRow> {
+	statement: Statement<'a>,
+	_key: PhantomData<K>,
+	_row: PhantomData<R>,
+}
+impl<K: ToSqlMulti, R: SqlRow> InsertStatement<'_,K,R> {
+	/// type-constrained version of execution of statement:
+	pub fn execute(&mut self, key: K, data: R)->Result<usize> {
+		key.raw_bind_to(&mut self.statement)?;
+		data.bind_at(&mut self.statement, K::WIDTH)?;
+		self.statement.raw_execute().map_err(|e| e.into())
+	}
+}
+
+pub trait FromSqlMulti: Sized {
+	const WIDTH: usize;
+	type Headers<'a>;
+	fn write_headers(dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result;
+	fn raw_collect(row: &Row<'_>)->Result<Self>;
+}
+impl<T: FromSql> FromSqlMulti for T {
+	const WIDTH: usize = 1;
+	type Headers<'a> = &'a str;
+	fn write_headers(mut dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result {
+		write!(dest, r#""{hdr}","#)
+	}
+	fn raw_collect(row: &Row<'_>)->Result<Self> {
+		// 0-INDEXED
+		row.get::<_,Self>(0).context("raw_collect at 0-based index 0")
+	}
+}
+/// A strongly typed `select` statement, tied to a payload + primary key.
+#[derive(Debug)]
+pub struct SelectStatement<'a,K: FromSqlMulti, R:SqlRow> {
+	statement: Statement<'a>,
+	_key: PhantomData<K>,
+	_row: PhantomData<R>,
+}
+impl<K: FromSqlMulti, R: SqlRow> SelectStatement<'_,K,R> {
+	pub fn query(&mut self, params: impl rusqlite::Params)->Result<SelectRows<'_,K,R>> {
+		Ok(SelectRows {
+			rows: self.statement.query(params)?,
+			_key: PhantomData, _row: PhantomData,
+		})
+	}
+}
+/// A strongly typed iterator, returning `(key, payload)` pairs.
+#[allow(missing_debug_implementations)]
+pub struct SelectRows<'a, K: FromSqlMulti, R: SqlRow> {
+	rows: rusqlite::Rows<'a>,
+	_key: PhantomData<K>,
+	_row: PhantomData<R>,
+}
+impl<'a, K:FromSqlMulti, R:SqlRow> From<rusqlite::Rows<'a>> for SelectRows<'a,K,R> {
+	fn from(rows: rusqlite::Rows<'a>)->Self {
+		Self { rows, _key: PhantomData, _row: PhantomData }
+	}
+}
+impl<'a, K:FromSqlMulti, R:SqlRow> SelectRows<'a,K,R> {
+	fn read_row(row: &Row<'a>)->Result<(K,R)> {
+		let key = K::raw_collect(row)?;
+		let payload = R::collect_at(row, K::WIDTH)?;
+		Ok((key, payload))
+	}
+}
+impl<K:FromSqlMulti, R:SqlRow> Iterator for SelectRows<'_,K,R> {
+	type Item = Result<(K,R)>;
+	fn next(&mut self)->Option<Self::Item> {
+		loop {
+			let row = match self.rows.next() {
+				Ok(None) => return None,
+				Ok(Some(row)) => row,
+				Err(e) => return Some(Err(e.into()))
+			};
+			match Self::read_row(row) {
+				Err(e) => {
+					println!("cannot read a {T} from row: {e:?} {dump}",
+						T = std::any::type_name::<(K,R)>(), dump = row.dump_to_string());
+					continue },
+				good => return Some(good)
+			}
+		}
+	}
+}
+
+} // mod sql_rows
 pub mod resources {
 //! Infrastructure for recursive, tree-like reosurces and subresources.
 //! Definition of specific resources goes to `restypes` mod.
@@ -2448,8 +2515,9 @@ struct SelectRow<'a>(Statement<'a>);
 impl<'a> Callback<'a> for SelectRow<'a> {
 	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		let sql = format!(r#"select {cols} from "{schema}" where "id"=?"#,
-			cols = schema.fields);
+		// TODO
+		let cols = schema.payload();
+		let sql = format!(r#"select {cols} from "{schema}" where "id"=?"#);
 		db.prepare(sql).map(Self)
 	}
 	/// Implementation of `simod.list`.
@@ -2460,9 +2528,12 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 	///    top-level resource,
 	/// and returns in a Lua table the list of all primary keys matching
 	/// this condition.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>> {
-		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
-		let mut rows = self.0.query(args.as_params())?;
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
+		// (already used) table name
+		// 0 row id
+		Self::expect_arguments(&args, 2)?;
+		let arg1 = LuaValueRef(args.get(0).unwrap());
+		let mut rows = self.0.query((arg1,))?;
 		match rows.next()? {
 			Some(row) => {
 				let ret = lua.create_table()?;
@@ -2471,6 +2542,7 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 						.with_context(|| format!("cannot read field {i} in row"))?;
 					ret.set(row.as_ref().column_name(i)?, sql_to_lua(val, lua)?)?;
 				}
+				ret.set("id", args.pop_front().unwrap())?;
 				Ok(Value::Table(ret))
 			},
 			None => Ok(Value::Nil),
@@ -2483,9 +2555,9 @@ struct ReadField<'a>(HashMap<&'a str, Statement<'a>>);
 impl<'a> Callback<'a> for ReadField<'a> {
 	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		let mut h = HashMap::<&str, Statement<'_>>::
-			with_capacity(schema.fields.len());
-		for field in schema.fields.iter() {
+		let cols = schema.payload();
+		let mut h = HashMap::<&str, Statement<'_>>::with_capacity(cols.len());
+		for field in cols {
 			h.insert(field.fname, db.prepare(&format!(
 				r#"select {field} from "{schema}" where "id"=?"#))?);
 		}
@@ -2538,7 +2610,6 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		// 2. use a loop and raw bind to the statement.
 		// Since [`rusqlite::params_from_iter`] does not accept `Result`
 		// values, taking option 2 will produce better failure messages.
-		let offset: usize;
 		let expected = stmt.parameter_count();
 		let mut bind_field = |i, name| {
 			let v_lua: Value<'_> = table.get(name)?;
@@ -2548,18 +2619,17 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		};
 		// first bind the header fields:
 		if schema.is_subresource() {
-			offset = 2;
-			bind_field(0, "parent")?;
-			bind_field(1, "position")?;
+			bind_field(0, "parent")?; // `position` added as part of `pos_payload`
 		} else {
-			offset = 1;
 			bind_field(0, "id")?;
 		}
-		let found = schema.fields.len() + offset;
+		let offset = 1;
+		let cols = schema.pos_payload();
+		let found = cols.len() + offset;
 		if found != expected {
 			fail!(BadParameterCount { expected, found })
 		}
-		for (i, field) in schema.fields.iter().enumerate() {
+		for (i, field) in cols.enumerate() {
 			bind_field(i + offset, field.fname)?;
 		}
 		stmt.raw_execute()?;
@@ -2581,9 +2651,10 @@ struct UpdateRow<'a>(HashMap<&'a str, Statement<'a>>);
 impl<'a> Callback<'a> for UpdateRow<'a> {
 	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		let mut h = HashMap::<&str, Statement<'_>>::
-			with_capacity(schema.fields.len());
-		for field in schema.fields.iter() {
+		let itr = schema.pos_payload();
+		let mut h = HashMap::<&str, Statement<'_>>::with_capacity(itr.len());
+		// TODO: use position for subresources
+		for field in itr {
 			h.insert(field.fname, db.prepare(&format!(
 				r#"update "{schema}" set {field}=?2 where "id"=?1"#))?);
 		}
@@ -2699,11 +2770,11 @@ struct LuaStatements<'a> {
 	/// Prepared statements for `simod.list`.
 	list_keys: RootForest<ListKeys<'a>>,
 	select_row: RootForest<SelectRow<'a>>,
-	read_field: RootForest<ReadField<'a>>,
+// 	read_field: RootForest<ReadField<'a>>,
 	insert_row: RootForest<InsertRow<'a>>,
 	update_row: RootForest<UpdateRow<'a>>,
 	delete_row: RootForest<DeleteRow<'a>>,
-	next_key: RootForest<NextKey<'a>>,
+// 	next_key: RootForest<NextKey<'a>>,
 }
 impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface)->Result<Self> {
@@ -2711,11 +2782,11 @@ impl<'a> LuaStatements<'a> {
 // 			schemas,
 			list_keys: RootForest::<_>::prepare(db)?,
 			select_row: RootForest::<_>::prepare(db)?,
-			read_field: RootForest::<_>::prepare(db)?,
+// 			read_field: RootForest::<_>::prepare(db)?,
 			insert_row: RootForest::<_>::prepare(db)?,
 			update_row: RootForest::<_>::prepare(db)?,
 			delete_row: RootForest::<_>::prepare(db)?,
-			next_key: RootForest::<_>::prepare(db)?,
+// 			next_key: RootForest::<_>::prepare(db)?,
 		})
 	}
 }
@@ -2760,7 +2831,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		// to clone anyway (a pointer + an integer).
 		ALL_SCHEMAS.recurse_mut(|schema, name, parent_fields| {
 			let fields = lua.create_table()?;
-			for f in schema.fields.iter() {
+			for f in schema.payload() {
 				use crate::sql_rows::FieldType;
 				let marker = match f.ftype {
 					FieldType::Integer => marker_integer.clone(),
@@ -2797,11 +2868,11 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		})?)?;
 		statements.list_keys.install_callback(scope, &simod, "list")?;
 		statements.select_row.install_callback(scope, &simod, "select")?;
-		statements.read_field.install_callback(scope, &simod, "get")?;
-		statements.insert_row.install_callback(scope, &simod, "append")?;
-		statements.update_row.install_callback(scope, &simod, "set")?;
+// 		statements.read_field.install_callback(scope, &simod, "get")?;
+		statements.insert_row.install_callback(scope, &simod, "insert")?;
+		statements.update_row.install_callback(scope, &simod, "update")?;
 		statements.delete_row.install_callback(scope, &simod, "delete")?;
-		statements.next_key.install_callback(scope, &simod, "next_key")?;
+// 		statements.next_key.install_callback(scope, &simod, "next_key")?;
 		lua.globals().set("simod", simod)?;
 
 		info!("loading file {lua_file:?}");

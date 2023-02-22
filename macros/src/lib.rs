@@ -476,7 +476,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	}
 	let code = quote! {
 		impl crate::sql_rows::SqlRow for #ident {
-			const FIELDS: crate::schemas::Fields = 
+			const FIELDS: crate::schemas::Fields =
 				crate::schemas::Fields(&[ #fields_def ]);
 			fn bind_at(&self, s: &mut Statement<'_>, offset: usize)->Result<()> {
 				#bind_at
