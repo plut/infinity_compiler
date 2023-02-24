@@ -2476,31 +2476,26 @@ impl Schema {
 }
 /// A state that can be rec + iterated on.
 pub trait RecIteratorState: Sized {
-	type Error;
-	fn descend(&self, name: &str)->Result<Self,Self::Error>;
-	fn execute<'a>(&self, stmt: &mut Statement<'a>)->Result<Option<rusqlite::Rows<'a>>,Self::Error>;
-	fn build(&self, row: rusqlite::Row<'_>)->Result<Self,Self::Error>;
+	#[allow(single_use_lifetimes)]
+	fn execute<'a:'r,'b:'r,'r>(&self, stmt: &'b mut Statement<'a>, name: &str)->Result<Option<rusqlite::Rows<'r>>>;
+	fn build(&self, row: &Row<'_>)->Result<Self>;
 }
 pub trait RecurseItr<S: RecIteratorState>: Recurse<()> {
-	fn recurse_itr_mut(&mut self, state: &S)->Result<(), S::Error>;
+	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()>;
 }
-// impl<'s,B: ByName<In=Statement<'s>>+RecurseItr<'s>> RecurseItr<'s> for crate::resources::Tree<B> {
-// 	fn recurse_itr_mut<'a:'s,S,F,G,P,N>(&'a mut self, params: G, f: F, substate: N, state: &S)
-// 		->Result<(),anyhow::Error>
-// 	where
-// 		Self: 's,
-// 		F: FnMut(&Row<'s>, &S)->Result<S,anyhow::Error>,
-// 		G: Fn(&S)->Result<Option<P>,anyhow::Error>,
-// 		P: rusqlite::Params,
-// 		N: Fn(&S, &str)->Result<S,anyhow::Error>,
-// 	{
-// 		let p = match params(state)? { None => return Ok(()), Some(x) => x, };
-// 		let rows = self.content.query(p)?;
-// 		while let Some(row) = rows.next()? {
-// 			let new_state = f(&row, state)?;
-// 			self.branches.recurse_itr_mut(params, &mut f, &substate, &new_state)?;
-// 		}
-// 		Ok(())
+impl<'s,B: ByName<In=Statement<'s>>+RecurseItr<S>, S: RecIteratorState> RecurseItr<S> for crate::resources::Tree<B> {
+	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()> {
+		let mut rows = match state.execute(&mut self.content, name)? {
+			None => return Ok(()),
+			Some(x) => x
+		};
+		while let Some(row) = rows.next()? {
+			let new_state = state.build(row)?;
+			self.branches.recurse_itr_mut(&new_state, name)?;
+		}
+		Ok(())
+	}
+}
 // 	}
 // }
 
@@ -2853,6 +2848,47 @@ fn read_row_as_lua<'lua>(stmt: &mut Statement<'_>, params: impl rusqlite::Params
 		table.set(row.as_ref().column_name(i)?, sql_to_lua(val, lua)?)?;
 	}
 	Ok(Some(table))
+}
+#[derive(Debug)]
+struct LuaBuilder<'lua,'s> {
+	lua: &'lua Lua,
+	parent_table: Option<mlua::Table<'lua>>,
+	parent_id: Option<rusqlite::types::Value>,
+	query_name: &'s str,
+	level: usize,
+}
+impl RecIteratorState for LuaBuilder<'_,'_> {
+	#[allow(single_use_lifetimes)]
+	fn execute<'a:'r,'b:'r,'r>(&self, stmt: &'b mut Statement<'a>, name: &str)->Result<Option<rusqlite::Rows<'r>>> {
+		if self.level == 0 && name != self.query_name {
+			return Ok(None)
+		}
+		let id = match self.parent_id.as_ref() {
+			None => return Ok(None),
+			Some(x) => x
+		};
+		Some(stmt.query((id,))).transpose().map_err(|e| e.into())
+	}
+	fn build(&self, row: &Row<'_>)->Result<Self> {
+		let Self { lua, query_name, .. } = self;
+		let table = lua.create_table()?;
+		let mut row_id = rusqlite::types::Value::Null;
+		for i in 0..row.as_ref().column_count() {
+			let val_sql = row.get_ref(i)
+					.with_context(|| format!("cannot read field {i} in row"))?;
+			let col = row.as_ref().column_name(i)?;
+			let val_lua = sql_to_lua(val_sql, lua)?;
+			table.set(col, val_lua)?;
+			if col == "id" {
+				row_id = row.get(i)?;
+			}
+		}
+		Ok(Self { lua, query_name,
+			level: self.level+1,
+			parent_table: Some(table),
+			parent_id: Some(row_id),
+		})
+	}
 }
 /// Recursively builds a resource as a Lua table.
 /// Sub-resources are collected in array fields of the returned table.
