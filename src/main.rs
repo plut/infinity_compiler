@@ -1817,17 +1817,17 @@ pub static ALL_SCHEMAS: Lazy<RootForest<Schema>> = Lazy::new(|| {
 });
 
 /// Describes a state passed down a tree for iteration.
-pub trait RecurseState: Sized {
+pub trait RecurseState<T>: Sized {
 	/// Executes the state at this level, *possibly* recursing down to
 	/// branches of this tree.
 	///
 	/// This recursion is invoked by calling the `descend` closure.
-	fn exec(&self, stmt: &mut Statement<'_>, name: &str, descend: impl FnMut(&Self)->Result<()>)->Result<()>;
+	fn exec(&self, content: &mut T, name: &str, descend: impl FnMut(&Self)->Result<()>)->Result<()>;
 }
-pub trait RecurseItr<S: RecurseState>: Recurse<()> {
+pub trait RecurseItr<T,S: RecurseState<T>> {
 	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()>;
 }
-impl<'s,B: ByName<In=Statement<'s>>+RecurseItr<S>, S: RecurseState> RecurseItr<S> for Tree<B> {
+impl<T,B: ByName<In=T>+RecurseItr<T,S>, S: RecurseState<T>> RecurseItr<T,S> for Tree<B> {
 	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()> {
 		state.exec(&mut self.content, name,
 			|new_state| self.branches.recurse_itr_mut(new_state, name))
@@ -2836,7 +2836,7 @@ struct LuaBuilder<'lua,'s> {
 	query_name: &'s str,
 	level: usize,
 }
-impl RecurseState for LuaBuilder<'_,'_> {
+impl RecurseState<Statement<'_>> for LuaBuilder<'_,'_> {
 	fn exec(&self, stmt: &mut Statement<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		if self.level == 0 && name != self.query_name {
 			return Ok(())
