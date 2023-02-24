@@ -2400,21 +2400,21 @@ impl<'lua> Value<'lua> {
 	///
 	/// Note that this is almost costless: most values are integers anyway,
 	/// and strings need copying from Lua to ensure UTF-8 validity.
-	fn to_sql_owned(&self)->rusqlite::Result<ToSqlOutput<'static>> {
-		use rusqlite::types::{ToSqlOutput::Owned,Value as SqlValue};
-		let x =
-		match self {
-		Value::Nil => Ok(Owned(SqlValue::Null)),
-		Value::Boolean(b) => Ok(Owned((*b).into())),
-		Value::Integer(n) => Ok(Owned((*n).into())),
-		Value::Number(x) => Ok(Owned((*x).into())),
-		Value::String(ref s) =>
-		// TODO: replace unwrap() by map_err()
-			Ok(Owned(s.to_str().unwrap().to_owned().into())),
+	fn to_sql_value(&self)->rusqlite::Result<rusqlite::types::Value> {
+		Ok(match self {
+			Value::Nil => rusqlite::types::Null.into(),
+			Value::Boolean(b) => (*b).into(),
+			Value::Integer(n) => (*n).into(),
+			Value::Number(x) => (*x).into(),
+			// TODO: replace unwrap() by map_err()
+			Value::String(ref s) => s.to_str().unwrap().to_owned().into(),
 		// TODO: use proper error
-		e => Err(rusqlite::Error::InvalidParameterName(format!("cannot convert {e:?} to a SQL type")))
-		};
-		x
+			e => return Err(rusqlite::Error::InvalidParameterName(
+				format!("cannot convert {e:?} to a SQL type")))
+		})
+	}
+	fn to_sql_owned(&self)->rusqlite::Result<ToSqlOutput<'static>> {
+		Ok(rusqlite::types::ToSqlOutput::Owned(self.to_sql_value()?))
 	}
 }
 /// A newtype around [`mlua::Value`], allowing us to implement various
@@ -2834,21 +2834,6 @@ impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
 		})?)
 	}
 }
-/// Reads a row from the statement as a table, or returns `None`.
-fn read_row_as_lua<'lua>(stmt: &mut Statement<'_>, params: impl rusqlite::Params, lua: &'lua Lua)->Result<Option<mlua::Table<'lua>>> {
-	let mut rows = stmt.query(params)?;
-	let row = match rows.next()? {
-		Some(row) => row,
-		None => return Ok(None),
-	};
-	let table = lua.create_table()?;
-	for i in 0..row.as_ref().column_count() {
-		let val = row.get_ref(i)
-			.with_context(|| format!("cannot read field {i} in row"))?;
-		table.set(row.as_ref().column_name(i)?, sql_to_lua(val, lua)?)?;
-	}
-	Ok(Some(table))
-}
 #[derive(Debug)]
 struct LuaBuilder<'lua,'s> {
 	lua: &'lua Lua,
@@ -2883,6 +2868,7 @@ impl RecIteratorState for LuaBuilder<'_,'_> {
 				row_id = row.get(i)?;
 			}
 		}
+		self.parent_table.as_ref().unwrap().push(table.clone())?;
 		Ok(Self { lua, query_name,
 			level: self.level+1,
 			parent_table: Some(table),
@@ -2904,8 +2890,12 @@ fn read_rec<'lua>(branches: &mut RootForest<Statement<'_>>, lua: &'lua Lua, mut 
 	}
 	let query_name = pop_arg_as::<String>(&mut args, lua)
 		.context("first argument (table name) must be a string")?;
-	let query_key = args.pop_front().unwrap();
-	let root_table = lua.create_table()?;
+	let init = LuaBuilder {
+		lua, level: 0, query_name: &query_name,
+		parent_table: Some(lua.create_table()?),
+		parent_id: Some(args.pop_front().unwrap().to_sql_value()?),
+	};
+	branches.recurse_itr_mut(&init, "")?;
 // 	branches.recurse_itr_mut(
 // 		/*params*/|parent_data| {
 // 		let (parent_table, level, name) = match parent_data.as_ref() {
