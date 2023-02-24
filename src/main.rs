@@ -2477,23 +2477,15 @@ impl Schema {
 /// A state that can be rec + iterated on.
 pub trait RecIteratorState: Sized {
 	#[allow(single_use_lifetimes)]
-	fn execute<'a:'r,'b:'r,'r>(&self, stmt: &'b mut Statement<'a>, name: &str)->Result<Option<rusqlite::Rows<'r>>>;
-	fn build(&self, row: &Row<'_>)->Result<Self>;
+	fn exec(&self, stmt: &mut Statement<'_>, name: &str, descend: impl FnMut(&Self)->Result<()>)->Result<()>;
 }
 pub trait RecurseItr<S: RecIteratorState>: Recurse<()> {
 	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()>;
 }
 impl<'s,B: ByName<In=Statement<'s>>+RecurseItr<S>, S: RecIteratorState> RecurseItr<S> for crate::resources::Tree<B> {
 	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()> {
-		let mut rows = match state.execute(&mut self.content, name)? {
-			None => return Ok(()),
-			Some(x) => x
-		};
-		while let Some(row) = rows.next()? {
-			let new_state = state.build(row)?;
-			self.branches.recurse_itr_mut(&new_state, name)?;
-		}
-		Ok(())
+		state.exec(&mut self.content, name,
+			|new_state| self.branches.recurse_itr_mut(new_state, name))
 	}
 }
 // 	}
@@ -2843,37 +2835,38 @@ struct LuaBuilder<'lua,'s> {
 	level: usize,
 }
 impl RecIteratorState for LuaBuilder<'_,'_> {
-	#[allow(single_use_lifetimes)]
-	fn execute<'a:'r,'b:'r,'r>(&self, stmt: &'b mut Statement<'a>, name: &str)->Result<Option<rusqlite::Rows<'r>>> {
+	fn exec(&self, stmt: &mut Statement<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		if self.level == 0 && name != self.query_name {
-			return Ok(None)
+			return Ok(())
 		}
 		let id = match self.parent_id.as_ref() {
-			None => return Ok(None),
+			None => return Ok(()),
 			Some(x) => x
 		};
-		Some(stmt.query((id,))).transpose().map_err(|e| e.into())
-	}
-	fn build(&self, row: &Row<'_>)->Result<Self> {
+		let mut rows = stmt.query((id,))?;
 		let Self { lua, query_name, .. } = self;
-		let table = lua.create_table()?;
-		let mut row_id = rusqlite::types::Value::Null;
-		for i in 0..row.as_ref().column_count() {
-			let val_sql = row.get_ref(i)
-					.with_context(|| format!("cannot read field {i} in row"))?;
-			let col = row.as_ref().column_name(i)?;
-			let val_lua = sql_to_lua(val_sql, lua)?;
-			table.set(col, val_lua)?;
-			if col == "id" {
-				row_id = row.get(i)?;
+		while let Some(row) = rows.next()? {
+			let table = lua.create_table()?;
+			let mut row_id = rusqlite::types::Value::Null;
+			for i in 0..row.as_ref().column_count() {
+				let val_sql = row.get_ref(i)
+						.with_context(|| format!("cannot read field {i} in row"))?;
+				let col = row.as_ref().column_name(i)?;
+				let val_lua = sql_to_lua(val_sql, lua)?;
+				table.set(col, val_lua)?;
+				if col == "id" {
+					row_id = row.get(i)?;
+				}
 			}
+			self.parent_table.as_ref().unwrap().push(table.clone())?;
+			let new_state = Self { lua, query_name,
+				level: self.level+1,
+				parent_table: Some(table),
+				parent_id: Some(row_id),
+			};
+			descend(&new_state)?;
 		}
-		self.parent_table.as_ref().unwrap().push(table.clone())?;
-		Ok(Self { lua, query_name,
-			level: self.level+1,
-			parent_table: Some(table),
-			parent_id: Some(row_id),
-		})
+		Ok(())
 	}
 }
 /// Recursively builds a resource as a Lua table.
@@ -2896,68 +2889,15 @@ fn read_rec<'lua>(branches: &mut RootForest<Statement<'_>>, lua: &'lua Lua, mut 
 		parent_id: Some(args.pop_front().unwrap().to_sql_value()?),
 	};
 	branches.recurse_itr_mut(&init, "")?;
-// 	branches.recurse_itr_mut(
-// 		/*params*/|parent_data| {
-// 		let (parent_table, level, name) = match parent_data.as_ref() {
-// 			None => return any_ok(None),
-// 			Some(x) => x,
-// 		};
-// 		if *level == 0 && name != query_name {
-// 			return any_ok(None)
-// 		}
-// 		todo!()
-// 	}, /*work*/ |row, parent_data| {
-// 		todo!()
-// 	}, /*substate*/ |parent_data, name| {
-// 		todo!()
-// 	}, &Some((root_table, 0)))?;
-
-//  XXX
-// 	branches.recurse_mut2(|stmt, name, parent_data| {
-// 		// this is used for simplicity for the return type:
-// 		let rec = |x| any_ok((x, nothing));
-// 		// parent_data is Option<(table, key, level)>
-// 		// if None: we are in a pruned branch
-// 		// table: table built at the parent level (we append to this)
-// 		// key: the id of the parent (same as table.id; avoid extra lookups)
-// 		// level: the level of the parent (0 for root resources)
-// 		let (parent_table, parent_key, level) = match parent_data.as_ref() {
-// 			None => return rec(None),
-// 			Some(x) => x,
-// 		};
-// 		if *level == 0 && name != query_name {
-// 			return rec(None)
-// 		}
-// 		let arg = LuaValueRef(parent_key);
-// 		let list = match parent_table.get::<_,Value<'_>>(name)? {
-// 			Value::Nil => {
-// 				let list = lua.create_table()?;
-// 				parent_table.set(name, list.clone())?;
-// 				list
-// 			},
-// 			Value::Table(t) => t,
-// 			_ => panic!("unexpected value type"),
-// 		};
-// 		let mut rows = stmt.query((arg,))?;
-// 		while let Some(row) = rows.next()? {
-// 			let table = lua.create_table()?;
-// 			for i in 0..row.as_ref().column_count() {
-// 				let val = row.get_ref(i)
-// 					.with_context(|| format!("cannot read field {i} in row"))?;
-// 				table.set(row.as_ref().column_name(i)?, sql_to_lua(val, lua)?)?;
-// 			}
-// 			let key = table.get::<_,Value<'_>>("id")?;
-// 			list.push(table)?;
-// 		}
-// 		rec(Some((list, key, level+1)))
-// 	}, "", &Some((root_table.clone(), query_key, 0)))?;
-// 	for kv in root_table.pairs::<String,mlua::Table<'_>>() {
-// 		let (_k, v) = kv?;
-// 		return Ok(v.pop::<Value<'_>>()?)
-// 	}
+	let mut pairs = match init.parent_table {
+		None => return Ok(Value::Nil), // FIXME: or an error?
+		Some(t) => t.pairs::<String,mlua::Table<'_>>()
+	};
+	if let Some(kv) = pairs.next() {
+		let (_k, v) = kv?;
+		return Ok(v.pop::<Value<'_>>()?)
+	}
 	Ok(Value::Nil)
-// fn read_rec<'a,'lua,A: ToSql, B: ByName<In=Statement<'a>>+Recurse<()>>(tree: &mut Tree<B>, arg: A, lua: &'lua Lua)->Result<Value<'lua>>
-// 	Ok(Value::Table(root_table))
 }
 /// A collection of all the prepared SQL statements used for implementing
 /// the Lua API.

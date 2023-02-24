@@ -361,9 +361,11 @@ print(albruin.id)
 albruin.name = "New name"
 -- dump(albruin.effects)
 x = (simod.read_full("items", "sw1h34"))
+print("---- dumping read of items sw1h34: -----")
 for k, v in pairs(x) do
 	print(k, v)
 end
+print("---- done")
 for k, v in pairs(x.abilities) do
 	print("abilities", k, v)
 end
