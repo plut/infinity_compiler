@@ -573,7 +573,7 @@ impl ToTokens for DeriveResourceTree {
 					})
 				}
 			}
-			impl<'s, S: crate::lua_api::RecIteratorState> crate::lua_api::RecurseItr<S> for #forestname<rusqlite::Statement<'s>> {
+			impl<'s, S: crate::resources::RecurseState> crate::resources::RecurseItr<S> for #forestname<rusqlite::Statement<'s>> {
 				fn recurse_itr_mut(&mut self, state: &S, _name: &str)->Result<()> {
 					#(self.#field.recurse_itr_mut(state, stringify!(#field))?;)*
 					Ok(())

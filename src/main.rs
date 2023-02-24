@@ -1816,6 +1816,24 @@ pub static ALL_SCHEMAS: Lazy<RootForest<Schema>> = Lazy::new(|| {
 	}, "", &None).unwrap()
 });
 
+/// Describes a state passed down a tree for iteration.
+pub trait RecurseState: Sized {
+	/// Executes the state at this level, *possibly* recursing down to
+	/// branches of this tree.
+	///
+	/// This recursion is invoked by calling the `descend` closure.
+	fn exec(&self, stmt: &mut Statement<'_>, name: &str, descend: impl FnMut(&Self)->Result<()>)->Result<()>;
+}
+pub trait RecurseItr<S: RecurseState>: Recurse<()> {
+	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()>;
+}
+impl<'s,B: ByName<In=Statement<'s>>+RecurseItr<S>, S: RecurseState> RecurseItr<S> for Tree<B> {
+	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()> {
+		state.exec(&mut self.content, name,
+			|new_state| self.branches.recurse_itr_mut(new_state, name))
+	}
+}
+
 /// A trait containing resource I/O functions.
 ///
 /// Each top-level resource as defined in `restypes.rs` should implement
@@ -2381,7 +2399,7 @@ use rusqlite::{ToSql, types::ToSqlOutput};
 use std::collections::HashMap;
 
 use crate::prelude::*;
-use crate::resources::{ALL_SCHEMAS,ByName,Recurse};
+use crate::resources::{ALL_SCHEMAS,ByName,Recurse,RecurseState,RecurseItr};
 use crate::restypes::{RootForest};
 use crate::schemas::{Schema};
 use crate::sql_rows::{AsParams};
@@ -2474,22 +2492,6 @@ impl Schema {
 		}
 	}
 }
-/// A state that can be rec + iterated on.
-pub trait RecIteratorState: Sized {
-	#[allow(single_use_lifetimes)]
-	fn exec(&self, stmt: &mut Statement<'_>, name: &str, descend: impl FnMut(&Self)->Result<()>)->Result<()>;
-}
-pub trait RecurseItr<S: RecIteratorState>: Recurse<()> {
-	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()>;
-}
-impl<'s,B: ByName<In=Statement<'s>>+RecurseItr<S>, S: RecIteratorState> RecurseItr<S> for crate::resources::Tree<B> {
-	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()> {
-		state.exec(&mut self.content, name,
-			|new_state| self.branches.recurse_itr_mut(new_state, name))
-	}
-}
-// 	}
-// }
 
 /// Small simplification for [`MultiValue`] impl of [`AsParams`].
 type MluaMultiIter<'a,'lua> = std::iter::Rev<std::slice::Iter<'a,Value<'lua>>>;
@@ -2834,7 +2836,7 @@ struct LuaBuilder<'lua,'s> {
 	query_name: &'s str,
 	level: usize,
 }
-impl RecIteratorState for LuaBuilder<'_,'_> {
+impl RecurseState for LuaBuilder<'_,'_> {
 	fn exec(&self, stmt: &mut Statement<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		if self.level == 0 && name != self.query_name {
 			return Ok(())
