@@ -563,7 +563,30 @@ impl ToTokens for DeriveResourceTree {
 						_marker: PhantomData
 					})
 				}
+				fn recurse_mut2<'a,'n,S,E,F>(&'a mut self, mut f: F, name: &'n str, state: &S)
+					->Result<Self::To,E>
+				where F: FnMut(&'a mut Self::In, &'n str, &S)->Result<(S,Y),E> {
+					Ok(#forestname {
+					#(#field:
+						self.#field.recurse_mut2(&mut f, stringify!(#field), state)?,)*
+						_marker: PhantomData
+					})
+				}
 			}
+// 			impl<'s> crate::lua_api::RecurseItr<'s> for #forestname<rusqlite::Statement<'s>> {
+// 				fn recurse_itr_mut<S,F,G,P,N>(&mut self, params: G, f: F, substate: N, state: &S)
+// 					->Result<(),anyhow::Error>
+// 				where
+// 					F: FnMut(&Row<'s>, &S)->Result<S,anyhow::Error>,
+// 					G: Fn(&S)->Result<Option<P>,anyhow::Error>,
+// 					P: rusqlite::Params,
+// 					N: Fn(&S, &str)->Result<S,anyhow::Error>,
+// 				{
+// 					#(self.#field.recurse_itr_mut(params, &mut f, &substate,
+// 						&substate(&state, stringify!(#field))?)?;)*
+// 					Ok(())
+// 				}
+// 			}
 			impl crate::resources::ResourceTree for #ident {
 				type FieldsTree = crate::resources::Tree<#forestname<crate::schemas::Fields>>;
 				const FIELDS_TREE: Self::FieldsTree = Self::FieldsTree {
