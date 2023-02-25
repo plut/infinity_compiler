@@ -2834,14 +2834,14 @@ impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
 /// A struct implementing the construction of a full resource (as a Lua
 /// table-of-tables) from the database.
 #[derive(Debug)]
-struct ResourceToLua<'lua,'s> {
+struct Pull<'lua,'s> {
 	lua: &'lua Lua,
 	parent_table: Option<mlua::Table<'lua>>,
 	parent_id: Option<rusqlite::types::Value>,
 	query_name: &'s str,
 	level: usize,
 }
-impl RecurseState<Statement<'_>> for ResourceToLua<'_,'_> {
+impl RecurseState<Statement<'_>> for Pull<'_,'_> {
 	fn exec(&self, stmt: &mut Statement<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		let Self { lua, query_name, .. } = self;
 		if self.level == 0 && name != self.query_name {
@@ -2896,7 +2896,7 @@ fn read_rec<'lua>(branches: &mut RootForest<Statement<'_>>, lua: &'lua Lua, mut 
 	}
 	let query_name = pop_arg_as::<String>(&mut args, lua)
 		.context("first argument (table name) must be a string")?;
-	let init = ResourceToLua {
+	let init = Pull {
 		lua, level: 0, query_name: &query_name,
 		parent_table: Some(lua.create_table()?),
 		parent_id: Some(args.pop_front().unwrap().to_sql_value()?),
@@ -2916,7 +2916,8 @@ fn read_rec<'lua>(branches: &mut RootForest<Statement<'_>>, lua: &'lua Lua, mut 
 /// A structure encapsulating all the statements needed to update a
 /// resource in database from a Lua table.
 #[derive(Debug)]
-struct SaveResourceRow<'s> {
+struct PushRow<'s,T: DbInterface> {
+	db: &'s T,
 	/// `select count(1) from $table where id=?`
 	exists: Statement<'s>,
 	/// `update $table set $field=? where id=?`
@@ -2925,8 +2926,8 @@ struct SaveResourceRow<'s> {
 	insert: Statement<'s>,
 	schema: &'s Schema,
 }
-impl<'s> SaveResourceRow<'s> {
-	fn new(db: &'s impl DbInterface, schema: &'s Schema)->Result<Self> {
+impl<'s, T: DbInterface> PushRow<'s,T> {
+	fn new(db: &'s T, schema: &'s Schema)->Result<Self> {
 		// TODO: distinction top/sub resource:
 		// for top resource: insert id
 		// for subresource: insert parent
@@ -2935,42 +2936,52 @@ impl<'s> SaveResourceRow<'s> {
 		let exists = db.prepare(format!(r#"select count(1) from "{schema}" where id=?"#))?;
 		let mut update = HashMap::new();
 		let mut insert = String::from(r#"insert into "{schema}" ("#);
+		// This causes the addition of an additional question mark (see below)
+		if schema.is_subresource() {
+			insert.push_str(r#""parent""#)
+		} else {
+			insert.push_str(r#""id""#)
+		}
 		let itr = schema.pos_payload();
 		let l = itr.len();
-		for (i, Field { fname, .. }) in itr.enumerate() {
+		for Field { fname, .. } in itr {
 			update.insert(*fname, db.prepare(format!(r#"update "{schema}" set {fname}=?2 where "id"=?1"#))?);
-			if i > 0 { insert.push(',') }
-			write!(&mut insert, "{fname}")?;
+			write!(&mut insert, ",{fname}")?;
 		}
-		write!(&mut insert, ") values (")?;
-		for i in 0..l {
-			if i > 0 { insert.push(',') }
-			insert.push('?');
+		// The extra parameter stands for "parent" or "id" (see above)
+		write!(&mut insert, ") values (?")?;
+		for _ in 0..l {
+			insert.push_str(",?");
 		}
 		insert.push(')');
-		Ok(Self { exists, update, schema,
+		Ok(Self { db, exists, update, schema,
 			insert: db.prepare(insert)?,
 		})
 	}
-	fn row_exists(&mut self, id: impl ToSql)->Result<bool> {
-		let mut rows = self.exists.query((id,))?;
+	fn row_exists(&mut self, id: &Value<'_>)->Result<bool> {
+		if let Value::Nil = id {
+			return Ok(false)
+		}
+		let id_sql = LuaValueRef(&id);
+		let mut rows = self.exists.query((id_sql,))?;
 		if let Some(row) = rows.next()? {
 			let c: usize = row.get(0)?;
 			return Ok(c > 0)
 		}
 		Ok(false)
 	}
-	fn update_values(&mut self, source: &mlua::Table<'_>)->Result<()> {
+	fn update_values(&mut self, source: &mlua::Table<'_>, parent: &Value<'_>, id: &Value<'_>)->Result<()> {
+		// TODO: if this is a subresource then update parent if needed
 		for Field { fname, .. } in self.schema.pos_payload() {
 			// the update does nothing if the value does not change
 			// (our sql triggers take care of this)
-			let mut stmt = self.update.get_mut(fname).unwrap();
+			let stmt = self.update.get_mut(fname).unwrap();
 			let val: Value<'_> = source.get(*fname)?;
-			stmt.execute((LuaValueRef(&val),))?;
+			stmt.execute((LuaValueRef(&id), LuaValueRef(&val),))?;
 		}
 		Ok(())
 	}
-	fn insert_new(&mut self, source: &mlua::Table<'_>)->Result<rusqlite::types::Value> {
+	fn insert_new<'lua>(&mut self, source: &mlua::Table<'lua>, parent: &Value<'_>)->Result<Value<'lua>> {
 		// TODO: this is where we make a distinction top/sub:
 		// top:
 		//  - insert id
@@ -2983,34 +2994,36 @@ impl<'s> SaveResourceRow<'s> {
 			let val: Value<'_> = source.get(*fname)?;
 			self.insert.raw_bind_parameter(i+1, LuaValueRef(&val))?;
 		}
-		Ok(())
+		if self.schema.is_subresource() {
+			Ok(Value::Integer(self.db.last_insert_rowid()))
+		} else {
+			Ok(source.get("id")?)
+		}
 	}
-	fn save(&mut self, source: &mlua::Table<'_>, parent_id: &Option<rusqlite::types::Value>)->Result<rusqlite::types::Value> {
+	fn save<'lua>(&mut self, source: &mlua::Table<'lua>, parent_id: &Value<'_>)->Result<Value<'lua>> {
 		let id: Value<'_> = source.get("id")?;
-		let found = if let Value::Nil = id { false }
-		else {
-			self.row_exists(LuaValueRef(&id))
-		};
-		if found {
-			self.update_values(source, parent_id)?;
-			Ok(id.to_lua_value())
+		if self.row_exists(&id)? {
+			self.update_values(source, parent_id, &id)?;
+			Ok(id)
 		} else {
 			self.insert_new(source, parent_id)
 		}
 	}
 }
 
+/// The state for pushing a resource to database. Implements
+/// [`RecurseState`].
 #[derive(Debug)]
-struct SaveResource<'lua,'s> {
+struct Push<'lua,'s> {
 	lua: &'lua Lua,
 	parent_table: Option<mlua::Table<'lua>>,
-	parent_id: Option<rusqlite::types::Value>,
+	parent_id: Value<'lua>,
 	query_name: &'s str,
 	level: usize,
 }
 
-impl RecurseState<SaveResourceRow<'_>> for SaveResource<'_,'_> {
-	fn exec(&self, save_row: &mut SaveResourceRow<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+impl<T: DbInterface> RecurseState<PushRow<'_,T>> for Push<'_,'_> {
+	fn exec(&self, save_row: &mut PushRow<'_,T>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		let Self { lua, query_name, .. } = self;
 		if self.level == 0 && name != self.query_name {
 			return Ok(())
@@ -3021,11 +3034,12 @@ impl RecurseState<SaveResourceRow<'_>> for SaveResource<'_,'_> {
 		};
 		let list = table.get::<_,mlua::Table<'_>>(name)?;
 		for elt in list.sequence_values::<mlua::Table<'_>>() {
-			let row_id = save_row.save(&elt?, &self.parent_id)?;
+			let table = elt?;
+			let row_id = save_row.save(&table, &self.parent_id)?;
 			let new_state = Self { lua, query_name,
-				level: Self.level+1,
-				parent_table: Some(elt),
-				parent_id: Some(row_id),
+				level: self.level+1,
+				parent_table: Some(table),
+				parent_id: row_id,
 			};
 			descend(&new_state)?;
 		}
