@@ -1824,7 +1824,9 @@ pub trait RecurseState<T>: Sized {
 	/// This recursion is invoked by calling the `descend` closure.
 	fn exec(&self, content: &mut T, name: &str, descend: impl FnMut(&Self)->Result<()>)->Result<()>;
 }
+/// A type which can be iterated at multiple levels (tree-like).
 pub trait RecurseItr<T,S: RecurseState<T>> {
+	/// Invoke a multi-level iterator on this type.
 	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()>;
 }
 impl<T,B: ByName<In=T>+RecurseItr<T,S>, S: RecurseState<T>> RecurseItr<T,S> for Tree<B> {
@@ -2828,25 +2830,33 @@ impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
 		})?)
 	}
 }
+/// A struct implementing the construction of a full resource (as a Lua
+/// table-of-tables) from the database.
 #[derive(Debug)]
-struct LuaBuilder<'lua,'s> {
+struct ResourceToLua<'lua,'s> {
 	lua: &'lua Lua,
 	parent_table: Option<mlua::Table<'lua>>,
 	parent_id: Option<rusqlite::types::Value>,
 	query_name: &'s str,
 	level: usize,
 }
-impl RecurseState<Statement<'_>> for LuaBuilder<'_,'_> {
+impl RecurseState<Statement<'_>> for ResourceToLua<'_,'_> {
 	fn exec(&self, stmt: &mut Statement<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+		let Self { lua, query_name, .. } = self;
 		if self.level == 0 && name != self.query_name {
 			return Ok(())
 		}
+		let table = match self.parent_table.as_ref() {
+			None => return Ok(()),
+			Some(t) => t
+		};
 		let id = match self.parent_id.as_ref() {
 			None => return Ok(()),
 			Some(x) => x
 		};
+		let list = lua.create_table()?;
+		table.set(name, list.clone())?;
 		let mut rows = stmt.query((id,))?;
-		let Self { lua, query_name, .. } = self;
 		while let Some(row) = rows.next()? {
 			let table = lua.create_table()?;
 			let mut row_id = rusqlite::types::Value::Null;
@@ -2860,7 +2870,7 @@ impl RecurseState<Statement<'_>> for LuaBuilder<'_,'_> {
 					row_id = row.get(i)?;
 				}
 			}
-			self.parent_table.as_ref().unwrap().push(table.clone())?;
+			list.push(table.clone())?;
 			let new_state = Self { lua, query_name,
 				level: self.level+1,
 				parent_table: Some(table),
@@ -2885,7 +2895,7 @@ fn read_rec<'lua>(branches: &mut RootForest<Statement<'_>>, lua: &'lua Lua, mut 
 	}
 	let query_name = pop_arg_as::<String>(&mut args, lua)
 		.context("first argument (table name) must be a string")?;
-	let init = LuaBuilder {
+	let init = ResourceToLua {
 		lua, level: 0, query_name: &query_name,
 		parent_table: Some(lua.create_table()?),
 		parent_id: Some(args.pop_front().unwrap().to_sql_value()?),

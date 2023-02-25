@@ -367,7 +367,10 @@ for k, v in pairs(x) do
 end
 print("---- done")
 for k, v in pairs(x.abilities) do
-	print("abilities", k, v)
+	print("abilities", k, v, v.use_icon)
+	for k, v in pairs(v.effects) do
+		print("", "effects", k, v, v.opcode)
+	end
 end
 -- foo = albruin:clone({"blah", weight=3})
 -- foo:save()
