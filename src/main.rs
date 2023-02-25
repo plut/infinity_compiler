@@ -2403,7 +2403,7 @@ use std::collections::HashMap;
 use crate::prelude::*;
 use crate::trees::{ALL_SCHEMAS,ByName,Recurse,RecurseState,RecurseItr};
 use crate::resources::{RootForest};
-use crate::schemas::{Schema};
+use crate::schemas::{Field,Schema};
 use crate::sql_rows::{AsParams};
 /// Small simplification for frequent use in callbacks.
 macro_rules! fail {
@@ -2830,6 +2830,7 @@ impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
 		})?)
 	}
 }
+
 /// A struct implementing the construction of a full resource (as a Lua
 /// table-of-tables) from the database.
 #[derive(Debug)]
@@ -2911,6 +2912,83 @@ fn read_rec<'lua>(branches: &mut RootForest<Statement<'_>>, lua: &'lua Lua, mut 
 	}
 	Ok(Value::Nil)
 }
+
+/// A structure encapsulating all the statements needed to update a
+/// resource in database from a Lua table.
+#[derive(Debug)]
+struct SaveResourceRow<'s> {
+	/// `select count(1) from $table where id=?`
+	exists: Statement<'s>,
+	/// `update $table set $field=? where id=?`
+	update: HashMap<&'s str, Statement<'s>>,
+	/// `insert into $dable (id, ...) values (?,...)`
+	insert: Statement<'s>,
+}
+impl<'s> SaveResourceRow<'s> {
+	fn new(db: &'s impl DbInterface, schema: &Schema)->Result<Self> {
+		let exists = db.prepare(format!(r#"select count(1) from "{schema}" where id=?"#))?;
+		let update = HashMap::new();
+		let insert = String::from(r#"insert into "{schema}" ("#);
+		let mut itr = schema.pos_payload();
+		let l = itr.len();
+		for (i, Field { fname, .. }) in itr.enumerate() {
+			update.insert(*fname, db.prepare(format!(r#"update "{schema}" set {fname}=?2 where "id"=?1"#))?);
+			if i > 0 { insert.push(',') }
+			write!(&mut insert, "{fname}");
+		}
+		write!(&mut insert, ") values (");
+		for i in 0..l {
+			if i > 0 { insert.push(',') }
+			insert.push('?');
+		}
+		insert.push(')');
+		Ok(Self { exists, update,
+			insert: db.prepare(insert)?,
+		})
+	}
+	fn row_exists(&mut self, id: impl ToSql)->Result<bool> {
+		let mut rows = self.exists.query((id,))?;
+		if let Some(row) = rows.next()? {
+			let c: usize = row.get(0)?;
+			return Ok(c > 0)
+		}
+		Ok(false)
+	}
+	fn save(&mut self, source: &mlua::Table<'_>)->Result<()> {
+		todo!()
+	}
+}
+
+#[derive(Debug)]
+struct SaveResource<'lua,'s> {
+	lua: &'lua Lua,
+	parent_table: Option<mlua::Table<'lua>>,
+	parent_id: Option<rusqlite::types::Value>,
+	query_name: &'s str,
+	level: usize,
+}
+
+impl RecurseState<Statement<'_>> for SaveResource<'_,'_> {
+	fn exec(&self, stmt: &mut Statement<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+		let Self { lua, query_name, .. } = self;
+		if self.level == 0 && name != self.query_name {
+			return Ok(())
+		}
+		let table = match self.parent_table.as_ref() {
+			None => return Ok(()),
+			Some(t) => t,
+		};
+		let id = match self.parent_id.as_ref() {
+			None => return Ok(()),
+			Some(x) => x
+		};
+		let list = table.get::<_,mlua::Table<'_>>(name)?;
+		for elt in list.sequence_values::<mlua::Table<'_>>() {
+		}
+		todo!()
+	}
+}
+
 /// A collection of all the prepared SQL statements used for implementing
 /// the Lua API.
 ///
