@@ -6,7 +6,7 @@
 use crate::prelude::*;
 use crate::pack::{Pack,PackAll};
 use crate::gamefiles::{Restype};
-use crate::resources::{ResourceIO};
+use crate::trees::{ResourceIO};
 use macros::{ResourceTree};
 
 /// An effect inside a .itm file (either global or in an ability).

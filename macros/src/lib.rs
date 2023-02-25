@@ -520,14 +520,14 @@ impl ToTokens for DeriveResourceTree {
 			/// A `Node` impl. derived by `derive(ResourceTree)`.
 			#[derive(Debug)]
 			pub struct #forestname<X: Debug> {
-				#(pub #field: crate::resources::Tree<#subforest::<X>>,)*
+				#(pub #field: crate::trees::Tree<#subforest::<X>>,)*
 				_marker: PhantomData<X>
 			}
 			/// Runtime search in the tree.
 			/// this would be a bit hard to do with `recurse` — the lifetimes are
 			/// a mess, and we want to interrupt search as soon as we find *and*
 			/// cut branches with a non-matching name:
-			impl<X: Debug> crate::resources::ByName for #forestname<X> {
+			impl<X: Debug> crate::trees::ByName for #forestname<X> {
 				type In = X;
 				fn by_name1<'a>(&'a self, s: &str)->Option<&'a X> {
 					#(if let Some(tail) = s.strip_prefix(stringify!(#field)) {
@@ -543,7 +543,7 @@ impl ToTokens for DeriveResourceTree {
 					None
 				}
 			}
-			impl<X: Debug, Y:Debug> crate::resources::Recurse<Y> for #forestname<X> {
+			impl<X: Debug, Y:Debug> crate::trees::Recurse<Y> for #forestname<X> {
 				type To = #forestname<Y>;
 				fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 					->Result<Self::To,E>
@@ -573,18 +573,18 @@ impl ToTokens for DeriveResourceTree {
 					})
 				}
 			}
-			impl<'s, T:Debug, S: crate::resources::RecurseState<T>> crate::resources::RecurseItr<T,S> for #forestname<T> {
+			impl<'s, T:Debug, S: crate::trees::RecurseState<T>> crate::trees::RecurseItr<T,S> for #forestname<T> {
 				fn recurse_itr_mut(&mut self, state: &S, _name: &str)->Result<()> {
 					#(self.#field.recurse_itr_mut(state, stringify!(#field))?;)*
 					Ok(())
 				}
 			}
-			impl crate::resources::ResourceTree for #ident {
-				type FieldsTree = crate::resources::Tree<#forestname<crate::schemas::Fields>>;
+			impl crate::trees::ResourceTree for #ident {
+				type FieldsTree = crate::trees::Tree<#forestname<crate::schemas::Fields>>;
 				const FIELDS_TREE: Self::FieldsTree = Self::FieldsTree {
 					content: <Self as crate::sql_rows::SqlRow>::FIELDS,
 					branches: #forestname {
-					#(#field: <#ty as crate::resources::ResourceTree>::FIELDS_TREE,)*
+					#(#field: <#ty as crate::trees::ResourceTree>::FIELDS_TREE,)*
 						_marker: PhantomData
 					}
 				};

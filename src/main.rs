@@ -1561,7 +1561,7 @@ impl<K:FromSqlMulti, R:SqlRow> Iterator for SelectRows<'_,K,R> {
 }
 
 } // mod sql_rows
-pub mod resources {
+pub mod trees {
 //! Infrastructure for recursive, tree-like resources and subresources.
 //!
 //! Definitions for specific resources go to the `restypes` mod.
@@ -2075,7 +2075,7 @@ pub mod database {
 use crate::prelude::*;
 use crate::restypes::*;
 use crate::gamefiles::GameIndex;
-use crate::resources::{ALL_SCHEMAS,ResourceIO,Recurse};
+use crate::trees::{ALL_SCHEMAS,ResourceIO,Recurse};
 use crate::schemas::{Schema};
 
 /// A trivial wrapper on [`rusqlite::Connection`];
@@ -2401,7 +2401,7 @@ use rusqlite::{ToSql, types::ToSqlOutput};
 use std::collections::HashMap;
 
 use crate::prelude::*;
-use crate::resources::{ALL_SCHEMAS,ByName,Recurse,RecurseState,RecurseItr};
+use crate::trees::{ALL_SCHEMAS,ByName,Recurse,RecurseState,RecurseItr};
 use crate::restypes::{RootForest};
 use crate::schemas::{Schema};
 use crate::sql_rows::{AsParams};
@@ -3052,7 +3052,7 @@ use clap::Parser;
 
 use gamefiles::{GameIndex};
 use toolbox::{Progress};
-use crate::resources::{ALL_SCHEMAS,ByName,Recurse};
+use crate::trees::{ALL_SCHEMAS,ByName,Recurse};
 
 fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 
@@ -3063,7 +3063,7 @@ fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 /// first.
 fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	use crate::restypes::*;
-	use crate::resources::ResourceIO;
+	use crate::trees::ResourceIO;
 	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
 	gamestrings::save(db, game)?;
 	pb.inc(1);
@@ -3192,7 +3192,7 @@ use arguments::*;
 
 
 fn main() -> Result<()> {
-// 	use crate::resources::{ALL_SCHEMAS,ResourceTree};
+// 	use crate::trees::{ALL_SCHEMAS,ResourceTree};
 // 	println!("{:?}", *ALL_SCHEMAS);
 // 	if 1 > 0 { return Ok(nothing) }
 	let mut options = RuntimeOptions::parse();
