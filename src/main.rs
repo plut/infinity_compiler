@@ -2923,9 +2923,15 @@ struct SaveResourceRow<'s> {
 	update: HashMap<&'s str, Statement<'s>>,
 	/// `insert into $dable (id, ...) values (?,...)`
 	insert: Statement<'s>,
+	schema: &'s Schema,
 }
 impl<'s> SaveResourceRow<'s> {
-	fn new(db: &'s impl DbInterface, schema: &Schema)->Result<Self> {
+	fn new(db: &'s impl DbInterface, schema: &'s Schema)->Result<Self> {
+		// TODO: distinction top/sub resource:
+		// for top resource: insert id
+		// for subresource: insert parent
+		// 
+		// cf. what is done for insert from game files
 		let exists = db.prepare(format!(r#"select count(1) from "{schema}" where id=?"#))?;
 		let mut update = HashMap::new();
 		let mut insert = String::from(r#"insert into "{schema}" ("#);
@@ -2942,7 +2948,7 @@ impl<'s> SaveResourceRow<'s> {
 			insert.push('?');
 		}
 		insert.push(')');
-		Ok(Self { exists, update,
+		Ok(Self { exists, update, schema,
 			insert: db.prepare(insert)?,
 		})
 	}
@@ -2954,8 +2960,43 @@ impl<'s> SaveResourceRow<'s> {
 		}
 		Ok(false)
 	}
-	fn save(&mut self, source: &mlua::Table<'_>)->Result<()> {
-		todo!()
+	fn update_values(&mut self, source: &mlua::Table<'_>)->Result<()> {
+		for Field { fname, .. } in self.schema.pos_payload() {
+			// the update does nothing if the value does not change
+			// (our sql triggers take care of this)
+			let mut stmt = self.update.get_mut(fname).unwrap();
+			let val: Value<'_> = source.get(*fname)?;
+			stmt.execute((LuaValueRef(&val),))?;
+		}
+		Ok(())
+	}
+	fn insert_new(&mut self, source: &mlua::Table<'_>)->Result<rusqlite::types::Value> {
+		// TODO: this is where we make a distinction top/sub:
+		// top:
+		//  - insert id
+		//  - return existing id field
+		// sub:
+		//  - insert parent (not id)
+		//  - return id from last_insert_rowid()
+		// TODO: implement this distinction in `new`
+		for (i, Field { fname, .. }) in self.schema.pos_payload().enumerate() {
+			let val: Value<'_> = source.get(*fname)?;
+			self.insert.raw_bind_parameter(i+1, LuaValueRef(&val))?;
+		}
+		Ok(())
+	}
+	fn save(&mut self, source: &mlua::Table<'_>, parent_id: &Option<rusqlite::types::Value>)->Result<rusqlite::types::Value> {
+		let id: Value<'_> = source.get("id")?;
+		let found = if let Value::Nil = id { false }
+		else {
+			self.row_exists(LuaValueRef(&id))
+		};
+		if found {
+			self.update_values(source, parent_id)?;
+			Ok(id.to_lua_value())
+		} else {
+			self.insert_new(source, parent_id)
+		}
 	}
 }
 
@@ -2968,8 +3009,8 @@ struct SaveResource<'lua,'s> {
 	level: usize,
 }
 
-impl RecurseState<Statement<'_>> for SaveResource<'_,'_> {
-	fn exec(&self, stmt: &mut Statement<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+impl RecurseState<SaveResourceRow<'_>> for SaveResource<'_,'_> {
+	fn exec(&self, save_row: &mut SaveResourceRow<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		let Self { lua, query_name, .. } = self;
 		if self.level == 0 && name != self.query_name {
 			return Ok(())
@@ -2978,12 +3019,15 @@ impl RecurseState<Statement<'_>> for SaveResource<'_,'_> {
 			None => return Ok(()),
 			Some(t) => t,
 		};
-		let id = match self.parent_id.as_ref() {
-			None => return Ok(()),
-			Some(x) => x
-		};
 		let list = table.get::<_,mlua::Table<'_>>(name)?;
 		for elt in list.sequence_values::<mlua::Table<'_>>() {
+			let row_id = save_row.save(&elt?, &self.parent_id)?;
+			let new_state = Self { lua, query_name,
+				level: Self.level+1,
+				parent_table: Some(elt),
+				parent_id: Some(row_id),
+			};
+			descend(&new_state)?;
 		}
 		todo!()
 	}
