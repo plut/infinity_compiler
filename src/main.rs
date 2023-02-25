@@ -1564,13 +1564,13 @@ impl<K:FromSqlMulti, R:SqlRow> Iterator for SelectRows<'_,K,R> {
 pub mod trees {
 //! Infrastructure for recursive, tree-like resources and subresources.
 //!
-//! Definitions for specific resources go to the `restypes` mod.
+//! Definitions for specific resources go to the `resources` mod.
 use crate::prelude::*;
 use rusqlite::{ToSql,types::{FromSql}};
 use crate::sql_rows::{SqlRow,SelectRows};
 use crate::schemas::{Schema,Fields};
 use crate::gamefiles::Restype;
-use crate::restypes::{RootForest};
+use crate::resources::{RootForest};
 /// A resource type inside the hierarchy of sub-resources in the
 /// database.
 ///
@@ -1809,7 +1809,7 @@ impl SchemaBuildState {
 }
 /// The definition of schemas for all in-game resources.
 pub static ALL_SCHEMAS: Lazy<RootForest<Schema>> = Lazy::new(|| {
-	crate::restypes::Root::FIELDS_TREE.branches.recurse(|fields,name,state| {
+	crate::resources::Root::FIELDS_TREE.branches.recurse(|fields,name,state| {
 		let new_state = SchemaBuildState::descend(state.as_ref(), name);
 		let schema = new_state.schema(fields);
 		infallible((Some(new_state), schema))
@@ -1838,8 +1838,8 @@ impl<T,B: ByName<In=T>+RecurseItr<T,S>, S: RecurseState<T>> RecurseItr<T,S> for 
 
 /// A trait containing resource I/O functions.
 ///
-/// Each top-level resource as defined in `restypes.rs` should implement
-/// this (inside `restypes.rs`).
+/// Each top-level resource as defined in `resources.rs` should implement
+/// this (inside `resources.rs`).
 pub trait ResourceIO: ResourceTree {
 	/// The file extension attached to this resource (e.g. `".itm"`).
 	const EXTENSION: &'static str;
@@ -2073,7 +2073,7 @@ pub fn save(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 pub mod database {
 //! Access to the SQL side of the database.
 use crate::prelude::*;
-use crate::restypes::*;
+use crate::resources::*;
 use crate::gamefiles::GameIndex;
 use crate::trees::{ALL_SCHEMAS,ResourceIO,Recurse};
 use crate::schemas::{Schema};
@@ -2402,7 +2402,7 @@ use std::collections::HashMap;
 
 use crate::prelude::*;
 use crate::trees::{ALL_SCHEMAS,ByName,Recurse,RecurseState,RecurseItr};
-use crate::restypes::{RootForest};
+use crate::resources::{RootForest};
 use crate::schemas::{Schema};
 use crate::sql_rows::{AsParams};
 /// Small simplification for frequent use in callbacks.
@@ -3045,7 +3045,7 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 }
 } // mod lua_api
 
-pub(crate) mod restypes;
+pub(crate) mod resources;
 
 use crate::prelude::*;
 use clap::Parser;
@@ -3062,7 +3062,7 @@ fn type_of<T>(_:&T)->&'static str { std::any::type_name::<T>() }
 /// a chdir to the appropriate override directory needs to have been done
 /// first.
 fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
-	use crate::restypes::*;
+	use crate::resources::*;
 	use crate::trees::ResourceIO;
 	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
 	gamestrings::save(db, game)?;
