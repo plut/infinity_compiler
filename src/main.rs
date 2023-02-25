@@ -2927,16 +2927,16 @@ struct SaveResourceRow<'s> {
 impl<'s> SaveResourceRow<'s> {
 	fn new(db: &'s impl DbInterface, schema: &Schema)->Result<Self> {
 		let exists = db.prepare(format!(r#"select count(1) from "{schema}" where id=?"#))?;
-		let update = HashMap::new();
-		let insert = String::from(r#"insert into "{schema}" ("#);
-		let mut itr = schema.pos_payload();
+		let mut update = HashMap::new();
+		let mut insert = String::from(r#"insert into "{schema}" ("#);
+		let itr = schema.pos_payload();
 		let l = itr.len();
 		for (i, Field { fname, .. }) in itr.enumerate() {
 			update.insert(*fname, db.prepare(format!(r#"update "{schema}" set {fname}=?2 where "id"=?1"#))?);
 			if i > 0 { insert.push(',') }
-			write!(&mut insert, "{fname}");
+			write!(&mut insert, "{fname}")?;
 		}
-		write!(&mut insert, ") values (");
+		write!(&mut insert, ") values (")?;
 		for i in 0..l {
 			if i > 0 { insert.push(',') }
 			insert.push('?');
