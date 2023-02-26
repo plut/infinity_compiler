@@ -1089,19 +1089,6 @@ impl<H: Header,P: Display> Display for FieldsIterator<H,P> {
 		Ok(())
 	}
 }
-// /// A helper type to insert new."fields" inside a query.
-// #[derive(Debug)]
-// pub struct FieldsWithPrefix<T: Display>(FieldsIterator, T);
-// impl<T: Display> Display for FieldsWithPrefix<T> {
-// 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-// 		let mut isfirst = true;
-// 		for element in self.0 {
-// 			if isfirst { isfirst = false; } else { write!(f, ",")?; }
-// 			write!(f, r#" {prefix}{element}"#, prefix = self.1)?;
-// 		}
-// 		Ok(())
-// 	}
-// }
 
 /// The full database description of a game resource.
 ///
@@ -1129,7 +1116,7 @@ impl Schema {
 	pub fn is_subresource(&self)->bool {
 		self.parent_root.is_some()
 	}
-	fn with_header<H: Header>(&self, header: H)->FieldsIterator<H,NullDisplay> {
+	pub fn with_header<H: Header>(&self, header: H)->FieldsIterator<H,NullDisplay> {
 		self.fields.with_header(header)
 	}
 	/// Returns an iterator over the payload fields (only).
@@ -2967,6 +2954,11 @@ struct PushRow<'s,T: DbInterface> {
 	schema: &'s Schema,
 }
 impl<'s, T: DbInterface> PushRow<'s,T> {
+	fn updateable(schema: &Schema)->crate::schemas::FieldsIterator<&'static [&'static str],NullDisplay> {
+		let hdr: &[&str] = if schema.is_subresource() { &["parent", "position"] }
+		else { &["id"] };
+		schema.with_header(hdr)
+	}
 	fn new(db: &'s T, schema: &'s Schema)->Result<Self> {
 		// TODO: distinction top/sub resource:
 		// for top resource: insert id
@@ -2975,35 +2967,16 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		// cf. what is done for insert from game files
 		let exists = db.prepare(format!(r#"select count(1) from "{schema}" where id=?"#))?;
 		let mut update = HashMap::new();
-		let mut insert = String::from(r#"insert into "{schema}" ("#);
-		// This causes the addition of an additional question mark (see below)
-		if schema.is_subresource() {
-			insert.push_str(r#""parent""#)
-		} else {
-			insert.push_str(r#""id""#)
-		}
-		let itr = schema.pos_payload();
-		let l = itr.len();
-		for Field { fname, .. } in itr {
+		let insert = db.prepare(Self::updateable(schema).insert_sql(schema))?;
+// 		let insert = db.prepare(schema.insert_sql(header(schema), ""))?;
+		for Field { fname, .. } in Self::updateable(schema) {
 			update.insert(fname, db.prepare(format!(r#"update "{schema}" set {fname}=?2 where "id"=?1"#))?);
-			write!(&mut insert, ",{fname}")?;
 		}
-		// The extra parameter stands for "parent" or "id" (see above)
-		write!(&mut insert, ") values (?")?;
-		for _ in 0..l {
-			insert.push_str(",?");
-		}
-		insert.push(')');
-		Ok(Self { db, exists, update, schema,
-			insert: db.prepare(insert)?,
-		})
+		Ok(Self { db, exists, update, schema, insert })
 	}
 	fn row_exists(&mut self, id: &Value<'_>)->Result<bool> {
-		if let Value::Nil = id {
-			return Ok(false)
-		}
-		let id_sql = LuaValueRef(id);
-		let mut rows = self.exists.query((id_sql,))?;
+		if let Value::Nil = id { return Ok(false) }
+		let mut rows = self.exists.query((LuaValueRef(id),))?;
 		if let Some(row) = rows.next()? {
 			let c: usize = row.get(0)?;
 			return Ok(c > 0)
@@ -3012,11 +2985,10 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 	}
 	fn update_values(&mut self, source: &mlua::Table<'_>, parent: &Value<'_>, id: &Value<'_>)->Result<()> {
 		// TODO: if this is a subresource then update parent if needed
-		for Field { fname, .. } in self.schema.pos_payload() {
+		for (fname, stmt) in self.update.iter_mut() {
 			// the update does nothing if the value does not change
 			// (our sql triggers take care of this)
-			let stmt = self.update.get_mut(fname).unwrap();
-			let val: Value<'_> = source.get(fname)?;
+			let val: Value<'_> = source.get(*fname)?;
 			stmt.execute((LuaValueRef(id), LuaValueRef(&val),))?;
 		}
 		Ok(())
@@ -3030,7 +3002,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		//  - insert parent (not id)
 		//  - return id from last_insert_rowid()
 		// TODO: implement this distinction in `new`
-		for (i, Field { fname, .. }) in self.schema.pos_payload().enumerate() {
+		for (i, Field { fname, .. }) in Self::updateable(self.schema).enumerate() {
 			let val: Value<'_> = source.get(fname)?;
 			self.insert.raw_bind_parameter(i+1, LuaValueRef(&val))?;
 		}
