@@ -1418,9 +1418,17 @@ impl<A: ToSql> CountedParams for (A,) {
 		s.raw_bind_parameter(offset+1, self.0)
 	}
 }
+impl<A: ToSql, B: ToSql> CountedParams for (A,B) {
+	const WIDTH: usize = 2;
+	fn bind_at(self, s: &mut Statement<'_>, offset: usize)->rusqlite::Result<()> {
+		s.raw_bind_parameter(offset+1, self.0)?;
+		s.raw_bind_parameter(offset+2, self.1)?;
+		Ok(())
+	}
+}
 #[ext]
 pub impl Statement<'_> {
-	fn bind_execute<P: CountedParams,S: SqlRow>(&mut self, header: P, data: S)->Result<usize> {
+	fn bind_execute<P: CountedParams,S: SqlRow>(&mut self, header: P, data: &S)->Result<usize> {
 		S::check_parameter_count(self, P::WIDTH)?;
 		header.bind_at(self, 0)?;
 		data.bind_at(self, P::WIDTH)?;
@@ -1479,28 +1487,8 @@ pub trait SqlRow: Sized {
 	fn check_parameter_count(s: &mut Statement<'_>, extra: usize)->Result<()> {
 		let found = Self::FIELDS.len() + extra;
 		let expected = s.parameter_count();
-		if found == expected {
-			Ok(())
-		} else {
-			Err(rusqlite::Error::InvalidParameterCount(found, expected).into())
-		}
-	}
-	/// Binds this object with a header of a single parameter, and executes
-	/// the statement.
-	fn bind_execute1(&self, stmt: &mut Statement<'_>, ctx: impl ToSql)->Result<usize> {
-		Self::check_parameter_count(stmt, 1)?;
-		stmt.raw_bind_parameter(1, ctx)?;
-		self.bind_at(stmt, 1)?;
-		stmt.raw_execute().context("raw_execute")
-	}
-	/// Binds this object with a header of two parameters, and executes the
-	/// statement.
-	fn bind_execute2(&self, stmt: &mut Statement<'_>, c1: impl ToSql, c2: impl ToSql)->Result<usize> {
-		Self::check_parameter_count(stmt, 2)?;
-		stmt.raw_bind_parameter(1, c1)?;
-		stmt.raw_bind_parameter(2, c2)?;
-		self.bind_at(stmt, 2)?;
-		stmt.raw_execute().context("raw_execute")
+		if found == expected { return Ok(()) }
+		Err(rusqlite::Error::InvalidParameterCount(found, expected).into())
 	}
 	/// Returns a SQL select statement restricted to type `(K, Self)`.
 	fn select_statement<'db,K:FromSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: impl Header, condition: impl Display)->Result<SelectStatement<'db,K,Self>> {
@@ -1611,7 +1599,7 @@ pub mod trees {
 //! Definitions for specific resources go to the `resources` mod.
 use crate::prelude::*;
 use rusqlite::{ToSql,types::{FromSql}};
-use crate::sql_rows::{SqlRow,SelectRows};
+use crate::sql_rows::{SqlRow,SelectRows,Statement_Ext};
 use crate::schemas::{Schema,Fields,Field};
 use crate::gamefiles::Restype;
 use crate::resources::{RootForest};
@@ -1643,7 +1631,7 @@ pub trait ResourceTree: SqlRow {
 	/// This is the entry point called when populating the database;
 	/// this function is not called recursively.
 	fn insert_as_topresource(&self, db: &Connection, tree: &mut Tree<Self::StatementForest<'_>>, resref: impl ToSql+Copy+Display)->Result<usize> {
-		let n = self.bind_execute1(&mut tree.content, resref)
+		let n = tree.content.bind_execute((resref,), self)
 			.with_context(||format!("insert topresource: {} {}", std::any::type_name::<Self>(), resref))?;
 		if n == 0 {
 			warn!("skipped inserting {resref}");
@@ -1661,7 +1649,7 @@ pub trait ResourceTree: SqlRow {
 	/// This function is mutually recursive with
 	/// `Self::insert_subresources` (derived from macro).
 	fn insert_as_subresource(&self, db: &Connection, tree: &mut Tree<Self::StatementForest<'_>>, parent: impl ToSql, position: usize)->Result<()> {
-		self.bind_execute2(&mut tree.content, parent, position)
+		tree.content.bind_execute((parent, position), self)
 			.with_context(|| format!("insert_as_subresource: {}", std::any::type_name::<Self>()))?;
 		let primary = db.last_insert_rowid();
 		self.insert_subresources(db, &mut tree.branches, primary)?;
@@ -2051,7 +2039,7 @@ fn load_language(db: &impl DbInterface, langname: &str, path: &(impl AsRef<Path>
 	for (strref, x) in itr.enumerate() {
 		let s = x?;
 		pb.inc(1);
-		stmt.bind_execute((strref,), s)?;
+		stmt.bind_execute((strref,), &s)?;
 		n_strings+= 1;
 	}
 	info!("loaded {n_strings} strings for language \"{langname}\"");
