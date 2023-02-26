@@ -1382,15 +1382,13 @@ use rusqlite::{ToSql};
 use rusqlite::types::{FromSql,ValueRef};
 use crate::schemas::{FieldType,Field,Header};
 
-/// An extension trait allowing to dump a row from SQL.
-pub trait RowExt {
+#[ext]
+pub impl Row<'_> {
+	/// Dumps all values found in a single row to stdout.
 	fn dump(&self) {
 		println!("{}", self.dump_to_string());
 	}
-	fn dump_to_string(&self)->String;
-}
-impl RowExt for Row<'_> {
-	/// Dumps all values found in a single row to stdout.
+	/// Dumps all values found in a single row to a string.
 	fn dump_to_string(&self)->String {
 		let mut r = String::new();
 		for (i, c) in self.as_ref().column_names().iter().enumerate() {
@@ -3136,7 +3134,7 @@ impl<'a> LuaStatements<'a> {
 /// All code with a higher level is written in lua and loaded from the
 /// "init.lua" file.
 pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
-	use crate::sql_rows::RowExt;
+	use crate::sql_rows::Row_Ext;
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
 	let mut statements = LuaStatements::new(&db)?;
