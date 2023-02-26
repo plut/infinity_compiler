@@ -476,8 +476,7 @@ pub fn derive_sql_row(tokens: TokenStream)->TokenStream {
 	}
 	let code = quote! {
 		impl crate::sql_rows::SqlRow for #ident {
-			const FIELDS: crate::schemas::Fields =
-				crate::schemas::Fields(&[ #fields_def ]);
+			const FIELDS: &'static [crate::schemas::Field] = &[ #fields_def ];
 			fn bind_at(&self, s: &mut Statement<'_>, offset: usize)->Result<()> {
 				#bind_at
 				Ok(())
@@ -580,7 +579,7 @@ impl ToTokens for DeriveResourceTree {
 				}
 			}
 			impl crate::trees::ResourceTree for #ident {
-				type FieldsTree = crate::trees::Tree<#forestname<crate::schemas::Fields>>;
+				type FieldsTree = crate::trees::Tree<#forestname<&'static [crate::schemas::Field]>>;
 				const FIELDS_TREE: Self::FieldsTree = Self::FieldsTree {
 					content: <Self as crate::sql_rows::SqlRow>::FIELDS,
 					branches: #forestname {

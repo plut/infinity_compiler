@@ -916,8 +916,8 @@ pub enum FieldType {
 	/// A string reference: either an integer or a string translated using
 	/// `strref_dict`.
 	Strref,
-	/// The `parent` field may be either integer or text.
-	Parent,
+	/// The default field. Do not use this when creating table.
+	Undef,
 }
 impl FieldType {
 	/// Describes this type to SQLite.
@@ -925,7 +925,7 @@ impl FieldType {
 		match self {
 			Self::Integer | Self::Strref => r#"integer default 0"#,
 			Self::Text | Self::Resref => r#"text default """#,
-			_ => "",
+			_ => panic!("do not use this when creating table")
 		}
 	}
 	/// Describes this type as a string.
@@ -935,7 +935,7 @@ impl FieldType {
 			Self::Text => "text",
 			Self::Resref => "resref",
 			Self::Strref => "strref",
-			Self::Parent => "parent",
+			_ => "default",
 		}
 	}
 }
@@ -956,12 +956,15 @@ impl Field {
 		Self { fname: "position", ftype: FieldType::Integer, create: "" },
 		Self { fname: "id", ftype: FieldType::Integer, create: "primary key" },
 		Self { fname: "id", ftype: FieldType::Text, create: "primary key" },
-		Self { fname: "parent", ftype: FieldType::Parent, create: "" },
+		Self { fname: "parent", ftype: FieldType::Undef, create: "" },
 	];
-	pub const POSITION: isize = 1 << 0;
-	pub const SUB_ID: isize = 1 << 1;
-	pub const TOP_ID: isize = 1 << 2;
-	pub const PARENT: isize = 1 << 3;
+	pub const POSITION: usize = 1 << 0;
+	pub const SUB_ID: usize = 1 << 1;
+	pub const TOP_ID: usize = 1 << 2;
+	pub const PARENT: usize = 1 << 3;
+	fn new(fname: &'static str)->Self {
+		Self { fname, ftype: FieldType::Undef, create: "" }
+	}
 // 	/// The `"position"` field used for sorting subresources.
 // 	const POSITION: Self = Self { fname: "position", ftype: FieldType::Integer, create: "" };
 }
@@ -978,17 +981,33 @@ impl Display for Field {
 #[derive(Debug,Clone,Copy)]
 pub struct Fields (pub &'static [Field]);
 impl Fields {
-	pub fn iter(&self, flag: isize)->FieldsIterator {
-		FieldsIterator { fields: self.0, state: -flag }
+	pub fn with_header<H: Header>(&self, header: H)->FieldsIterator<H,NullDisplay> {
+		FieldsIterator { state: 0, fields: self.0, header, prefix: NullDisplay() }
 	}
 }
-/// A marker describing which fields are iterated.
-#[derive(Debug,Clone,Copy)]
-pub enum FieldsItr {
-	/// only payload fields
-	Payload,
-	/// (position) + payload
-	Position,
+
+pub trait Header {
+	fn len(&self)->usize;
+	fn get(&self, index: usize)->Field;
+}
+impl Header for &[&'static str] {
+	fn len(&self)->usize { (*self).len() }
+	fn get(&self, i: usize)->Field { Field::new(self[i]) }
+}
+impl Header for () {
+	fn len(&self)->usize { 0 }
+	fn get(&self, _: usize)->Field { unimplemented!() }
+}
+impl Header for &'static str {
+	fn len(&self)->usize { 1 }
+	fn get(&self, i: usize)->Field { Field::new(self) }
+}
+impl Header for (&'static str, &'static str) {
+	fn len(&self)->usize { 2 }
+	fn get(&self, i: usize)->Field {
+		if i == 0 { Field::new(self.0) }
+		else { Field::new(self.1) }
+	}
 }
 /// The iterator for fields
 //
@@ -997,8 +1016,8 @@ pub enum FieldsItr {
 ///
 /// |  when              | top resources      |  subresources      |
 /// |--------------------|--------------------|--------------------|
-/// |base table          |id                  |id,position,parent  |
-/// |main view           |id,id as root       |id,root,parent,pos. |
+/// |create base table   |(payload only)      |(payload only)      |
+/// |main view           |payload only        |pos, payload        |
 /// |save view           |(payload only)      |(payload only)      |
 /// |lua schema          |(payload only)      |(payload only)      |
 /// |lua pull            |id                  |id                  |
@@ -1009,73 +1028,80 @@ pub enum FieldsItr {
 /// - save view: (parent, position) + payload
 /// - create strref: only payload
 /// - lua schema: only payload
-#[derive(Debug,Clone,Copy)]
-pub struct FieldsIterator {
-	// first try: -state
-	// i.e. -1 for position, -2 for sub_id, -3 for position|sub_id
-	// detect: f = (-x).trailing_zeros
-	// shift: x+= (1<<f)
-	state: isize,
+#[derive(Debug)]
+pub struct FieldsIterator<H: Header,P> {
+	state: usize,
 	fields: &'static [Field],
+	header: H,
+	prefix: P,
 }
-impl FieldsIterator {
-	fn with_prefix<T: Display>(self, prefix: T)->FieldsWithPrefix<T> {
-		FieldsWithPrefix(self, prefix)
-	}
-}
-impl Iterator for FieldsIterator {
-	type Item = &'static Field;
+impl<H: Header,P> Iterator for FieldsIterator<H,P> {
+	type Item = Field;
 	fn next(&mut self)->Option<Self::Item> {
-		if self.state < 0 {
-			let f = (-self.state).trailing_zeros();
-			self.state+= 1<<f;
-			Some(&Field::BASE[f as usize])
-		} else if self.state as usize >= self.fields.len() {
-			None
-		} else {
-			let r = &self.fields[self.state as usize];
+		let h = self.header.len();
+		if self.state < h {
+			let r = self.header.get(self.state);
 			self.state+= 1;
 			Some(r)
+		} else if self.state < h + self.fields.len() {
+			let r = self.fields[self.state - h];
+			self.state+= 1;
+			Some(r)
+		} else {
+			None
 		}
 	}
-}
-impl ExactSizeIterator for FieldsIterator {
-	fn len(&self)->usize {
-		assert!(self.state <= 0);
-		(-self.state).count_ones() as usize + self.fields.len()
-	}
-// 	pub fn is_empty(&self)->bool { self.len() == 0 }
-}
-impl Display for FieldsIterator {
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		Display::fmt(&self.with_prefix(NullDisplay()), f)
+	fn size_hint(&self)->(usize, Option<usize>) {
+		let h = self.header.len();
+		let n = self.fields.len() + h - self.state;
+		(n, Some(n))
 	}
 }
-impl FieldsIterator {
+impl<H: Header,P> ExactSizeIterator for FieldsIterator<H,P> { }
+impl<H: Header,P: Display> FieldsIterator<H,P> {
+	/// Changes prefix.
+	pub fn with_prefix<T>(self, prefix: T)->FieldsIterator<H,T> {
+		FieldsIterator { prefix, state: self.state, fields: self.fields,
+			header: self.header }
+	}
 	/// Returns the SQL insert statement for these columns, as a String.
-	pub fn insert_sql(self, name: impl Display, more: impl Display, more_n: usize)->String {
+	pub fn insert_sql(self, name: impl Display)->String {
 		let n = self.len();
-		let mut sql = format!("insert into \"{name}\" ({more}{self}) values(?");
-		for _ in 1..n + more_n  {
+		let mut sql = format!(r#"insert into "{name}" ({self}) values (?"#);
+		for _ in 1..n + self.len()  {
 			sql.push_str(",?");
 		}
 		sql.push(')');
 		sql
 	}
 }
-/// A helper type to insert new."fields" inside a query.
-#[derive(Debug)]
-pub struct FieldsWithPrefix<T: Display>(FieldsIterator, T);
-impl<T: Display> Display for FieldsWithPrefix<T> {
+impl<H: Header,P: Display> Display for FieldsIterator<H,P> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		let mut isfirst = true;
-		for element in self.0 {
-			if isfirst { isfirst = false; } else { write!(f, ",")?; }
-			write!(f, r#" {prefix}{element}"#, prefix = self.1)?;
+		for i in 0..self.header.len() {
+			write!(f, r#""{prefix}{field}", "#,
+				field = self.header.get(i), prefix = self.prefix)?;
+		}
+		write!(f, r#""{prefix}{field}""#,
+			field = self.fields[0], prefix = self.prefix)?;
+		for field in &self.fields[1..] {
+			write!(f, r#", {prefix}{field}"#, prefix = self.prefix)?;
 		}
 		Ok(())
 	}
 }
+// /// A helper type to insert new."fields" inside a query.
+// #[derive(Debug)]
+// pub struct FieldsWithPrefix<T: Display>(FieldsIterator, T);
+// impl<T: Display> Display for FieldsWithPrefix<T> {
+// 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+// 		let mut isfirst = true;
+// 		for element in self.0 {
+// 			if isfirst { isfirst = false; } else { write!(f, ",")?; }
+// 			write!(f, r#" {prefix}{element}"#, prefix = self.1)?;
+// 		}
+// 		Ok(())
+// 	}
+// }
 
 /// The full database description of a game resource.
 ///
@@ -1103,19 +1129,18 @@ impl Schema {
 	pub fn is_subresource(&self)->bool {
 		self.parent_root.is_some()
 	}
-	fn iter(&self, mut flag: isize)->FieldsIterator {
-		flag&= if self.is_subresource() {
-			Field::POSITION | Field::SUB_ID | Field::PARENT
-		} else {
-			Field::TOP_ID
-		};
-		self.fields.iter(flag)
+	fn with_header<H: Header>(&self, header: H)->FieldsIterator<H,NullDisplay> {
+		self.fields.with_header(header)
 	}
 	/// Returns an iterator over the payload fields (only).
-	pub fn payload(&self)->FieldsIterator { self.iter(0) }
+	pub fn payload(&self)->FieldsIterator<(),NullDisplay> {
+		self.with_header(())
+	}
 	/// Returns an iterator over the `position` field (if subresource) then
 	/// the payload fields.
-	pub fn pos_payload(&self)->FieldsIterator { self.iter(Field::POSITION) }
+	pub fn pos_payload(&self)->FieldsIterator<(),NullDisplay> {
+		unimplemented!()
+	}
 	/// Displays a full description of the schema on stdout.
 	pub fn describe(&self) {
 		println!("name={self}\nheader = {:?}", self.parent_root);
@@ -1298,13 +1323,13 @@ end"#))?;
 	///
 	/// This is used for both initial populating of the database from game
 	/// files and for `simod.insert`.
-	pub fn insert_sql(&self, flag: isize, prefix: impl Display)->String {
-		self.iter(flag).insert_sql(lazy_format!("{prefix}{self}"), "", 0)
+	pub fn insert_sql(&self, h: impl Header, prefix: impl Display)->String {
+		self.with_header(h).insert_sql(lazy_format!("{prefix}{self}"))
 	}
 	/// Helper function for generating `new_strings` view.
 	pub fn append_new_strings_schema(&self, w: &mut impl fmt::Write, is_first: &mut bool) {
 		for Field { fname, ftype, .. } in self.payload() {
-			if *ftype != FieldType::Strref { continue }
+			if ftype != FieldType::Strref { continue }
 			if *is_first { *is_first = false; }
 			else { uwrite!(w, "\n\tunion "); }
 			// the '1' column is a placeholder for flags:
@@ -1320,7 +1345,7 @@ end"#))?;
 				Some((_parent,root)) => *root,
 				None  => &self.name
 			};
-			if *ftype != FieldType::Strref { continue }
+			if ftype != FieldType::Strref { continue }
 			if is_first_field {
 				uwrite!(w, r#"
 	insert into "dirty_{root}" select "root" from "{self}" where "#);
@@ -1352,7 +1377,7 @@ pub mod sql_rows {
 use crate::prelude::*;
 use rusqlite::{ToSql};
 use rusqlite::types::{FromSql,ValueRef};
-use crate::schemas::{FieldType,Fields};
+use crate::schemas::{FieldType,Field,Header};
 
 /// An extension trait allowing to dump a row from SQL.
 pub trait RowExt {
@@ -1417,14 +1442,18 @@ pub trait AsParams {
 /// Implemented by the derive macro.
 pub trait SqlRow: Sized {
 	/// The description of the columns that this binds to.
-	const FIELDS: Fields;
+	const FIELDS: &'static [Field];
+	/// Returns an iterator over fields with header.
+	fn with_header<H: Header>(header: H)->crate::schemas::FieldsIterator<H,NullDisplay> {
+		crate::schemas::Fields(Self::FIELDS).with_header(header)
+	}
 	/// Binds to columns [offset, ...] of statement.
 	fn bind_at(&self, s: &mut Statement<'_>, offset: usize)->Result<()>;
 	/// Reads from columns [offset, ... ] of row.
 	fn collect_at(s: &Row<'_>, offset: usize)->Result<Self>;
 	/// Checks that the number of columns is good.
 	fn check_parameter_count(s: &mut Statement<'_>, extra: usize)->Result<()> {
-		let found = Self::FIELDS.iter(0).len() + extra;
+		let found = Self::FIELDS.len() + extra;
 		let expected = s.parameter_count();
 		if found == expected {
 			Ok(())
@@ -1451,27 +1480,17 @@ pub trait SqlRow: Sized {
 	}
 	/// Returns a SQL statement restricted to type `(K, Self)` and built
 	/// from matching columns.
-	fn insert_statement<'db,K:ToSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>)->Result<InsertStatement<'db,K,Self>> {
-		let headers = WriteSqlHeaders(hdr);
-		let cols = Self::FIELDS.iter(0);
-		let n = cols.len();
-		let mut sql = format!(r#"insert into "{name}"({headers},{cols}) values (?"#);
-		for i in 1..K::WIDTH + n {
-			if i > 0 { sql.push(',') }
-			sql.push('?')
-		}
-		sql.push(')');
+	fn insert_statement<'db,K:ToSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: impl Header)->Result<InsertStatement<'db,K,Self>> {
+		let sql = Self::with_header(hdr).insert_sql(name);
 		Ok(InsertStatement {
 			statement: db.prepare(&sql)?,
 			_key: PhantomData, _row: PhantomData,
 		})
 	}
 	/// Returns a SQL select statement restricted to type `(K, Self)`.
-	fn select_statement<'db,K:FromSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>, condition: impl Display)->Result<SelectStatement<'db,K,Self>> {
-		let mut sql = String::from("select ");
-		K::write_headers(&mut sql, hdr)?;
-		let cols = Self::FIELDS.iter(0);
-		write!(&mut sql, r#"{cols} from "{name}" {condition}"#)?;
+	fn select_statement<'db,K:FromSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: impl Header, condition: impl Display)->Result<SelectStatement<'db,K,Self>> {
+		let cols = Self::with_header(hdr);
+		let sql = format!(r#"select {cols} from "{name}" {condition}"#);
 		Ok(SelectStatement {
 			statement: db.prepare(&sql)?,
 			_key: PhantomData, _row: PhantomData,
@@ -1611,7 +1630,7 @@ pub mod trees {
 use crate::prelude::*;
 use rusqlite::{ToSql,types::{FromSql}};
 use crate::sql_rows::{SqlRow,SelectRows};
-use crate::schemas::{Schema,Fields};
+use crate::schemas::{Schema,Fields,Field};
 use crate::gamefiles::Restype;
 use crate::resources::{RootForest};
 /// A resource type inside the hierarchy of sub-resources in the
@@ -1843,11 +1862,11 @@ impl SchemaBuildState {
 			}
 		}
 	}
-	fn schema(&self, fields: &Fields)->Schema {
+	fn schema(&self, fields: &'static [Field])->Schema {
 		Schema {
 			level: self.level,
 			parent_root: self.parent_root.clone(),
-			fields: *fields,
+			fields: Fields(fields),
 			name: self.table_name.clone(),
 		}
 	}
@@ -2246,6 +2265,13 @@ from "new_strings"
 	/// The database must have been already created and initialized (with
 	/// empty tables).
 	pub fn load(&mut self, game: &GameIndex)->Result<()> {
+		impl Schema {
+			fn load_sql(&self)->String {
+// 				db.prepare(&schema.insert_sql(
+// 					Field::TOP_ID|Field::PARENT|Field::POSITION, "load_"))
+				String::from("")
+			}
+		}
 		let pb = Progress::new(3, "Fill database"); pb.inc(1);
 		self.transaction(|db| {
 			crate::gamestrings::load_languages(db, game).with_context(||
@@ -2255,8 +2281,7 @@ from "new_strings"
 		debug!("loading game resources");
 		self.transaction(|db| {
 			let mut tables = ALL_SCHEMAS.try_map(|schema|
-				db.prepare(&schema.insert_sql(
-					Field::TOP_ID|Field::PARENT|Field::POSITION, "load_"))
+				db.prepare(schema.load_sql())
 					.with_context(|| format!("insert statement for table '{schema}'")))?;
 			game.for_each(move |restype, handle| {
 				trace!("found resource {}.{:?}", handle.resref, restype);
@@ -2531,7 +2556,7 @@ fn pop_arg_as<'lua, T: FromLua<'lua>>(args: &mut MultiValue<'lua>, lua:&'lua Lua
 	Ok(r)
 }
 impl Schema {
-	fn select_lua_sql(&self)->String {
+	fn pull_sql(&self)->String {
 		match self.parent_root {
 			None =>
 			format!(r#"select "id", {cols} from "{self}" where "id"=?"#, cols = self.payload()),
@@ -2703,7 +2728,7 @@ struct InsertRow<'a> {
 impl<'a> Callback<'a> for InsertRow<'a> {
 	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		let insert = schema.insert_sql(0, "");
+		let insert = schema.insert_sql((), "");
 		// TODO: use a restricted form of insertion where primary is not
 		// inserted
 		let counter = if schema.is_subresource() {
@@ -2991,7 +3016,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		let itr = schema.pos_payload();
 		let l = itr.len();
 		for Field { fname, .. } in itr {
-			update.insert(*fname, db.prepare(format!(r#"update "{schema}" set {fname}=?2 where "id"=?1"#))?);
+			update.insert(fname, db.prepare(format!(r#"update "{schema}" set {fname}=?2 where "id"=?1"#))?);
 			write!(&mut insert, ",{fname}")?;
 		}
 		// The extra parameter stands for "parent" or "id" (see above)
@@ -3022,7 +3047,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 			// the update does nothing if the value does not change
 			// (our sql triggers take care of this)
 			let stmt = self.update.get_mut(fname).unwrap();
-			let val: Value<'_> = source.get(*fname)?;
+			let val: Value<'_> = source.get(fname)?;
 			stmt.execute((LuaValueRef(id), LuaValueRef(&val),))?;
 		}
 		Ok(())
@@ -3037,7 +3062,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		//  - return id from last_insert_rowid()
 		// TODO: implement this distinction in `new`
 		for (i, Field { fname, .. }) in self.schema.pos_payload().enumerate() {
-			let val: Value<'_> = source.get(*fname)?;
+			let val: Value<'_> = source.get(fname)?;
 			self.insert.raw_bind_parameter(i+1, LuaValueRef(&val))?;
 		}
 		if self.schema.is_subresource() {
@@ -3204,11 +3229,11 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 			}
 			mlua_ok(())
 		})?)?;
-		let mut read_full = ALL_SCHEMAS.try_map(|schema|
-			db.prepare(schema.select_lua_sql())
+		let mut pull_statements = ALL_SCHEMAS.try_map(|schema|
+			db.prepare(schema.pull_sql())
 		).to_lua_err()?;
 		simod.set("read_full", scope.create_function_mut(move |lua, args| {
-			read_rec(&mut read_full, lua, args).to_lua_err()
+			read_rec(&mut pull_statements, lua, args).to_lua_err()
 		})?)?;
 		statements.list_keys.install_callback(scope, &simod, "list")?;
 		statements.select_row.install_callback(scope, &simod, "select")?;
