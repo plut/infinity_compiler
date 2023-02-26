@@ -958,8 +958,12 @@ impl Field {
 		Self { fname: "id", ftype: FieldType::Text, create: "primary key" },
 		Self { fname: "parent", ftype: FieldType::Parent, create: "" },
 	];
-	/// The `"position"` field used for sorting subresources.
-	const POSITION: Self = Self { fname: "position", ftype: FieldType::Integer, create: "" };
+	const POSITION: isize = 1 << 0;
+	const SUB_ID: isize = 1 << 1;
+	const TOP_ID: isize = 1 << 2;
+	const PARENT: isize = 1 << 3;
+// 	/// The `"position"` field used for sorting subresources.
+// 	const POSITION: Self = Self { fname: "position", ftype: FieldType::Integer, create: "" };
 }
 /// Displays the quoted field name.
 /// This is a useful help for writing SQL statements.
@@ -974,24 +978,8 @@ impl Display for Field {
 #[derive(Debug,Clone,Copy)]
 pub struct Fields (pub &'static [Field]);
 impl Fields {
-	pub fn iter(&self, flag: FieldsItr)->FieldsIterator {
-		FieldsIterator { fields: self.0,
-			state: match flag {
-				FieldsItr::Payload => 0,
-				FieldsItr::Position => FieldsIterator::POSITION,
-			},
-		}
-	}
-	/// Returns the SQL insert statement for these columns, as a String.
-	pub fn insert_sql(self, name: impl Display, more: impl Display, more_n: usize)->String {
-		let itr = self.iter(FieldsItr::Payload);
-		let mut sql = format!("insert into \"{name}\" ({more}{itr}) values(");
-		for c in 0..itr.len() + more_n  {
-			if c > 0 { sql.push(','); }
-			sql.push('?');
-		}
-		sql.push(')');
-		sql
+	pub fn iter(&self, flag: isize)->FieldsIterator {
+		FieldsIterator { fields: self.0, state: -flag }
 	}
 }
 /// A marker describing which fields are iterated.
@@ -1015,6 +1003,7 @@ pub enum FieldsItr {
 /// |lua schema          |(payload only)      |(payload only)      |
 /// |lua pull            |id                  |id                  |
 /// |lua push            |                    |                    |
+///
 /// - create table: (id,position,parent|id) + payload
 /// - main view: (source.parent, source.position) + payload
 /// - save view: (parent, position) + payload
@@ -1022,7 +1011,11 @@ pub enum FieldsItr {
 /// - lua schema: only payload
 #[derive(Debug,Clone,Copy)]
 pub struct FieldsIterator {
-	state: usize,
+	// first try: -state
+	// i.e. -1 for position, -2 for sub_id, -3 for position|sub_id
+	// detect: f = (-x).trailing_zeros
+	// shift: x+= (1<<f)
+	state: isize,
 	fields: &'static [Field],
 }
 impl FieldsIterator {
@@ -1030,29 +1023,42 @@ impl FieldsIterator {
 		FieldsWithPrefix(self, prefix)
 	}
 	pub fn len(&self)->usize {
-		// only call this when the iterator is not started yet...
-		match self.state {
-			Self::POSITION => 1 + self.fields.len(),
-			0 => self.fields.len(),
-			_ => panic!("FieldsIterator: len() only works on un-started iter"),
-		}
+		assert!(self.state <= 0);
+		(-self.state).count_ones() as usize + self.fields.len()
 	}
 	pub fn is_empty(&self)->bool { self.len() == 0 }
-	const POSITION: usize = usize::MAX >> 1;
 }
 impl Iterator for FieldsIterator {
 	type Item = &'static Field;
 	fn next(&mut self)->Option<Self::Item> {
-		match self.state {
-			Self::POSITION => { self.state = 0; Some(&Field::POSITION) },
-			x if x >= self.fields.len() => { None },
-			i => { let ret = &self.fields[i]; self.state+= 1; Some(ret) },
+		if self.state < 0 {
+			let f = (-self.state).trailing_zeros();
+			self.state+= 1<<f;
+			Some(&Field::BASE[f as usize])
+		} else if self.state as usize >= self.fields.len() {
+			None
+		} else {
+			let r = &self.fields[self.state as usize];
+			self.state+= 1;
+			Some(r)
 		}
 	}
 }
 impl Display for FieldsIterator {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
 		Display::fmt(&self.with_prefix(NullDisplay()), f)
+	}
+}
+impl FieldsIterator {
+	/// Returns the SQL insert statement for these columns, as a String.
+	pub fn insert_sql(self, name: impl Display, more: impl Display, more_n: usize)->String {
+		let n = self.len();
+		let mut sql = format!("insert into \"{name}\" ({more}{self}) values(?");
+		for _ in 1..n + more_n  {
+			sql.push_str(",?");
+		}
+		sql.push(')');
+		sql
 	}
 }
 /// A helper type to insert new."fields" inside a query.
@@ -1095,18 +1101,19 @@ impl Schema {
 	pub fn is_subresource(&self)->bool {
 		self.parent_root.is_some()
 	}
-	/// Returns an iterator over the payload fields (only).
-	pub fn payload(&self)->FieldsIterator { self.fields.iter(FieldsItr::Payload) }
-	/// Returns an iterator over the `position` field (if subresource) then
-	/// the payload fields.
-	pub fn pos_payload(&self)->FieldsIterator {
-		let flag = if self.is_subresource() {
-			FieldsItr::Position
+	fn iter(&self, mut flag: isize)->FieldsIterator {
+		flag&= if self.is_subresource() {
+			Field::POSITION & Field::SUB_ID & Field::PARENT
 		} else {
-			FieldsItr::Payload
+			Field::TOP_ID
 		};
 		self.fields.iter(flag)
 	}
+	/// Returns an iterator over the payload fields (only).
+	pub fn payload(&self)->FieldsIterator { self.iter(0) }
+	/// Returns an iterator over the `position` field (if subresource) then
+	/// the payload fields.
+	pub fn pos_payload(&self)->FieldsIterator { self.iter(Field::POSITION) }
 	/// Displays a full description of the schema on stdout.
 	pub fn describe(&self) {
 		println!("name={self}\nheader = {:?}", self.parent_root);
@@ -1289,16 +1296,8 @@ end"#))?;
 	///
 	/// This is used for both initial populating of the database from game
 	/// files and for `simod.insert`.
-	///
-	/// The `or` parameter allows calling SQL `INSERT OR IGNORE`;
-	/// this is used when initializing the database to ignore resources
-	/// which are superseded by override files.
-	pub fn insert_sql(&self, prefix: impl Display)->String {
-		let (more, more_n) = match self.parent_root {
-			None => (r#""id", "#, 1),
-			Some(_) => (r#""parent", "position", "#, 2),
-		};
-		self.fields.insert_sql(lazy_format!("{prefix}{self}"), more, more_n)
+	pub fn insert_sql(&self, flag: isize, prefix: impl Display)->String {
+		self.iter(flag).insert_sql(lazy_format!("{prefix}{self}"), "", 0)
 	}
 	/// Helper function for generating `new_strings` view.
 	pub fn append_new_strings_schema(&self, w: &mut impl fmt::Write, is_first: &mut bool) {
@@ -1351,7 +1350,7 @@ pub mod sql_rows {
 use crate::prelude::*;
 use rusqlite::{ToSql};
 use rusqlite::types::{FromSql,ValueRef};
-use crate::schemas::{FieldType,Fields,FieldsItr};
+use crate::schemas::{FieldType,Fields};
 
 /// An extension trait allowing to dump a row from SQL.
 pub trait RowExt {
@@ -1423,7 +1422,7 @@ pub trait SqlRow: Sized {
 	fn collect_at(s: &Row<'_>, offset: usize)->Result<Self>;
 	/// Checks that the number of columns is good.
 	fn check_parameter_count(s: &mut Statement<'_>, extra: usize)->Result<()> {
-		let found = Self::FIELDS.iter(FieldsItr::Payload).len() + extra;
+		let found = Self::FIELDS.iter(0).len() + extra;
 		let expected = s.parameter_count();
 		if found == expected {
 			Ok(())
@@ -1453,9 +1452,10 @@ pub trait SqlRow: Sized {
 	fn insert_statement<'db,K:ToSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>)->Result<InsertStatement<'db,K,Self>> {
 		let mut sql = format!(r#"insert into "{name}"("#);
 		K::write_headers(&mut sql, hdr)?;
-		let cols = Self::FIELDS.iter(FieldsItr::Payload);
+		let cols = Self::FIELDS.iter(0);
+		let n = cols.len();
 		write!(&mut sql, r#"{cols}) values ("#)?;
-		for i in 0..K::WIDTH + cols.len() {
+		for i in 1..K::WIDTH + n {
 			if i > 0 { sql.push(',') }
 			sql.push('?')
 		}
@@ -1469,7 +1469,7 @@ pub trait SqlRow: Sized {
 	fn select_statement<'db,K:FromSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>, condition: impl Display)->Result<SelectStatement<'db,K,Self>> {
 		let mut sql = String::from("select ");
 		K::write_headers(&mut sql, hdr)?;
-		let cols = Self::FIELDS.iter(FieldsItr::Payload);
+		let cols = Self::FIELDS.iter(0);
 		write!(&mut sql, r#"{cols} from "{name}" {condition}"#)?;
 		Ok(SelectStatement {
 			statement: db.prepare(&sql)?,
@@ -2232,7 +2232,7 @@ from "new_strings"
 		debug!("loading game resources");
 		self.transaction(|db| {
 			let mut tables = ALL_SCHEMAS.try_map(|schema|
-				db.prepare(&schema.insert_sql("load_"))
+				db.prepare(&schema.insert_sql(0, "load_"))
 					.with_context(|| format!("insert statement for table '{schema}'")))?;
 			game.for_each(move |restype, handle| {
 				trace!("found resource {}.{:?}", handle.resref, restype);
@@ -2679,7 +2679,7 @@ struct InsertRow<'a> {
 impl<'a> Callback<'a> for InsertRow<'a> {
 	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		let insert = schema.insert_sql(lazy_format!(""));
+		let insert = schema.insert_sql(0, "");
 		// TODO: use a restricted form of insertion where primary is not
 		// inserted
 		let counter = if schema.is_subresource() {
@@ -2984,7 +2984,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		if let Value::Nil = id {
 			return Ok(false)
 		}
-		let id_sql = LuaValueRef(&id);
+		let id_sql = LuaValueRef(id);
 		let mut rows = self.exists.query((id_sql,))?;
 		if let Some(row) = rows.next()? {
 			let c: usize = row.get(0)?;
@@ -2999,7 +2999,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 			// (our sql triggers take care of this)
 			let stmt = self.update.get_mut(fname).unwrap();
 			let val: Value<'_> = source.get(*fname)?;
-			stmt.execute((LuaValueRef(&id), LuaValueRef(&val),))?;
+			stmt.execute((LuaValueRef(id), LuaValueRef(&val),))?;
 		}
 		Ok(())
 	}
