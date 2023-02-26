@@ -897,8 +897,48 @@ pub mod schemas {
 //! This mod groups everything which has access to the content of the
 //! [`Schema`] struct.
 use crate::prelude::*;
-use crate::sql_rows::{FieldType};
 
+/// An utility enum defining SQL behaviour for a given resource field type.
+///
+/// This is somewhat different from [`rusqlite::types::Type`]:
+///  - not all SQLite types exist here;
+///  - the `Strref` variant can accept either a string or an integer,
+/// etc.
+#[derive(Debug,Clone,Copy,PartialEq)]
+#[non_exhaustive]
+pub enum FieldType {
+	/// Plain integer.
+	Integer,
+	/// Plain text.
+	Text,
+	/// A resource reference: a string translated using `resref_dict`.
+	Resref,
+	/// A string reference: either an integer or a string translated using
+	/// `strref_dict`.
+	Strref,
+	/// The `parent` field may be either integer or text.
+	Parent,
+}
+impl FieldType {
+	/// Describes this type to SQLite.
+	pub const fn affinity(self)->&'static str {
+		match self {
+			Self::Integer | Self::Strref => r#"integer default 0"#,
+			Self::Text | Self::Resref => r#"text default """#,
+			_ => "",
+		}
+	}
+	/// Describes this type as a string.
+	pub const fn description(self)->&'static str {
+		match self {
+			Self::Integer => "integer",
+			Self::Text => "text",
+			Self::Resref => "resref",
+			Self::Strref => "strref",
+			Self::Parent => "parent",
+		}
+	}
+}
 /// Description of a field in a game resource.
 #[derive(Debug,Clone,Copy)]
 pub struct Field {
@@ -910,6 +950,14 @@ pub struct Field {
 	pub create: &'static str,
 }
 impl Field {
+	/// The basic fields which appear in all tables, used for placing
+	/// tables relative to each other.
+	const BASE: &'static [Self] = &[
+		Self { fname: "position", ftype: FieldType::Integer, create: "" },
+		Self { fname: "id", ftype: FieldType::Integer, create: "primary key" },
+		Self { fname: "id", ftype: FieldType::Text, create: "primary key" },
+		Self { fname: "parent", ftype: FieldType::Parent, create: "" },
+	];
 	/// The `"position"` field used for sorting subresources.
 	const POSITION: Self = Self { fname: "position", ftype: FieldType::Integer, create: "" };
 }
@@ -954,13 +1002,24 @@ pub enum FieldsItr {
 	/// (position) + payload
 	Position,
 }
-// uses of iteraton on fields:
-// - create table: (id,position,parent|id) + payload
-// - main view: (source.parent, source.position) + payload
-// - save view: (parent, position) + payload
-// - create strref: only payload
-// - lua schema: only payload
 /// The iterator for fields
+//
+/// Uses of iteration on fields:
+/// the following fields are included (in addition to payload)
+///
+/// |  when              | top resources      |  subresources      |
+/// |--------------------|--------------------|--------------------|
+/// |base table          |id                  |id,position,parent  |
+/// |main view           |id,id as root       |id,root,parent,pos. |
+/// |save view           |(payload only)      |(payload only)      |
+/// |lua schema          |(payload only)      |(payload only)      |
+/// |lua pull            |id                  |id                  |
+/// |lua push            |                    |                    |
+/// - create table: (id,position,parent|id) + payload
+/// - main view: (source.parent, source.position) + payload
+/// - save view: (parent, position) + payload
+/// - create strref: only payload
+/// - lua schema: only payload
 #[derive(Debug,Clone,Copy)]
 pub struct FieldsIterator {
 	state: usize,
@@ -1292,7 +1351,7 @@ pub mod sql_rows {
 use crate::prelude::*;
 use rusqlite::{ToSql};
 use rusqlite::types::{FromSql,ValueRef};
-use crate::schemas::{Fields,FieldsItr};
+use crate::schemas::{FieldType,Fields,FieldsItr};
 
 /// An extension trait allowing to dump a row from SQL.
 pub trait RowExt {
@@ -1317,43 +1376,6 @@ impl RowExt for Row<'_> {
 			}.unwrap();
 		}
 		r
-	}
-}
-/// An utility enum defining SQL behaviour for a given resource field type.
-///
-/// This is somewhat different from [`rusqlite::types::Type`]:
-///  - not all SQLite types exist here;
-///  - the `Strref` variant can accept either a string or an integer,
-/// etc.
-#[derive(Debug,Clone,Copy,PartialEq)]
-#[non_exhaustive]
-pub enum FieldType {
-	/// Plain integer.
-	Integer,
-	/// Plain text.
-	Text,
-	/// A resource reference: a string translated using `resref_dict`.
-	Resref,
-	/// A string reference: either an integer or a string translated using
-	/// `strref_dict`.
-	Strref,
-}
-impl FieldType {
-	/// Describes this type to SQLite.
-	pub const fn affinity(self)->&'static str {
-		match self {
-			Self::Integer | Self::Strref => r#"integer default 0"#,
-			Self::Text | Self::Resref => r#"text default """#,
-		}
-	}
-	/// Describes this type as a string.
-	pub const fn description(self)->&'static str {
-		match self {
-			FieldType::Integer => "integer",
-			FieldType::Text => "text",
-			FieldType::Resref => "resref",
-			FieldType::Strref => "strref",
-		}
 	}
 }
 /// A leaf SQL type: this can be converted from, to SQL and knows its own
@@ -2403,7 +2425,7 @@ use std::collections::HashMap;
 use crate::prelude::*;
 use crate::trees::{ALL_SCHEMAS,ByName,Recurse,RecurseState,RecurseItr};
 use crate::resources::{RootForest};
-use crate::schemas::{Field,Schema};
+use crate::schemas::{FieldType,Field,Schema};
 use crate::sql_rows::{AsParams};
 /// Small simplification for frequent use in callbacks.
 macro_rules! fail {
@@ -2920,7 +2942,7 @@ struct PushRow<'s,T: DbInterface> {
 	db: &'s T,
 	/// `select count(1) from $table where id=?`
 	exists: Statement<'s>,
-	/// `update $table set $field=? where id=?`
+	/// for all fields (except id): `update $table set $field=? where id=?`
 	update: HashMap<&'s str, Statement<'s>>,
 	/// `insert into $dable (id, ...) values (?,...)`
 	insert: Statement<'s>,
@@ -3124,12 +3146,12 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		ALL_SCHEMAS.recurse_mut(|schema, name, parent_fields| {
 			let fields = lua.create_table()?;
 			for f in schema.payload() {
-				use crate::sql_rows::FieldType;
 				let marker = match f.ftype {
 					FieldType::Integer => marker_integer.clone(),
 					FieldType::Text => marker_text.clone(),
 					FieldType::Resref => marker_resref.clone(),
 					FieldType::Strref => marker_strref.clone(),
+					_ => panic!("should not appear"),
 				};
 				fields.set(f.fname, marker)?;
 			}
