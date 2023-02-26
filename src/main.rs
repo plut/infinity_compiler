@@ -950,23 +950,9 @@ pub struct Field {
 	pub create: &'static str,
 }
 impl Field {
-	/// The basic fields which appear in all tables, used for placing
-	/// tables relative to each other.
-	const BASE: &'static [Self] = &[
-		Self { fname: "position", ftype: FieldType::Integer, create: "" },
-		Self { fname: "id", ftype: FieldType::Integer, create: "primary key" },
-		Self { fname: "id", ftype: FieldType::Text, create: "primary key" },
-		Self { fname: "parent", ftype: FieldType::Undef, create: "" },
-	];
-	pub const POSITION: usize = 1 << 0;
-	pub const SUB_ID: usize = 1 << 1;
-	pub const TOP_ID: usize = 1 << 2;
-	pub const PARENT: usize = 1 << 3;
 	const fn new(fname: &'static str)->Self {
 		Self { fname, ftype: FieldType::Undef, create: "" }
 	}
-// 	/// The `"position"` field used for sorting subresources.
-// 	const POSITION: Self = Self { fname: "position", ftype: FieldType::Integer, create: "" };
 }
 /// Displays the quoted field name.
 /// This is a useful help for writing SQL statements.
@@ -1476,7 +1462,7 @@ pub trait SqlRow: Sized {
 		Err(rusqlite::Error::InvalidParameterCount(found, expected).into())
 	}
 	/// Returns a SQL select statement restricted to type `(K, Self)`.
-	fn select_statement<'db,K:FromSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: impl Header, condition: impl Display)->Result<SelectStatement<'db,K,Self>> {
+	fn select_statement<K:FromSqlMulti>(db: &impl DbInterface, name: impl Display, hdr: impl Header, condition: impl Display)->Result<SelectStatement<'_,K,Self>> {
 		let cols = Self::with_header(hdr);
 		let sql = format!(r#"select {cols} from "{name}" {condition}"#);
 		Ok(SelectStatement {
@@ -2942,6 +2928,14 @@ fn read_rec<'lua>(branches: &mut RootForest<Statement<'_>>, lua: &'lua Lua, mut 
 
 /// A structure encapsulating all the statements needed to update a
 /// resource in database from a Lua table.
+///
+/// Update values:
+/// sub: position
+/// top:
+///
+/// Insert values:
+/// sub: parent, position (get id back)
+/// top: id
 #[derive(Debug)]
 struct PushRow<'s,T: DbInterface> {
 	db: &'s T,
@@ -2953,12 +2947,20 @@ struct PushRow<'s,T: DbInterface> {
 	insert: Statement<'s>,
 	schema: &'s Schema,
 }
-impl<'s, T: DbInterface> PushRow<'s,T> {
-	fn updateable(schema: &Schema)->crate::schemas::FieldsIterator<&'static [&'static str],NullDisplay> {
-		let hdr: &[&str] = if schema.is_subresource() { &["parent", "position"] }
+impl Schema {
+	fn push_insert(&self)->crate::schemas::FieldsIterator<&'static[&'static str],NullDisplay> {
+		let h: &[&str] = if self.is_subresource() { &["parent", "position"] }
 		else { &["id"] };
-		schema.with_header(hdr)
+		self.with_header(h)
 	}
+	fn push_update(&self)->crate::schemas::FieldsIterator<&'static[&'static str],NullDisplay> {
+		let h: &[&str] = if self.is_subresource() { &["position"] }
+		else { &[] };
+		self.with_header(h)
+	}
+}
+
+impl<'s, T: DbInterface> PushRow<'s,T> {
 	fn new(db: &'s T, schema: &'s Schema)->Result<Self> {
 		// TODO: distinction top/sub resource:
 		// for top resource: insert id
@@ -2966,10 +2968,11 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		// 
 		// cf. what is done for insert from game files
 		let exists = db.prepare(format!(r#"select count(1) from "{schema}" where id=?"#))?;
-		let mut update = HashMap::new();
-		let insert = db.prepare(Self::updateable(schema).insert_sql(schema))?;
+
+		let insert = db.prepare(schema.push_insert().insert_sql(&schema.name))?;
 // 		let insert = db.prepare(schema.insert_sql(header(schema), ""))?;
-		for Field { fname, .. } in Self::updateable(schema) {
+		let mut update = HashMap::new();
+		for Field { fname, .. } in schema.push_update() {
 			update.insert(fname, db.prepare(format!(r#"update "{schema}" set {fname}=?2 where "id"=?1"#))?);
 		}
 		Ok(Self { db, exists, update, schema, insert })
@@ -3002,7 +3005,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		//  - insert parent (not id)
 		//  - return id from last_insert_rowid()
 		// TODO: implement this distinction in `new`
-		for (i, Field { fname, .. }) in Self::updateable(self.schema).enumerate() {
+		for (i, Field { fname, .. }) in self.schema.push_insert().enumerate() {
 			let val: Value<'_> = source.get(fname)?;
 			self.insert.raw_bind_parameter(i+1, LuaValueRef(&val))?;
 		}
@@ -3055,7 +3058,7 @@ impl<T: DbInterface> RecurseState<PushRow<'_,T>> for Push<'_,'_> {
 			};
 			descend(&new_state)?;
 		}
-		todo!()
+		Ok(())
 	}
 }
 
