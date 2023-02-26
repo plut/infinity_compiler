@@ -962,7 +962,7 @@ impl Field {
 	pub const SUB_ID: usize = 1 << 1;
 	pub const TOP_ID: usize = 1 << 2;
 	pub const PARENT: usize = 1 << 3;
-	fn new(fname: &'static str)->Self {
+	const fn new(fname: &'static str)->Self {
 		Self { fname, ftype: FieldType::Undef, create: "" }
 	}
 // 	/// The `"position"` field used for sorting subresources.
@@ -986,6 +986,7 @@ impl Fields {
 	}
 }
 
+#[allow(clippy::len_without_is_empty)]
 pub trait Header {
 	fn len(&self)->usize;
 	fn get(&self, index: usize)->Field;
@@ -1000,7 +1001,7 @@ impl Header for () {
 }
 impl Header for &'static str {
 	fn len(&self)->usize { 1 }
-	fn get(&self, i: usize)->Field { Field::new(self) }
+	fn get(&self, _: usize)->Field { Field::new(self) }
 }
 impl Header for (&'static str, &'static str) {
 	fn len(&self)->usize { 2 }
@@ -1068,7 +1069,7 @@ impl<H: Header,P: Display> FieldsIterator<H,P> {
 	pub fn insert_sql(self, name: impl Display)->String {
 		let n = self.len();
 		let mut sql = format!(r#"insert into "{name}" ({self}) values (?"#);
-		for _ in 1..n + self.len()  {
+		for _ in 1..n {
 			sql.push_str(",?");
 		}
 		sql.push(')');
@@ -1077,14 +1078,13 @@ impl<H: Header,P: Display> FieldsIterator<H,P> {
 }
 impl<H: Header,P: Display> Display for FieldsIterator<H,P> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+		let prefix = &self.prefix;
 		for i in 0..self.header.len() {
-			write!(f, r#""{prefix}{field}", "#,
-				field = self.header.get(i), prefix = self.prefix)?;
+			write!(f, "{prefix}{field}, ", field = self.header.get(i))?;
 		}
-		write!(f, r#""{prefix}{field}""#,
-			field = self.fields[0], prefix = self.prefix)?;
+		write!(f, "{prefix}{field}", field = self.fields[0])?;
 		for field in &self.fields[1..] {
-			write!(f, r#", {prefix}{field}"#, prefix = self.prefix)?;
+			write!(f, ", {prefix}{field}")?;
 		}
 		Ok(())
 	}
@@ -1136,10 +1136,13 @@ impl Schema {
 	pub fn payload(&self)->FieldsIterator<(),NullDisplay> {
 		self.with_header(())
 	}
+	const PAYLOAD: &'static [&'static str] = &[];
+	const POSITION: &'static [&'static str] = &["position"];
 	/// Returns an iterator over the `position` field (if subresource) then
 	/// the payload fields.
-	pub fn pos_payload(&self)->FieldsIterator<(),NullDisplay> {
-		unimplemented!()
+	pub fn pos_payload(&self)->FieldsIterator<&'static [&'static str],NullDisplay> {
+		let hdr = if self.is_subresource() {Self::POSITION} else {Self::PAYLOAD};
+		self.with_header(hdr)
 	}
 	/// Displays a full description of the schema on stdout.
 	pub fn describe(&self) {
@@ -1404,6 +1407,27 @@ impl RowExt for Row<'_> {
 		r
 	}
 }
+pub trait CountedParams: rusqlite::Params {
+	const WIDTH: usize;
+	/// Binds to columns [offset, ...] of statement.
+	fn bind_at(self, s: &mut Statement<'_>, offset: usize)->rusqlite::Result<()>;
+}
+impl<A: ToSql> CountedParams for (A,) {
+	const WIDTH: usize = 1;
+	fn bind_at(self, s: &mut Statement<'_>, offset: usize)->rusqlite::Result<()> {
+		s.raw_bind_parameter(offset+1, self.0)
+	}
+}
+#[ext]
+pub impl Statement<'_> {
+	fn bind_execute<P: CountedParams,S: SqlRow>(&mut self, header: P, data: S)->Result<usize> {
+		S::check_parameter_count(self, P::WIDTH)?;
+		header.bind_at(self, 0)?;
+		data.bind_at(self, P::WIDTH)?;
+		self.raw_execute().context("raw_execute")
+	}
+}
+
 /// A leaf SQL type: this can be converted from, to SQL and knows its own
 /// affinity.
 pub trait SqlLeaf: FromSql + ToSql {
@@ -1478,15 +1502,6 @@ pub trait SqlRow: Sized {
 		self.bind_at(stmt, 2)?;
 		stmt.raw_execute().context("raw_execute")
 	}
-	/// Returns a SQL statement restricted to type `(K, Self)` and built
-	/// from matching columns.
-	fn insert_statement<'db,K:ToSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: impl Header)->Result<InsertStatement<'db,K,Self>> {
-		let sql = Self::with_header(hdr).insert_sql(name);
-		Ok(InsertStatement {
-			statement: db.prepare(&sql)?,
-			_key: PhantomData, _row: PhantomData,
-		})
-	}
 	/// Returns a SQL select statement restricted to type `(K, Self)`.
 	fn select_statement<'db,K:FromSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: impl Header, condition: impl Display)->Result<SelectStatement<'db,K,Self>> {
 		let cols = Self::with_header(hdr);
@@ -1516,39 +1531,6 @@ impl SqlHeaders for &str {
 struct WriteSqlHeaders<T: SqlHeaders>(T);
 impl<T: SqlHeaders> Display for WriteSqlHeaders<T> {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { self.0.write_headers(f) }
-}
-
-pub trait ToSqlMulti {
-	const WIDTH: usize;
-	type Headers<'a>: SqlHeaders;
-	fn write_headers(dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result;
-	fn raw_bind_to(&self, statement: &mut Statement<'_>)->rusqlite::Result<()>;
-}
-impl<T: ToSql> ToSqlMulti for T {
-	const WIDTH: usize = 1;
-	type Headers<'a> = &'a str;
-	fn write_headers(mut dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result {
-		write!(dest, r#""{hdr}","#)
-	}
-	fn raw_bind_to(&self, statement: &mut Statement<'_>)->rusqlite::Result<()> {
-		// 1-INDEXED
-		statement.raw_bind_parameter(1, self)
-	}
-}
-/// A `insert` statement restricted to its struct type + primary key.
-#[derive(Debug)]
-pub struct InsertStatement<'a,K: ToSqlMulti, R:SqlRow> {
-	statement: Statement<'a>,
-	_key: PhantomData<K>,
-	_row: PhantomData<R>,
-}
-impl<K: ToSqlMulti, R: SqlRow> InsertStatement<'_,K,R> {
-	/// type-constrained version of execution of statement:
-	pub fn execute(&mut self, key: K, data: R)->Result<usize> {
-		key.raw_bind_to(&mut self.statement)?;
-		data.bind_at(&mut self.statement, K::WIDTH)?;
-		self.statement.raw_execute().map_err(|e| e.into())
-	}
 }
 
 pub trait FromSqlMulti: Sized {
@@ -1987,7 +1969,7 @@ use crate::toolbox::{Progress};
 use crate::database::{DbInterface};
 use crate::gamefiles::{GameIndex};
 use crate::pack::{Pack,PackAll};
-use crate::sql_rows::{SqlRow};
+use crate::sql_rows::{SqlRow,Statement_Ext};
 use macros::{Pack};
 
 #[derive(Debug,Pack)]
@@ -2058,17 +2040,18 @@ impl ExactSizeIterator for GameStringsIterator<'_> {
 fn load_language(db: &impl DbInterface, langname: &str, path: &(impl AsRef<Path> + Debug))->Result<()> {
 	let bytes = fs::read(path)
 		.with_context(|| format!("cannot open strings file: {path:?}"))?;
-	let mut stmt = GameString::insert_statement::<Strref>(db,
-		lazy_format!("load_strings_{langname}"), "strref")?;
 	let itr = GameStringsIterator::try_from(bytes.as_ref())?;
 	let pb = Progress::new(itr.len(), langname);
 	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
 	let mut n_strings = 0;
+	let mut stmt = db.prepare(GameString::with_header("strref")
+		.insert_sql(lazy_format!("load_strings_{langname}")))?;
+// 	let mut stmt = GameString::insert_statement::<Strref>(db,
+// 		lazy_format!("load_strings_{langname}"), "strref")?;
 	for (strref, x) in itr.enumerate() {
 		let s = x?;
 		pb.inc(1);
-		stmt.execute(Strref(strref as i32), s)?;
-// 		s.bind_execute1(&mut q, strref)?;
+		stmt.bind_execute((strref,), s)?;
 		n_strings+= 1;
 	}
 	info!("loaded {n_strings} strings for language \"{langname}\"");
@@ -2140,7 +2123,7 @@ use crate::prelude::*;
 use crate::resources::*;
 use crate::gamefiles::GameIndex;
 use crate::trees::{ALL_SCHEMAS,ResourceIO,Recurse};
-use crate::schemas::{Schema,Field};
+use crate::schemas::{Schema};
 
 /// A trivial wrapper on [`rusqlite::Connection`];
 /// mainly used for standardizing log messages.
@@ -2267,9 +2250,9 @@ from "new_strings"
 	pub fn load(&mut self, game: &GameIndex)->Result<()> {
 		impl Schema {
 			fn load_sql(&self)->String {
-// 				db.prepare(&schema.insert_sql(
-// 					Field::TOP_ID|Field::PARENT|Field::POSITION, "load_"))
-				String::from("")
+				let hdr: &[&str] = if self.is_subresource() { &["parent", "position"] }
+				else { &["id"] };
+				self.insert_sql(hdr, "load_")
 			}
 		}
 		let pb = Progress::new(3, "Fill database"); pb.inc(1);
