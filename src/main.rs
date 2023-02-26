@@ -1022,11 +1022,6 @@ impl FieldsIterator {
 	fn with_prefix<T: Display>(self, prefix: T)->FieldsWithPrefix<T> {
 		FieldsWithPrefix(self, prefix)
 	}
-	pub fn len(&self)->usize {
-		assert!(self.state <= 0);
-		(-self.state).count_ones() as usize + self.fields.len()
-	}
-	pub fn is_empty(&self)->bool { self.len() == 0 }
 }
 impl Iterator for FieldsIterator {
 	type Item = &'static Field;
@@ -1043,6 +1038,13 @@ impl Iterator for FieldsIterator {
 			Some(r)
 		}
 	}
+}
+impl ExactSizeIterator for FieldsIterator {
+	fn len(&self)->usize {
+		assert!(self.state <= 0);
+		(-self.state).count_ones() as usize + self.fields.len()
+	}
+// 	pub fn is_empty(&self)->bool { self.len() == 0 }
 }
 impl Display for FieldsIterator {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
@@ -1450,11 +1452,10 @@ pub trait SqlRow: Sized {
 	/// Returns a SQL statement restricted to type `(K, Self)` and built
 	/// from matching columns.
 	fn insert_statement<'db,K:ToSqlMulti>(db: &'db impl DbInterface, name: impl Display, hdr: K::Headers<'_>)->Result<InsertStatement<'db,K,Self>> {
-		let mut sql = format!(r#"insert into "{name}"("#);
-		K::write_headers(&mut sql, hdr)?;
+		let headers = WriteSqlHeaders(hdr);
 		let cols = Self::FIELDS.iter(0);
 		let n = cols.len();
-		write!(&mut sql, r#"{cols}) values (?"#)?;
+		let mut sql = format!(r#"insert into "{name}"({headers},{cols}) values (?"#);
 		for i in 1..K::WIDTH + n {
 			if i > 0 { sql.push(',') }
 			sql.push('?')
@@ -1478,9 +1479,29 @@ pub trait SqlRow: Sized {
 	}
 }
 
+/// A set of headers included in a SQL statement before the payload.
+pub trait SqlHeaders: Display {
+	const WIDTH: usize;
+	/// Render the headers as `"header1","header2"`
+	/// etc. (without the trailing comma).
+	fn write_headers(&self, f: &mut Formatter<'_>)->fmt::Result;
+}
+impl SqlHeaders for &str {
+	const WIDTH: usize = 1;
+	fn write_headers(&self, f: &mut Formatter<'_>)->fmt::Result {
+		write!(f, r#""{self}""#)
+	}
+}
+/// A newtype simplifying the formatting of SQL statements.
+#[derive(Debug)]
+struct WriteSqlHeaders<T: SqlHeaders>(T);
+impl<T: SqlHeaders> Display for WriteSqlHeaders<T> {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result { self.0.write_headers(f) }
+}
+
 pub trait ToSqlMulti {
 	const WIDTH: usize;
-	type Headers<'a>;
+	type Headers<'a>: SqlHeaders;
 	fn write_headers(dest: impl fmt::Write, hdr: Self::Headers<'_>)->fmt::Result;
 	fn raw_bind_to(&self, statement: &mut Statement<'_>)->rusqlite::Result<()>;
 }
