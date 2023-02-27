@@ -1845,15 +1845,15 @@ pub trait RecurseState<T>: Sized {
 	/// branches of this tree.
 	///
 	/// This recursion is invoked by calling the `descend` closure.
-	fn exec(&self, content: &mut T, name: &str, descend: impl FnMut(&Self)->Result<()>)->Result<()>;
+	fn exec(&self, content: &mut T, name: &str, descend: impl FnMut(&mut Self)->Result<()>)->Result<()>;
 }
 /// A type which can be iterated at multiple levels (tree-like).
 pub trait RecurseItr<T,S: RecurseState<T>> {
 	/// Invoke a multi-level iterator on this type.
-	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()>;
+	fn recurse_itr_mut(&mut self, state: &mut S, name: &str)->Result<()>;
 }
 impl<T,B: ByName<In=T>+RecurseItr<T,S>, S: RecurseState<T>> RecurseItr<T,S> for Tree<B> {
-	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()> {
+	fn recurse_itr_mut(&mut self, state: &mut S, name: &str)->Result<()> {
 		state.exec(&mut self.content, name,
 			|new_state| self.branches.recurse_itr_mut(new_state, name))
 	}
@@ -2717,7 +2717,7 @@ struct PullState<'lua,'s> {
 	level: usize,
 }
 impl RecurseState<PullRow<'_>> for PullState<'_,'_> {
-	fn exec(&self, pull: &mut PullRow<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+	fn exec(&self, pull: &mut PullRow<'_>, name: &str, mut descend: impl FnMut(&mut Self)->Result<()>)->Result<()> {
 		let Self { lua, query_name, .. } = self;
 		if self.level == 0 && name != self.query_name {
 			return Ok(())
@@ -2748,12 +2748,12 @@ impl RecurseState<PullRow<'_>> for PullState<'_,'_> {
 				}
 			}
 			list.push(table.clone())?;
-			let new_state = Self { lua, query_name,
+			let mut new_state = Self { lua, query_name,
 				level: self.level+1,
 				parent_table: Some(table),
 				parent_id: Some(row_id),
 			};
-			descend(&new_state)?;
+			descend(&mut new_state)?;
 		}
 		Ok(())
 	}
@@ -2774,12 +2774,12 @@ impl IntoCallback<'_> for RootForest<PullRow<'_>> {
 		}
 		let query_name = args.pop_as::<String>(lua)
 			.context("first argument (table name) must be a string")?;
-		let init = PullState {
+		let mut init = PullState {
 			lua, level: 0, query_name: &query_name,
 			parent_table: Some(lua.create_table()?),
 			parent_id: Some(args.pop_front().unwrap().to_sql_value()?),
 		};
-		self.recurse_itr_mut(&init, "")
+		self.recurse_itr_mut(&mut init, "")
 			.with_context(||format!("recursively load resource from table '{query_name}'"))?;
 		let mut pairs = match init.parent_table {
 			None => return Ok(Value::Nil), // FIXME: or an error?
@@ -2920,12 +2920,12 @@ impl<T: DbInterface> IntoCallback<'_> for (Statement<'_>, RootForest<PushRow<'_,
 			.context("first argument (table name) must be a string")?;
 		let resource = args.pop_as::<mlua::Table<'_>>(lua)
 			.context("second argument (resource) must be a table")?;
-		let init = PushState {
+		let mut init = PushState {
 // 			last_insert: &mut self.0,
 			lua, level: 0, query_name: &query_name,
 			resource, parent_id: mlua::Value::Nil,
 		};
-		self.1.recurse_itr_mut(&init, "")
+		self.1.recurse_itr_mut(&mut init, "")
 			.with_context(||format!("recursively save resource to table '{query_name}'"))?;
 		Ok(())
 	}
@@ -2945,22 +2945,22 @@ struct PushState<'lua,'s> {
 // 	last_insert: &'s mut Statement<'s>,
 }
 impl<'lua> PushState<'lua,'_> {
-	fn save_rec<T: DbInterface>(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+	fn save_rec<T: DbInterface>(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&mut Self)->Result<()>)->Result<()> {
 		let row_id = save_row.save(&resource, &self.parent_id, position
 // 		, &mut self.last_insert
 		)
 			.with_context(||format!("save resource as row in '{}'", self.query_name))?;
-		let new_state = Self {
+		let mut new_state = Self {
 // 			last_insert: self.last_insert,
 			level: self.level+1, parent_id: row_id,
 			lua: self.lua, resource,
 			query_name: self.query_name,
 		};
-		descend(&new_state)
+		descend(&mut new_state)
 	}
 }
 impl<T: DbInterface> RecurseState<PushRow<'_,T>> for PushState<'_,'_> {
-	fn exec(&self, save_row: &mut PushRow<'_,T>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+	fn exec(&self, save_row: &mut PushRow<'_,T>, name: &str, mut descend: impl FnMut(&mut Self)->Result<()>)->Result<()> {
 		// Special case: at the first level we save a single resource, not a
 		// vector:
 		if self.level == 0 {
