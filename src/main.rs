@@ -1015,7 +1015,7 @@ impl Header for (&'static str, &'static str) {
 /// - save view: (parent, position) + payload
 /// - create strref: only payload
 /// - lua schema: only payload
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct FieldsIterator<H: Header,P=NullDisplay> {
 	state: usize,
 	fields: &'static [Field],
@@ -1105,7 +1105,7 @@ impl Schema {
 	pub fn with_header<H: Header>(&self, header: H)->FieldsIterator<H> {
 		self.fields.with_header(header)
 	}
-	pub fn with_headers<H: Header>(&self, top: H, sub: H)->FieldsIterator<H> {
+	pub fn with_headers(&self, top: &'static [&'static str], sub: &'static [&'static str])->FieldsIterator<&'static [&'static str]> {
 		self.fields.with_header(if self.is_subresource() { sub } else { top } )
 	}
 	/// Returns an iterator over the payload fields (only).
@@ -1271,6 +1271,8 @@ begin
 		((select "component" from "global"), new."id", '{fname}', new."{fname}");
 end"#))?;
 		}
+		let cols = self.with_headers(&["id"],&["id","parent","position"]);
+		let newcols = cols.clone().with_prefix("new.");
 		f(format!(
 r#"create trigger "insert_{self}"
 instead of insert on "{self}"
@@ -1278,7 +1280,7 @@ begin
 	{trans_insert}
 	insert into "add_{self}" ({cols}) values ({newcols});
 	insert or ignore into "dirty_{root}" values (new."root");
-end"#, cols = self.pos_payload(), newcols = self.pos_payload().with_prefix("new.")))?;
+end"#))?;
 	// TODO: add id, (parent, position if applicable)
 		f(format!(
 r#"create trigger "delete_{self}"
@@ -2210,7 +2212,7 @@ from "new_strings"
 	pub fn load(&mut self, game: &GameIndex)->Result<()> {
 		impl Schema {
 			fn load_sql(&self)->String {
-				self.with_headers::<&[&str]>(&["id"], &["parent","position"])
+				self.with_headers(&["id"], &["parent","position"])
 					.insert_sql(lazy_format!("load_{self}"))
 			}
 		}
@@ -2980,17 +2982,21 @@ impl<'s, T: DbInterface+Debug> PushRow<'s,T> {
 		}
 		Ok(false)
 	}
-	fn update_values(&mut self, source: &mlua::Table<'_>, parent: &Value<'_>, id: &Value<'_>)->Result<()> {
-		// TODO: if this is a subresource then update parent if needed
+	fn update_values(&mut self, source: &mlua::Table<'_>, position: usize, id: &Value<'_>)->Result<()> {
+		let id_sql = LuaValueRef(id);
 		for (fname, stmt) in self.update.iter_mut() {
-			// the update does nothing if the value does not change
-			// (our sql triggers take care of this)
-			let val: Value<'_> = source.get(*fname)?;
-			stmt.execute((LuaValueRef(id), LuaValueRef(&val),))?;
+			if fname == &"position" {
+				stmt.execute((id_sql, position))?;
+			} else {
+				// the update does nothing if the value does not change
+				// (our sql triggers take care of this)
+				let val: Value<'_> = source.get(*fname)?;
+				stmt.execute((id_sql, LuaValueRef(&val),))?;
+			}
 		}
 		Ok(())
 	}
-	fn insert_new<'lua>(&mut self, source: &mlua::Table<'lua>, parent: &Value<'_>)->Result<Value<'lua>> {
+	fn insert_new<'lua>(&mut self, source: &mlua::Table<'lua>, parent: &Value<'_>, position: usize)->Result<Value<'lua>> {
 		// TODO: this is where we make a distinction top/sub:
 		// top:
 		//  - insert id
@@ -3000,9 +3006,17 @@ impl<'s, T: DbInterface+Debug> PushRow<'s,T> {
 		//  - return id from last_insert_rowid()
 		// TODO: implement this distinction in `new`
 		for (i, Field { fname, .. }) in self.schema.push_insert().enumerate() {
-			let val: Value<'_> = source.get(fname)?;
-			println!("{j} {fname}={w:?}", j=i+1, w=val.to_sql_value()?);
-			self.insert.raw_bind_parameter(i+1, LuaValueRef(&val))?;
+			if fname == "parent" {
+				println!(" set parent = {:?}", LuaValueRef(&parent));
+				self.insert.raw_bind_parameter(i+1, LuaValueRef(&parent))?;
+			} else if fname == "position" {
+				println!(" set position = {position}");
+				self.insert.raw_bind_parameter(i+1, position)?;
+			} else {
+				let val: Value<'_> = source.get(fname)?;
+				println!("{j} {fname}={w:?}", j=i+1, w=val.to_sql_value()?);
+				self.insert.raw_bind_parameter(i+1, LuaValueRef(&val))?;
+			}
 		}
 		self.insert.raw_execute()?;
 		if self.schema.is_subresource() {
@@ -3013,16 +3027,16 @@ impl<'s, T: DbInterface+Debug> PushRow<'s,T> {
 			Ok(source.get("id")?)
 		}
 	}
-	fn save<'lua>(&mut self, source: &mlua::Table<'lua>, parent_id: &Value<'_>)->Result<Value<'lua>> {
+	fn save<'lua>(&mut self, source: &mlua::Table<'lua>, parent_id: &Value<'_>, position: usize)->Result<Value<'lua>> {
 		let id: Value<'_> = source.get("id")?;
 // 		println!("saving to {sch}: id = {id:?}", sch=self.schema, id = id.to_sql_value()?);
 		if self.row_exists(&id)? {
 			println!("   row exists! updating");
-			self.update_values(source, parent_id, &id)?;
+			self.update_values(source, position, &id)?;
 			Ok(id)
 		} else {
 			println!("   row does not exist! inserting...");
-			self.insert_new(source, parent_id)
+			self.insert_new(source, parent_id, position)
 		}
 	}
 }
@@ -3032,17 +3046,23 @@ impl<'s, T: DbInterface+Debug> PushRow<'s,T> {
 #[derive(Debug)]
 struct Push<'lua,'s> {
 	lua: &'lua Lua,
+	/// The parent resource from which we are reading.
 	resource: mlua::Table<'lua>,
 	parent_id: Value<'lua>,
 	query_name: &'s str,
 	level: usize,
 }
-impl Push<'_,'_> {
-	fn save_rec<T: DbInterface+Debug>(&self, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
-		let row_id = save_row.save(&self.resource, &self.parent_id)?;
+impl<'lua> Push<'lua,'_> {
+	fn save_rec<T: DbInterface+Debug>(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+		let row_id = save_row.save(&resource, &self.parent_id, position)?;
+		println!("\x1b[1min save_rec (parent = {:?}), we got the following table:\x1b[m ", LuaValueRef(&self.parent_id));
+		for pair in resource.clone().pairs::<Value<'_>,Value<'_>>() {
+			let (k, v) = pair?;
+			println!("  {:?}: {:?}", LuaValueRef(&k), LuaValueRef(&v));
+		}
 		let new_state = Self {
 			level: self.level+1, parent_id: row_id,
-			lua: self.lua, resource: self.resource.clone(),
+			lua: self.lua, resource,
 			query_name: self.query_name,
 		};
 		descend(&new_state)
@@ -3057,12 +3077,12 @@ impl<T: DbInterface+Debug> RecurseState<PushRow<'_,T>> for Push<'_,'_> {
 		// vector:
 		if self.level == 0 {
 			if name != self.query_name { return Ok(()) }
-			return self.save_rec(save_row, descend)
+			return self.save_rec(self.resource.clone(), 0, save_row, descend)
 		}
 		let list = self.resource.get::<_,mlua::Table<'_>>(name)?;
-		for elt in list.sequence_values::<mlua::Table<'_>>() {
+		for (i, elt) in list.sequence_values::<mlua::Table<'_>>().enumerate() {
 			let table = elt?;
-			self.save_rec(save_row, &mut descend)?;
+			self.save_rec(table, i+1, save_row, &mut descend)?;
 		}
 		Ok(())
 	}
