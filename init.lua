@@ -360,7 +360,7 @@ print(albruin.id)
 -- albruin.id = "no such id"
 albruin.name = "New name"
 -- dump(albruin.effects)
-x = (simod.read_full("items", "sw1h34"))
+x = (simod.pull("items", "sw1h34"))
 print("---- dumping read of items sw1h34: -----")
 for k, v in pairs(x) do
 	print(k, v)
@@ -372,8 +372,9 @@ for k, v in pairs(x.abilities) do
 		print("", "effects", k, v, v.opcode)
 	end
 end
--- foo = albruin:clone({"blah", weight=3})
--- foo:save()
+foo = albruin:clone({"blah", weight=3})
+dump(foo.id)
+simod.push("items", foo)
 -- dump(foo.id)
 -- dump(foo.weight)
 -- albruin:save()

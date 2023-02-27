@@ -1,3 +1,6 @@
+ - [ ] insert into `*` does not insert `id` into `add_*`
+ - [ ] `push` recursive seems to load the wrong table (item abilities has
+   nulls everywhere)
  - [ ] kill the `add_*` tables and write into the main `load_*` table
  - [ ] just use a special value for the `owner` field to mark original
    resources

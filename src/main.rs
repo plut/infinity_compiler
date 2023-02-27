@@ -967,7 +967,7 @@ impl Display for Field {
 #[derive(Debug,Clone,Copy)]
 pub struct Fields (pub &'static [Field]);
 impl Fields {
-	pub fn with_header<H: Header>(&self, header: H)->FieldsIterator<H,NullDisplay> {
+	pub fn with_header<H: Header>(&self, header: H)->FieldsIterator<H> {
 		FieldsIterator { state: 0, fields: self.0, header, prefix: NullDisplay() }
 	}
 }
@@ -1016,7 +1016,7 @@ impl Header for (&'static str, &'static str) {
 /// - create strref: only payload
 /// - lua schema: only payload
 #[derive(Debug)]
-pub struct FieldsIterator<H: Header,P> {
+pub struct FieldsIterator<H: Header,P=NullDisplay> {
 	state: usize,
 	fields: &'static [Field],
 	header: H,
@@ -1102,20 +1102,20 @@ impl Schema {
 	pub fn is_subresource(&self)->bool {
 		self.parent_root.is_some()
 	}
-	pub fn with_header<H: Header>(&self, header: H)->FieldsIterator<H,NullDisplay> {
+	pub fn with_header<H: Header>(&self, header: H)->FieldsIterator<H> {
 		self.fields.with_header(header)
 	}
+	pub fn with_headers<H: Header>(&self, top: H, sub: H)->FieldsIterator<H> {
+		self.fields.with_header(if self.is_subresource() { sub } else { top } )
+	}
 	/// Returns an iterator over the payload fields (only).
-	pub fn payload(&self)->FieldsIterator<(),NullDisplay> {
+	pub fn payload(&self)->FieldsIterator<()> {
 		self.with_header(())
 	}
-	const PAYLOAD: &'static [&'static str] = &[];
-	const POSITION: &'static [&'static str] = &["position"];
 	/// Returns an iterator over the `position` field (if subresource) then
 	/// the payload fields.
-	pub fn pos_payload(&self)->FieldsIterator<&'static [&'static str],NullDisplay> {
-		let hdr = if self.is_subresource() {Self::POSITION} else {Self::PAYLOAD};
-		self.with_header(hdr)
+	pub fn pos_payload(&self)->FieldsIterator<&'static [&'static str]> {
+		self.with_headers(&[], &["position"])
 	}
 	/// Displays a full description of the schema on stdout.
 	pub fn describe(&self) {
@@ -1279,6 +1279,7 @@ begin
 	insert into "add_{self}" ({cols}) values ({newcols});
 	insert or ignore into "dirty_{root}" values (new."root");
 end"#, cols = self.pos_payload(), newcols = self.pos_payload().with_prefix("new.")))?;
+	// TODO: add id, (parent, position if applicable)
 		f(format!(
 r#"create trigger "delete_{self}"
 instead of delete on "{self}"
@@ -1447,7 +1448,7 @@ pub trait SqlRow: Sized {
 	/// The description of the columns that this binds to.
 	const FIELDS: &'static [Field];
 	/// Returns an iterator over fields with header.
-	fn with_header<H: Header>(header: H)->crate::schemas::FieldsIterator<H,NullDisplay> {
+	fn with_header<H: Header>(header: H)->crate::schemas::FieldsIterator<H> {
 		crate::schemas::Fields(Self::FIELDS).with_header(header)
 	}
 	/// Binds to columns [offset, ...] of statement.
@@ -2209,9 +2210,8 @@ from "new_strings"
 	pub fn load(&mut self, game: &GameIndex)->Result<()> {
 		impl Schema {
 			fn load_sql(&self)->String {
-				let hdr: &[&str] = if self.is_subresource() { &["parent", "position"] }
-				else { &["id"] };
-				self.insert_sql(hdr, "load_")
+				self.with_headers::<&[&str]>(&["id"], &["parent","position"])
+					.insert_sql(lazy_format!("load_{self}"))
 			}
 		}
 		let pb = Progress::new(3, "Fill database"); pb.inc(1);
@@ -2496,16 +2496,6 @@ fn pop_arg_as<'lua, T: FromLua<'lua>>(args: &mut MultiValue<'lua>, lua:&'lua Lua
 	let r = T::from_lua(arg0, lua).with_context(||
 		format!("cannot convert argument to type {}", std::any::type_name::<T>()))?;
 	Ok(r)
-}
-impl Schema {
-	fn pull_sql(&self)->String {
-		match self.parent_root {
-			None =>
-			format!(r#"select "id", {cols} from "{self}" where "id"=?"#, cols = self.payload()),
-			Some(_) =>
-			format!(r#"select "id", {cols} from "{self}" where "parent"=? order by "position""#, cols = self.payload()),
-		}
-	}
 }
 
 /// Small simplification for [`MultiValue`] impl of [`AsParams`].
@@ -2844,6 +2834,16 @@ impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
 	}
 }
 
+impl Schema {
+	fn pull_sql(&self)->String {
+		match self.parent_root {
+			None =>
+			format!(r#"select "id", {cols} from "{self}" where "id"=?"#, cols = self.payload()),
+			Some(_) =>
+			format!(r#"select "id", {cols} from "{self}" where "parent"=? order by "position""#, cols = self.payload()),
+		}
+	}
+}
 /// A struct implementing the construction of a full resource (as a Lua
 /// table-of-tables) from the database.
 #[derive(Debug)]
@@ -2948,19 +2948,14 @@ struct PushRow<'s,T: DbInterface> {
 	schema: &'s Schema,
 }
 impl Schema {
-	fn push_insert(&self)->crate::schemas::FieldsIterator<&'static[&'static str],NullDisplay> {
-		let h: &[&str] = if self.is_subresource() { &["parent", "position"] }
-		else { &["id"] };
-		self.with_header(h)
+	fn push_insert(&self)->crate::schemas::FieldsIterator<&'static[&'static str]> {
+		self.with_headers(&["id"], &["parent", "position"])
 	}
-	fn push_update(&self)->crate::schemas::FieldsIterator<&'static[&'static str],NullDisplay> {
-		let h: &[&str] = if self.is_subresource() { &["position"] }
-		else { &[] };
-		self.with_header(h)
+	fn push_update(&self)->crate::schemas::FieldsIterator<&'static[&'static str]> {
+		self.with_headers(&[], &["position"])
 	}
 }
-
-impl<'s, T: DbInterface> PushRow<'s,T> {
+impl<'s, T: DbInterface+Debug> PushRow<'s,T> {
 	fn new(db: &'s T, schema: &'s Schema)->Result<Self> {
 		// TODO: distinction top/sub resource:
 		// for top resource: insert id
@@ -2970,7 +2965,6 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		let exists = db.prepare(format!(r#"select count(1) from "{schema}" where id=?"#))?;
 
 		let insert = db.prepare(schema.push_insert().insert_sql(&schema.name))?;
-// 		let insert = db.prepare(schema.insert_sql(header(schema), ""))?;
 		let mut update = HashMap::new();
 		for Field { fname, .. } in schema.push_update() {
 			update.insert(fname, db.prepare(format!(r#"update "{schema}" set {fname}=?2 where "id"=?1"#))?);
@@ -3007,20 +3001,27 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		// TODO: implement this distinction in `new`
 		for (i, Field { fname, .. }) in self.schema.push_insert().enumerate() {
 			let val: Value<'_> = source.get(fname)?;
+			println!("{j} {fname}={w:?}", j=i+1, w=val.to_sql_value()?);
 			self.insert.raw_bind_parameter(i+1, LuaValueRef(&val))?;
 		}
+		self.insert.raw_execute()?;
 		if self.schema.is_subresource() {
+// 			println!("  got back rowid={}", self.db.last_insert_rowid());
 			Ok(Value::Integer(self.db.last_insert_rowid()))
 		} else {
+// 			println!(" we inserted id: {:?}", source.get::<_,Value>("id")?.to_sql_value()?);
 			Ok(source.get("id")?)
 		}
 	}
 	fn save<'lua>(&mut self, source: &mlua::Table<'lua>, parent_id: &Value<'_>)->Result<Value<'lua>> {
 		let id: Value<'_> = source.get("id")?;
+// 		println!("saving to {sch}: id = {id:?}", sch=self.schema, id = id.to_sql_value()?);
 		if self.row_exists(&id)? {
+			println!("   row exists! updating");
 			self.update_values(source, parent_id, &id)?;
 			Ok(id)
 		} else {
+			println!("   row does not exist! inserting...");
 			self.insert_new(source, parent_id)
 		}
 	}
@@ -3031,35 +3032,56 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 #[derive(Debug)]
 struct Push<'lua,'s> {
 	lua: &'lua Lua,
-	parent_table: Option<mlua::Table<'lua>>,
+	resource: mlua::Table<'lua>,
 	parent_id: Value<'lua>,
 	query_name: &'s str,
 	level: usize,
 }
-
-impl<T: DbInterface> RecurseState<PushRow<'_,T>> for Push<'_,'_> {
-	fn exec(&self, save_row: &mut PushRow<'_,T>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
-		let Self { lua, query_name, .. } = self;
-		if self.level == 0 && name != self.query_name {
-			return Ok(())
-		}
-		let table = match self.parent_table.as_ref() {
-			None => return Ok(()),
-			Some(t) => t,
+impl Push<'_,'_> {
+	fn save_rec<T: DbInterface+Debug>(&self, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+		let row_id = save_row.save(&self.resource, &self.parent_id)?;
+		let new_state = Self {
+			level: self.level+1, parent_id: row_id,
+			lua: self.lua, resource: self.resource.clone(),
+			query_name: self.query_name,
 		};
-		let list = table.get::<_,mlua::Table<'_>>(name)?;
+		descend(&new_state)
+	}
+}
+impl<T: DbInterface+Debug> RecurseState<PushRow<'_,T>> for Push<'_,'_> {
+	fn exec(&self, save_row: &mut PushRow<'_,T>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+		println!("*** ({level}) {sch} parent={id:?}", level=self.level,
+			sch=save_row.schema,
+			id=self.parent_id.to_sql_value()?);
+		// Special case: at the first level we save a single resource, not a
+		// vector:
+		if self.level == 0 {
+			if name != self.query_name { return Ok(()) }
+			return self.save_rec(save_row, descend)
+		}
+		let list = self.resource.get::<_,mlua::Table<'_>>(name)?;
 		for elt in list.sequence_values::<mlua::Table<'_>>() {
 			let table = elt?;
-			let row_id = save_row.save(&table, &self.parent_id)?;
-			let new_state = Self { lua, query_name,
-				level: self.level+1,
-				parent_table: Some(table),
-				parent_id: row_id,
-			};
-			descend(&new_state)?;
+			self.save_rec(save_row, &mut descend)?;
 		}
 		Ok(())
 	}
+}
+/// Recursively saves a resource (as a Lua table) to database.
+fn push<'lua, T: DbInterface+Debug>(branches: &mut RootForest<PushRow<'_,T>>, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
+	if args.len() != 2 {
+		return Err(Error::BadArgumentNumber { expected: 2, found: args.len() }.into())
+	}
+	let query_name = pop_arg_as::<String>(&mut args, lua)
+		.context("first argument (table name) must be a string")?;
+	let resource = pop_arg_as::<mlua::Table<'_>>(&mut args, lua)
+		.context("second argument (resource) must be a table")?;
+	let init = Push {
+		lua, level: 0, query_name: &query_name,
+		resource, parent_id: mlua::Value::Nil,
+	};
+	branches.recurse_itr_mut(&init, "")?;
+	Ok(mlua::Value::Nil)
 }
 
 /// A collection of all the prepared SQL statements used for implementing
@@ -3108,7 +3130,7 @@ impl<'a> LuaStatements<'a> {
 ///  - list("item_abilities", "sw1h34") etc.
 /// All code with a higher level is written in lua and loaded from the
 /// "init.lua" file.
-pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
+pub fn command_add(db: impl DbInterface+Debug, _target: &str)->Result<()> {
 	use crate::sql_rows::Row_Ext;
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
@@ -3176,13 +3198,19 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 		let mut pull_statements = ALL_SCHEMAS.try_map(|schema|
 			db.prepare(schema.pull_sql())
 		).to_lua_err()?;
-		simod.set("read_full", scope.create_function_mut(move |lua, args| {
+		simod.set("pull", scope.create_function_mut(move |lua, args| {
 			read_rec(&mut pull_statements, lua, args).to_lua_err()
+		})?)?;
+		let mut push_statements = ALL_SCHEMAS.try_map(|schema|
+			PushRow::new(&db, schema)
+		).to_lua_err()?;
+		simod.set("push", scope.create_function_mut(move |lua, args| {
+			push(&mut push_statements, lua, args).to_lua_err()
 		})?)?;
 		statements.list_keys.install_callback(scope, &simod, "list")?;
 		statements.select_row.install_callback(scope, &simod, "select")?;
 // 		statements.read_field.install_callback(scope, &simod, "get")?;
-		statements.insert_row.install_callback(scope, &simod, "insert")?;
+// 		statements.insert_row.install_callback(scope, &simod, "insert")?;
 		statements.update_row.install_callback(scope, &simod, "update")?;
 		statements.delete_row.install_callback(scope, &simod, "delete")?;
 // 		statements.next_key.install_callback(scope, &simod, "next_key")?;
