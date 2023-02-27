@@ -73,7 +73,7 @@ pub enum Error{
 	CallbackMissingArgument,
 	UnknownField { field: String },
 	RowNotFound { key: String},
-	NoRows,
+	LuaConversion,
 }
 impl Display for Error {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
@@ -86,7 +86,7 @@ impl Display for Error {
 			Self::BadParameterCount { expected, found } =>
 				write!(f, "Bad parameter count for SQL statement: found {found}, expected {expected}"),
 			Self::UnknownField { field } => write!(f, r#"Unknown field "{field}""#),
-			Self::NoRows => write!(f, r#"Statement returned no rows"#),
+			Self::LuaConversion => write!(f, r#"(converting error from/to Lua)"#),
 			_ => write!(f, "Error: &{self:?}"),
 		}
 	}
@@ -2407,7 +2407,7 @@ pub mod lua_extensions {
 //! written to have a smoother interface with the remainder of the
 //! program.
 use crate::prelude::*;
-use mlua::{Lua,Scope,Value,MultiValue,FromLua,ToLuaMulti,FromLuaMulti,ExternalResult};
+use mlua::{Lua,Scope,Value,MultiValue,FromLua,ToLuaMulti,FromLuaMulti};
 use rusqlite::{ToSql,types::{ToSqlOutput}};
 pub fn mlua_ok<T>(a: T)->mlua::Result<T> { Ok::<_,mlua::Error>(a) }
 #[ext]
@@ -2448,7 +2448,24 @@ pub impl Lua {
 	/// Variant of [`Lua.scope`] accepting [`anyhow::Error`] as an error type.
 	fn scope_any<'lua: 'scope, 'scope, R: 'static, F>(&'lua self, f: F) -> mlua::Result<R>
 	where F: FnOnce(&Scope<'lua, 'scope>) -> Result<R> {
-		self.scope(move |scope| f(scope).to_lua_err())
+		self.scope(move |scope| f(scope).into_lua_result())
+	}
+}
+pub trait CallbackError {
+	fn into_lua_err(self)->mlua::Error;
+}
+impl CallbackError for anyhow::Error {
+	fn into_lua_err(self)->mlua::Error {
+		mlua::Error::CallbackError { traceback: format!("{:?}", &self),
+			cause: std::sync::Arc::from(mlua::Error::ExternalError(std::sync::Arc::from(Error::LuaConversion))) }
+	}
+}
+pub trait CallbackResult<T> {
+	fn into_lua_result(self)->mlua::Result<T>;
+}
+impl<T> CallbackResult<T> for Result<T> {
+	fn into_lua_result(self)->mlua::Result<T> {
+		self.map_err(|e| e.into_lua_err())
 	}
 }
 #[ext]
@@ -2461,7 +2478,7 @@ pub impl<'lua,'scope> Scope<'lua,'scope> {
     A: FromLuaMulti<'callback>,
     R: ToLuaMulti<'callback>,
     F: 'scope + Fn(&'callback Lua, A) -> Result<R> {
-		self.create_function(move |lua, a| func(lua,a).to_lua_err())
+		self.create_function(move |lua, a| func(lua,a).into_lua_result())
 	}
 	/// An extension to `create_function_mut`, accepting any
 	/// `mlua::ExternalError` error type.
@@ -2471,7 +2488,7 @@ pub impl<'lua,'scope> Scope<'lua,'scope> {
     A: FromLuaMulti<'callback>,
     R: ToLuaMulti<'callback>,
     F: 'scope + FnMut(&'callback Lua, A) -> Result<R> {
-		self.create_function_mut(move |lua, a| func(lua,a).to_lua_err())
+		self.create_function_mut(move |lua, a| func(lua,a).into_lua_result())
 	}
 }
 /// A newtype around [`mlua::Value`], allowing us to implement various
@@ -2684,7 +2701,7 @@ impl<'a> PullRow<'a> {
 		} else {
 			format!(r#"select "id", {cols} from "{schema}" where "id"=?"#)
 		};
-		println!("creating pull row for {schema}:\n{sql}");
+// 		println!("creating pull row for {schema}:\n{sql}");
 		db.prepare(sql).map(Self)
 	}
 }
@@ -2701,11 +2718,10 @@ struct PullState<'lua,'s> {
 impl RecurseState<PullRow<'_>> for PullState<'_,'_> {
 	fn exec(&self, pull: &mut PullRow<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		let Self { lua, query_name, .. } = self;
-		println!("running pull row('{query_name}'): currently at {name}, level {lvl}", lvl=self.level);
+// 		println!("running pull row('{query_name}'): currently at {name}, level {lvl}", lvl=self.level);
 		if self.level == 0 && name != self.query_name {
 			return Ok(())
 		}
-		println!("  still at {name}");
 		let table = match self.parent_table.as_ref() {
 			None => return Ok(()),
 			Some(t) => t
@@ -2719,7 +2735,7 @@ impl RecurseState<PullRow<'_>> for PullState<'_,'_> {
 		let mut rows = pull.0.query((id,))
 			.with_context(||format!("reading resource from '{query_name}' with value {id:?}"))?;
 		while let Some(row) = rows.next()? {
-			println!("read a row: {}", row.dump_to_string());
+// 			println!("read a row: {}", row.dump_to_string());
 			let table = lua.create_table()?;
 			let mut row_id = rusqlite::types::Value::Null;
 			for i in 0..row.as_ref().column_count() {
@@ -2825,7 +2841,8 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 	}
 	fn row_exists(&mut self, id: &Value<'_>)->Result<bool> {
 		if let Value::Nil = id { return Ok(false) }
-		Ok(self.exists.query_row((), |row| Ok(row.get::<_,usize>(0)? > 0))?)
+		self.exists.query_row((LuaValueRef(id),), |row| Ok(row.get::<_,usize>(0)? > 0))
+			.context("check if row exists")
 	}
 	fn update_values(&mut self, source: &mlua::Table<'_>, position: usize, id: &Value<'_>)->Result<()> {
 		let id_sql = LuaValueRef(id);
@@ -2837,7 +2854,8 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 				// the update does nothing if the value does not change
 				// (our sql triggers take care of this)
 				let val: Value<'_> = source.get(*fname)?;
-				stmt.execute((id_sql, LuaValueRef(&val),))?;
+				stmt.execute((id_sql, LuaValueRef(&val),))
+					.with_context(||format!("updating field:{fname}"))?;
 			}
 		}
 		Ok(())
@@ -2852,16 +2870,21 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		//  - return id from last_insert_rowid()
 		// TODO: implement this distinction in `new`
 		for (i, Field { fname, .. }) in self.schema.push_insert().enumerate() {
+			let j = i+1;
 			if fname == "parent" {
-				self.insert.raw_bind_parameter(i+1, LuaValueRef(parent))?;
+				self.insert.raw_bind_parameter(j, LuaValueRef(parent))
+					.with_context(||format!("bind 'parent' at one-index {j}"))?;
 			} else if fname == "position" {
-				self.insert.raw_bind_parameter(i+1, position)?;
+				self.insert.raw_bind_parameter(j, position)
+					.with_context(||format!("bind 'position' at one-index {j}"))?;
 			} else {
 				let val: Value<'_> = source.get(fname)?;
-				self.insert.raw_bind_parameter(i+1, LuaValueRef(&val))?;
+				self.insert.raw_bind_parameter(j, LuaValueRef(&val))
+					.with_context(||format!("bind '{fname}' at one-index {j}"))?;
 			}
 		}
-		self.insert.raw_execute()?;
+		self.insert.raw_execute()
+			.context("execute INSERT statement")?;
 		if self.schema.is_subresource() {
 			Ok(Value::Integer(self.db.last_insert_rowid()))
 		} else {
@@ -2870,13 +2893,16 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 	}
 	fn save<'lua>(&mut self, source: &mlua::Table<'lua>, parent_id: &Value<'_>, position: usize)->Result<Value<'lua>> {
 		let id: Value<'_> = source.get("id")?;
-		if self.row_exists(&id)? {
-			println!("   row exists! updating");
-			self.update_values(source, position, &id)?;
+		if self.row_exists(&id)
+			.with_context(||format!("check if row {:?} exists", id.to_sql_value()))? {
+// 			println!("   row exists! updating");
+			self.update_values(source, position, &id)
+				.with_context(||format!("updating existing row with id {:?}", id.to_sql_value()))?;
 			Ok(id)
 		} else {
-			println!("   row does not exist! inserting...");
-			self.insert_new(source, parent_id, position, id)
+// 			println!("   row does not exist! inserting...");
+			self.insert_new(source, parent_id, position, id.clone())
+				.with_context(||format!("inserting new row with id {:?}", id.to_sql_value()))
 		}
 	}
 }
@@ -2913,13 +2939,14 @@ struct PushState<'lua,'s> {
 }
 impl<'lua> PushState<'lua,'_> {
 	fn save_rec<T: DbInterface>(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+// 		println!("\x1b[32m in recurse_itr_mut: {}\x1b[m", self.query_name);
 		let row_id = save_row.save(&resource, &self.parent_id, position)
 			.with_context(||format!("save resource as row in '{}'", self.query_name))?;
-		println!("\x1b[1min save_rec (parent = {:?}), we got the following table:\x1b[m ", LuaValueRef(&self.parent_id));
-		for pair in resource.clone().pairs::<Value<'_>,Value<'_>>() {
-			let (k, v) = pair?;
-			println!("  {:?}: {:?}", LuaValueRef(&k), LuaValueRef(&v));
-		}
+// 		println!("\x1b[32min save_rec (parent = {:?}), we got the following table:\x1b[m ", LuaValueRef(&self.parent_id));
+// 		for pair in resource.clone().pairs::<Value<'_>,Value<'_>>() {
+// 			let (k, v) = pair?;
+// 			println!("  {:?}: {:?}", LuaValueRef(&k), LuaValueRef(&v));
+// 		}
 		let new_state = Self {
 			level: self.level+1, parent_id: row_id,
 			lua: self.lua, resource,
@@ -2930,9 +2957,9 @@ impl<'lua> PushState<'lua,'_> {
 }
 impl<T: DbInterface> RecurseState<PushRow<'_,T>> for PushState<'_,'_> {
 	fn exec(&self, save_row: &mut PushRow<'_,T>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
-		println!("*** ({level}) {sch} parent={id:?}", level=self.level,
-			sch=save_row.schema,
-			id=self.parent_id.to_sql_value()?);
+// 		println!("*** ({level}) {sch} parent={id:?}", level=self.level,
+// 			sch=save_row.schema,
+// 			id=self.parent_id.to_sql_value()?);
 		// Special case: at the first level we save a single resource, not a
 		// vector:
 		if self.level == 0 {
@@ -3192,9 +3219,6 @@ use arguments::*;
 
 
 fn main() -> Result<()> {
-// 	use crate::trees::{ALL_SCHEMAS,ResourceTree};
-// 	println!("{:?}", *ALL_SCHEMAS);
-// 	if 1 > 0 { return Ok(nothing) }
 	let mut options = RuntimeOptions::parse();
 	if options.database.is_none() {
 		options.database = Some(Path::new("game.sqlite").into());
