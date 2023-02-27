@@ -1148,15 +1148,15 @@ impl Schema {
 	pub fn create_main_view(&self)->String {
 		let mut sql = format!(r#"create view "{self}" as
 	select "source"."id""#);
-		let source_position: &'static str;
+		let header: &'static str;
 		if let Some((parent, _root)) = &self.parent_root {
-			source_position = r#""parent", "position", "#;
+			header = r#""parent", "position", "#;
 			uwrite!(&mut sql, r#",
 	"{parent}"."root" as "root",
 	"source"."parent" as "parent",
 	"source"."position" as "position""#);
 		} else {
-			source_position = "";
+			header = "";
 			uwrite!(&mut sql, r#",
 	"source"."id" as "root""#);
 		}
@@ -1166,7 +1166,7 @@ impl Schema {
 		}
 		uwrite!(&mut sql, r#"
 from
-	(select "id", {source_position}{fields} from "load_{self}" union select "id", {source_position}{fields} from "add_{self}")
+	(select "id", {header}{fields} from "load_{self}")
 as "source""#, fields = self.payload());
 		if let Some((parent, _root)) = &self.parent_root {
 			uwrite!(&mut sql, r#"
@@ -1216,19 +1216,13 @@ left join "strref_dict" as {b} on {a} = {b}."native""#);
 	/// - `save_{name}`: the view used to save new or modified values to
 	/// game files.
 	pub fn create_tables_and_views<T>(&self, f: impl Fn(String)->Result<T>)->Result<()> {
-		// read-only table of initial resources:
-		f(self.create_table(format!("load_{self}"), NullDisplay()))?;
-		// table of resources inserted by mods:
-		// (the extra field designates the mod)
-		f(self.create_table(format!("add_{self}"), r#", "source" text"#))?;
-		if self.is_subresource() {
-			// we simulate a primary key in sync with that from the load_* table:
-			f(format!(r#"create trigger "gen_id_{self}"
-after insert on "add_{self}"
+		// base table for initial values of resources:
+		f(self.create_table(format!("load_{self}"), r#", "source" text"#))?;
+		f(format!(r#"create view "add_{self}" as select * from "load_{self}" where "source" is not null"#))?;
+		f(format!(r#"create trigger "add_{self}_del" instead of delete on "add_{self}"
 begin
-	update "add_{self}" set "id"=(select "{self}" from "counters") where rowid=new.rowid;
-end;"#))?;
-		}
+	delete from "load_{self}" where "id"=old."id";
+end"#))?;
 		// table of fields edited by mods:
 		f(format!(r#"create table "edit_{self}" ("source" text, "line", "field" text, "value")"#))?;
 		f(self.create_main_view())?;
@@ -1239,7 +1233,7 @@ end;"#))?;
 			// only for top-level resource: create the dirty and orphan tables
 			f(format!(r#"create table "dirty_{self}" ("name" text primary key on conflict ignore)"#))?;
 			f(format!(r#"create table "orphan_{self}" ("name" text primary key on conflict ignore)"#))?;
-			f(format!(r#"create trigger "orphan_{self}" after delete on "add_{self}"
+			f(format!(r#"create trigger "orphan_{self}" after delete on "load_{self}"
 begin
 	insert into "orphan_{self}" values (old."id");
 end"#))?;
@@ -1278,16 +1272,16 @@ r#"create trigger "insert_{self}"
 instead of insert on "{self}"
 begin
 	{trans_insert}
-	insert into "add_{self}" ({cols}) values ({newcols});
+	insert into "load_{self}" ("source", {cols}) values ((select "component" from "global"), {newcols});
 	insert or ignore into "dirty_{root}" values (new."root");
 end"#))?;
-	// TODO: add id, (parent, position if applicable)
+	// XXX: check that we do not remove base game resources!
 		f(format!(
 r#"create trigger "delete_{self}"
 instead of delete on "{self}"
 begin
 	insert or ignore into "dirty_{root}" values (old."root");
-	delete from "add_{self}" where "id" = old."id";
+	delete from "load_{self}" where "id" = old."id";
 end"#))?;
 		f(format!(
 r#"create trigger "undo_{self}"
@@ -2425,7 +2419,7 @@ use crate::prelude::*;
 use crate::trees::{ALL_SCHEMAS,ByName,Recurse,RecurseState,RecurseItr};
 use crate::resources::{RootForest};
 use crate::schemas::{FieldType,Field,Schema};
-use crate::sql_rows::{AsParams};
+use crate::sql_rows::{AsParams,Row_Ext};
 /// Small simplification for frequent use in callbacks.
 macro_rules! fail {
 	($($a:tt)+) => { return Err(Error::$($a)+.into()) }
@@ -2865,25 +2859,28 @@ impl<'a> PullRow<'a> {
 		} else {
 			format!(r#"select "id", {cols} from "{schema}" where "id"=?"#)
 		};
+		println!("creating pull row for {schema}:\n{sql}");
 		db.prepare(sql).map(Self)
 	}
 }
 /// A struct implementing the construction of a full resource (as a Lua
 /// table-of-tables) from the database.
 #[derive(Debug)]
-struct Pull<'lua,'s> {
+struct PullState<'lua,'s> {
 	lua: &'lua Lua,
 	parent_table: Option<mlua::Table<'lua>>,
 	parent_id: Option<rusqlite::types::Value>,
 	query_name: &'s str,
 	level: usize,
 }
-impl RecurseState<PullRow<'_>> for Pull<'_,'_> {
+impl RecurseState<PullRow<'_>> for PullState<'_,'_> {
 	fn exec(&self, pull: &mut PullRow<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		let Self { lua, query_name, .. } = self;
+		println!("running pull row('{query_name}'): currently at {name}, level {lvl}", lvl=self.level);
 		if self.level == 0 && name != self.query_name {
 			return Ok(())
 		}
+		println!("  still at {name}");
 		let table = match self.parent_table.as_ref() {
 			None => return Ok(()),
 			Some(t) => t
@@ -2896,6 +2893,7 @@ impl RecurseState<PullRow<'_>> for Pull<'_,'_> {
 		table.set(name, list.clone())?;
 		let mut rows = pull.0.query((id,))?;
 		while let Some(row) = rows.next()? {
+			println!("read a row: {}", row.dump_to_string());
 			let table = lua.create_table()?;
 			let mut row_id = rusqlite::types::Value::Null;
 			for i in 0..row.as_ref().column_count() {
@@ -2935,7 +2933,7 @@ impl IntoCallback<'_> for RootForest<PullRow<'_>> {
 		}
 		let query_name = pop_arg_as::<String>(&mut args, lua)
 			.context("first argument (table name) must be a string")?;
-		let init = Pull {
+		let init = PullState {
 			lua, level: 0, query_name: &query_name,
 			parent_table: Some(lua.create_table()?),
 			parent_id: Some(args.pop_front().unwrap().to_sql_value()?),
@@ -3075,7 +3073,7 @@ impl<T: DbInterface> IntoCallback<'_> for RootForest<PushRow<'_,T>> {
 			.context("first argument (table name) must be a string")?;
 		let resource = pop_arg_as::<mlua::Table<'_>>(&mut args, lua)
 			.context("second argument (resource) must be a table")?;
-		let init = Push {
+		let init = PushState {
 			lua, level: 0, query_name: &query_name,
 			resource, parent_id: mlua::Value::Nil,
 		};
@@ -3087,7 +3085,7 @@ impl<T: DbInterface> IntoCallback<'_> for RootForest<PushRow<'_,T>> {
 /// The state for pushing a resource to database. Implements
 /// [`RecurseState`].
 #[derive(Debug)]
-struct Push<'lua,'s> {
+struct PushState<'lua,'s> {
 	lua: &'lua Lua,
 	/// The parent resource from which we are reading.
 	resource: mlua::Table<'lua>,
@@ -3095,7 +3093,7 @@ struct Push<'lua,'s> {
 	query_name: &'s str,
 	level: usize,
 }
-impl<'lua> Push<'lua,'_> {
+impl<'lua> PushState<'lua,'_> {
 	fn save_rec<T: DbInterface>(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		let row_id = save_row.save(&resource, &self.parent_id, position)?;
 		println!("\x1b[1min save_rec (parent = {:?}), we got the following table:\x1b[m ", LuaValueRef(&self.parent_id));
@@ -3111,7 +3109,7 @@ impl<'lua> Push<'lua,'_> {
 		descend(&new_state)
 	}
 }
-impl<T: DbInterface> RecurseState<PushRow<'_,T>> for Push<'_,'_> {
+impl<T: DbInterface> RecurseState<PushRow<'_,T>> for PushState<'_,'_> {
 	fn exec(&self, save_row: &mut PushRow<'_,T>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		println!("*** ({level}) {sch} parent={id:?}", level=self.level,
 			sch=save_row.schema,
@@ -3175,10 +3173,10 @@ impl<'a> LuaStatements<'a> {
 ///  - list("item_abilities", "sw1h34") etc.
 /// All code with a higher level is written in lua and loaded from the
 /// "init.lua" file.
-pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
-	use crate::sql_rows::Row_Ext;
+pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
+	db.execute(r#"update "global" set "component"=?"#, (target,))?;
 	let mut statements = LuaStatements::new(&db)?;
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:

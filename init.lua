@@ -355,18 +355,14 @@ function test_inherit()
 	local albruin = setmetatable({_table="items", _key="sw1h34"}, all_resources_mt.items)
 	albruin:foo()
 end
-albruin = resource_mt.load("items", "sw1h34")
-print(albruin.id)
--- albruin.id = "no such id"
-albruin.name = "New name"
--- dump(albruin.effects)
-x = (simod.pull("items", "sw1h34"))
+albruin = (simod.pull("items", "sw1h34"))
+dump(albruin)
 print("---- dumping read of items sw1h34: -----")
-for k, v in pairs(x) do
+for k, v in pairs(albruin) do
 	print(k, v)
 end
 print("---- done")
-for k, v in pairs(x.abilities) do
+for k, v in pairs(albruin.abilities) do
 	print("abilities", k, v, v.use_icon)
 	for k, v in pairs(v.effects) do
 		print("", "effects", k, v, v.opcode)
