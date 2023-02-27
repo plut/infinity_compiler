@@ -2455,6 +2455,15 @@ impl<'lua> Value<'lua> {
 	}
 }
 #[ext]
+impl Lua {
+	/// Variant of [`Lua.scope`] accepting [`anyhow::Error`] as an error type.
+	fn scope_any<'lua: 'scope, 'scope, R: 'static, F>(&'lua self, f: F) -> mlua::Result<R>
+	where F: FnOnce(&mlua::Scope<'lua, 'scope>) -> Result<R> {
+		self.scope(move |scope| f(scope).to_lua_err())
+	}
+}
+
+#[ext]
 impl<'lua,'scope> mlua::Scope<'lua,'scope> {
 	/// An extension to `create_function`, accepting any
 	/// `mlua::ExternalError` error type.
@@ -2869,7 +2878,6 @@ impl<'a, T: Callback<'a>+'a+Sized> RootForest<T> {
 // 	}
 		table.set(name, scope.create_fn_mut(move |lua, args| {
 			let r = self.execute(lua, args);
-			// `to_lua_err()` does not display full backtrace:
 			if r.is_err() { eprintln!("{r:?}"); }
 			r.with_context(|| format!(r#"In callback "{name}":"#))
 		})?)
@@ -3201,7 +3209,7 @@ pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 	let mut statements = LuaStatements::new(&db)?;
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
-	lua.scope(|scope| {
+	lua.scope_any(|scope| {
 		// lua schema is defined by a table of strings in the following way:
 		// items= { weight= "integer", name= "strref", abilities= "subresource" }
 		// since we known in advance that a lot of those strings will be
@@ -3259,15 +3267,14 @@ pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 			any_ok(())
 		})?)?;
 		simod.set("pull", ALL_SCHEMAS
-			.try_map(|schema| PullRow::new(&db, schema)).to_lua_err()?
+			.try_map(|schema| PullRow::new(&db, schema))?
 			.into_callback(scope)?)?;
-		let last_insert = db.prepare(r#"select "last_insert" from "global""#)
-			.to_lua_err()?;
+		let last_insert = db.prepare(r#"select "last_insert" from "global""#)?;
 		simod.set("push", (last_insert, ALL_SCHEMAS
-			.try_map(|schema| PushRow::new(&db, schema)).to_lua_err()?)
+			.try_map(|schema| PushRow::new(&db, schema))?)
 			.into_callback(scope)?)?;
 		simod.set("list", ALL_SCHEMAS
-			.try_map(|schema| ListKeys::prepare(&db, schema)).to_lua_err()?
+			.try_map(|schema| ListKeys::prepare(&db, schema))?
 			.into_callback(scope)?)?;
 
 		statements.select_row.install_callback(scope, &simod, "select")?;
