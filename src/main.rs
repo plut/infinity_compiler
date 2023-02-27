@@ -2804,9 +2804,9 @@ impl<'a> Callback<'a> for NextKey<'a> {
 	}
 }
 
-trait IntoCallback: Sized {
-	type RetType<'lua>: ToLuaMulti<'lua>;
-	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Self::RetType<'lua>>;
+trait IntoCallback<'a>: Sized {
+	type Ret<'lua>: ToLuaMulti<'lua>;
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Self::Ret<'lua>>;
 	/// The wrapper installing the callback function in a table.
 	/// FIXME: replace this by a `ToLua` impl (storing the scope ref as a
 	/// part of the object itself)
@@ -2816,28 +2816,25 @@ trait IntoCallback: Sized {
 		})
 	}
 }
-/// This extension trait allows factoring the code for selecting the
-/// appropriate table for a Lua callback.
-/// Once this is done, the individual [`Callback`] instance for this
-/// table is run.
-impl<'a, T: Callback<'a>+'a + Sized> RootForest<T> {
-	fn prepare(db: &'a impl DbInterface)->Result<Self> where Self: Sized {
-		ALL_SCHEMAS.try_map(|s| T::prepare(db, s))
-	}
+impl<'a, T: Callback<'a>> IntoCallback<'a> for RootForest<T> {
+	type Ret<'lua> = T::RetType<'lua>;
 	/// Selects the appropriate individual callback from the first argument
 	/// (table name) and runs it.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<T::RetType<'lua>> {
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Self::Ret<'lua>> {
 		let table = pop_arg_as::<String>(&mut args, lua)
 			.context("first argument must be a string")?;
 		self.by_name_mut(&table)?
 			.execute(lua, args)
 			.with_context(|| format!(r#"executing callback on table "{table}""#))
 	}
-	/// The wrapper installing the callback function in a table.
-	fn into_callback<'scope,'lua>(mut self, scope: &mlua::Scope<'lua,'scope>)->mlua::Result<mlua::Function<'lua>> where Self: 'scope {
-		scope.create_function_mut(move |lua,args| {
-			self.execute(lua,args).to_lua_err()
-		})
+}
+/// This extension trait allows factoring the code for selecting the
+/// appropriate table for a Lua callback.
+/// Once this is done, the individual [`Callback`] instance for this
+/// table is run.
+impl<'a, T: Callback<'a>+'a+Sized> RootForest<T> {
+	fn prepare(db: &'a impl DbInterface)->Result<Self> where Self: Sized {
+		ALL_SCHEMAS.try_map(|s| T::prepare(db, s))
 	}
 	#[allow(single_use_lifetimes,unused_lifetimes)]
 	fn install_callback<'lua,'scope,'x:'scope,'d>(&'x mut self, scope: &mlua::Scope<'lua,'scope>,
@@ -2859,14 +2856,16 @@ impl<'a, T: Callback<'a>+'a + Sized> RootForest<T> {
 	}
 }
 
-impl Schema {
-	fn pull_sql(&self)->String {
-		match self.parent_root {
-			None =>
-			format!(r#"select "id", {cols} from "{self}" where "id"=?"#, cols = self.payload()),
-			Some(_) =>
-			format!(r#"select "id", {cols} from "{self}" where "parent"=? order by "position""#, cols = self.payload()),
-		}
+struct PullRow<'a>(Statement<'a>);
+impl<'a> PullRow<'a> {
+	fn new(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+		let cols = schema.payload();
+		let sql = if schema.is_subresource() {
+			format!(r#"select "id", {cols} from "{schema}" where "parent"=? order by "position""#)
+		} else {
+			format!(r#"select "id", {cols} from "{schema}" where "id"=?"#)
+		};
+		db.prepare(sql).map(Self)
 	}
 }
 /// A struct implementing the construction of a full resource (as a Lua
@@ -2879,8 +2878,8 @@ struct Pull<'lua,'s> {
 	query_name: &'s str,
 	level: usize,
 }
-impl RecurseState<Statement<'_>> for Pull<'_,'_> {
-	fn exec(&self, stmt: &mut Statement<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+impl RecurseState<PullRow<'_>> for Pull<'_,'_> {
+	fn exec(&self, pull: &mut PullRow<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		let Self { lua, query_name, .. } = self;
 		if self.level == 0 && name != self.query_name {
 			return Ok(())
@@ -2895,7 +2894,7 @@ impl RecurseState<Statement<'_>> for Pull<'_,'_> {
 		};
 		let list = lua.create_table()?;
 		table.set(name, list.clone())?;
-		let mut rows = stmt.query((id,))?;
+		let mut rows = pull.0.query((id,))?;
 		while let Some(row) = rows.next()? {
 			let table = lua.create_table()?;
 			let mut row_id = rusqlite::types::Value::Null;
@@ -2920,35 +2919,38 @@ impl RecurseState<Statement<'_>> for Pull<'_,'_> {
 		Ok(())
 	}
 }
-/// Recursively builds a resource as a Lua table.
-/// Sub-resources are collected in array fields of the returned table.
-///
-/// This takes as input a select statement tree, organized in the
-/// following way:
-///  - top resources: `select id,[payload] from [table] where 'id'=?`;
-///  - sub-resources: `select id,[payload] from [table] where 'parent'=?
-///    order by position`.
-fn read_rec<'lua>(branches: &mut RootForest<Statement<'_>>, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
-	if args.len() != 2 {
-		return Err(Error::BadArgumentNumber { expected: 2, found: args.len() }.into())
+impl IntoCallback<'_> for RootForest<PullRow<'_>> {
+	type Ret<'lua> = Value<'lua>;
+	/// Recursively builds a resource as a Lua table.
+	/// Sub-resources are collected in array fields of the returned table.
+	///
+	/// This takes as input a select statement tree, organized in the
+	/// following way:
+	///  - top resources: `select id,[payload] from [table] where 'id'=?`;
+	///  - sub-resources: `select id,[payload] from [table] where 'parent'=?
+	///    order by position`.
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
+		if args.len() != 2 {
+			return Err(Error::BadArgumentNumber { expected: 2, found: args.len() }.into())
+		}
+		let query_name = pop_arg_as::<String>(&mut args, lua)
+			.context("first argument (table name) must be a string")?;
+		let init = Pull {
+			lua, level: 0, query_name: &query_name,
+			parent_table: Some(lua.create_table()?),
+			parent_id: Some(args.pop_front().unwrap().to_sql_value()?),
+		};
+		self.recurse_itr_mut(&init, "")?;
+		let mut pairs = match init.parent_table {
+			None => return Ok(Value::Nil), // FIXME: or an error?
+			Some(t) => t.pairs::<String,mlua::Table<'_>>()
+		};
+		if let Some(kv) = pairs.next() {
+			let (_k, v) = kv?;
+			return Ok(v.pop::<Value<'_>>()?)
+		}
+		Ok(Value::Nil)
 	}
-	let query_name = pop_arg_as::<String>(&mut args, lua)
-		.context("first argument (table name) must be a string")?;
-	let init = Pull {
-		lua, level: 0, query_name: &query_name,
-		parent_table: Some(lua.create_table()?),
-		parent_id: Some(args.pop_front().unwrap().to_sql_value()?),
-	};
-	branches.recurse_itr_mut(&init, "")?;
-	let mut pairs = match init.parent_table {
-		None => return Ok(Value::Nil), // FIXME: or an error?
-		Some(t) => t.pairs::<String,mlua::Table<'_>>()
-	};
-	if let Some(kv) = pairs.next() {
-		let (_k, v) = kv?;
-		return Ok(v.pop::<Value<'_>>()?)
-	}
-	Ok(Value::Nil)
 }
 
 /// A structure encapsulating all the statements needed to update a
@@ -3063,6 +3065,24 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		}
 	}
 }
+impl<T: DbInterface> IntoCallback<'_> for RootForest<PushRow<'_,T>> {
+	type Ret<'lua> = ();
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<()> {
+		if args.len() != 2 {
+			return Err(Error::BadArgumentNumber { expected: 2, found: args.len() }.into())
+		}
+		let query_name = pop_arg_as::<String>(&mut args, lua)
+			.context("first argument (table name) must be a string")?;
+		let resource = pop_arg_as::<mlua::Table<'_>>(&mut args, lua)
+			.context("second argument (resource) must be a table")?;
+		let init = Push {
+			lua, level: 0, query_name: &query_name,
+			resource, parent_id: mlua::Value::Nil,
+		};
+		self.recurse_itr_mut(&init, "")?;
+		Ok(())
+	}
+}
 
 /// The state for pushing a resource to database. Implements
 /// [`RecurseState`].
@@ -3109,22 +3129,6 @@ impl<T: DbInterface> RecurseState<PushRow<'_,T>> for Push<'_,'_> {
 		}
 		Ok(())
 	}
-}
-/// Recursively saves a resource (as a Lua table) to database.
-fn push<'lua, T: DbInterface>(branches: &mut RootForest<PushRow<'_,T>>, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
-	if args.len() != 2 {
-		return Err(Error::BadArgumentNumber { expected: 2, found: args.len() }.into())
-	}
-	let query_name = pop_arg_as::<String>(&mut args, lua)
-		.context("first argument (table name) must be a string")?;
-	let resource = pop_arg_as::<mlua::Table<'_>>(&mut args, lua)
-		.context("second argument (resource) must be a table")?;
-	let init = Push {
-		lua, level: 0, query_name: &query_name,
-		resource, parent_id: mlua::Value::Nil,
-	};
-	branches.recurse_itr_mut(&init, "")?;
-	Ok(mlua::Value::Nil)
 }
 
 /// A collection of all the prepared SQL statements used for implementing
@@ -3226,29 +3230,23 @@ pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 			mlua_ok((fields, nothing))
 		}, "", &simod_schema)?;
 		simod.set("schema", simod_schema)?;
-		simod.set("dump", scope.create_function(
-		|_lua, (query,): (String,)| {
+		simod.set("dump", scope.create_function(|_lua, (query,): (String,)| {
 			debug!("lua called exec with query {query}");
 			let mut stmt = db.prepare(&query).to_lua_err()?;
 			let mut rows = stmt.query(()).to_lua_err()?;
 			while let Some(row) = rows.next().unwrap() {
 				row.dump();
 			}
-			mlua_ok(())
+			Ok(())
 		})?)?;
-		let mut pull_statements = ALL_SCHEMAS.try_map(|schema|
-			db.prepare(schema.pull_sql())
-		).to_lua_err()?;
-		simod.set("pull", scope.create_function_mut(move |lua, args| {
-			read_rec(&mut pull_statements, lua, args).to_lua_err()
-		})?)?;
-		let mut push_statements = ALL_SCHEMAS.try_map(|schema|
-			PushRow::new(&db, schema)
-		).to_lua_err()?;
-		simod.set("push", scope.create_function_mut(move |lua, args| {
-			push(&mut push_statements, lua, args).to_lua_err()
-		})?)?;
-		simod.set("list", RootForest::<ListKeys<'_>>::prepare(&db).to_lua_err()?
+		simod.set("pull", ALL_SCHEMAS
+			.try_map(|schema| PullRow::new(&db, schema)).to_lua_err()?
+			.into_callback(scope)?)?;
+		simod.set("push", ALL_SCHEMAS
+			.try_map(|schema| PushRow::new(&db, schema)).to_lua_err()?
+			.into_callback(scope)?)?;
+		simod.set("list", ALL_SCHEMAS
+			.try_map(|schema| ListKeys::prepare(&db, schema)).to_lua_err()?
 			.into_callback(scope)?)?;
 
 		statements.select_row.install_callback(scope, &simod, "select")?;
