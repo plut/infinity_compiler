@@ -3037,7 +3037,8 @@ pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 		lua.globals().set("simod", simod)?;
 
 		info!("loading file {lua_file:?}");
-		lua.load(lua_file).exec()?;
+		lua.load(lua_file).exec()
+			.with_context(||format!("loading Lua file \"{lua_file:?}\""))?;
 		Ok(())
 	})?;
 	Ok(())
@@ -3064,12 +3065,12 @@ fn save_resources(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	use crate::resources::*;
 	use crate::trees::ResourceIO;
 	let pb = Progress::new(2, "save all"); pb.as_ref().tick();
-	gamestrings::save(db, game)?;
+	gamestrings::save(db, game).context("saving game strings")?;
 	pb.inc(1);
 	let mut tables = ALL_SCHEMAS.try_map(|schema|
 		db.prepare(schema.select_dirty_sql())
 	)?;
-	Item::save_all_dirty(&mut tables.items, db, "items")?;
+	Item::save_all_dirty(&mut tables.items, db, "items").context("saving items")?;
 	pb.inc(1);
 	Ok(())
 }
@@ -3199,8 +3200,7 @@ fn main() -> Result<()> {
 		options.database = Some(Path::new("game.sqlite").into());
 	}
 	let game = GameIndex::new(&options.gamedir)
-		.with_context(|| format!("cannot initialize game from directory {:?}",
-		options.gamedir))?;
+		.with_context(|| format!("cannot initialize game from directory {:?}", options.gamedir))?;
 	let loglevel = match options.log_level {
 		0 => simplelog::LevelFilter::Off,
 		1 => simplelog::LevelFilter::Error,
