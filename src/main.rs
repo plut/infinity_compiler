@@ -3007,8 +3007,8 @@ impl<'s, T: DbInterface+Debug> PushRow<'s,T> {
 		// TODO: implement this distinction in `new`
 		for (i, Field { fname, .. }) in self.schema.push_insert().enumerate() {
 			if fname == "parent" {
-				println!(" set parent = {:?}", LuaValueRef(&parent));
-				self.insert.raw_bind_parameter(i+1, LuaValueRef(&parent))?;
+				println!(" set parent = {:?}", LuaValueRef(parent));
+				self.insert.raw_bind_parameter(i+1, LuaValueRef(parent))?;
 			} else if fname == "position" {
 				println!(" set position = {position}");
 				self.insert.raw_bind_parameter(i+1, position)?;
@@ -3117,10 +3117,10 @@ struct LuaStatements<'a> {
 // 	/// We keep an owned copy of the original table schemas.
 // 	schemas: AllResources<Schema>,
 	/// Prepared statements for `simod.list`.
-	list_keys: RootForest<ListKeys<'a>>,
+// 	list_keys: RootForest<ListKeys<'a>>,
 	select_row: RootForest<SelectRow<'a>>,
 // 	read_field: RootForest<ReadField<'a>>,
-	insert_row: RootForest<InsertRow<'a>>,
+// 	insert_row: RootForest<InsertRow<'a>>,
 	update_row: RootForest<UpdateRow<'a>>,
 	delete_row: RootForest<DeleteRow<'a>>,
 // 	next_key: RootForest<NextKey<'a>>,
@@ -3129,10 +3129,10 @@ impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface)->Result<Self> {
 		Ok(Self {
 // 			schemas,
-			list_keys: RootForest::<_>::prepare(db)?,
+// 			list_keys: RootForest::<_>::prepare(db)?,
 			select_row: RootForest::<_>::prepare(db)?,
 // 			read_field: RootForest::<_>::prepare(db)?,
-			insert_row: RootForest::<_>::prepare(db)?,
+// 			insert_row: RootForest::<_>::prepare(db)?,
 			update_row: RootForest::<_>::prepare(db)?,
 			delete_row: RootForest::<_>::prepare(db)?,
 // 			next_key: RootForest::<_>::prepare(db)?,
@@ -3155,6 +3155,8 @@ pub fn command_add(db: impl DbInterface+Debug, _target: &str)->Result<()> {
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
 	let mut statements = LuaStatements::new(&db)?;
+	let mut list_keys = RootForest::<ListKeys<'_>>::prepare(&db)
+		.to_lua_err()?;
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
 	lua.scope(|scope| {
@@ -3227,7 +3229,7 @@ pub fn command_add(db: impl DbInterface+Debug, _target: &str)->Result<()> {
 		simod.set("push", scope.create_function_mut(move |lua, args| {
 			push(&mut push_statements, lua, args).to_lua_err()
 		})?)?;
-		statements.list_keys.install_callback(scope, &simod, "list")?;
+		list_keys.install_callback(scope, &simod, "list")?;
 		statements.select_row.install_callback(scope, &simod, "select")?;
 // 		statements.read_field.install_callback(scope, &simod, "get")?;
 // 		statements.insert_row.install_callback(scope, &simod, "insert")?;
