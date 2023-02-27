@@ -2393,6 +2393,131 @@ begin"#);
 }
 
 } // mod database
+pub mod lua_extensions {
+//! This mod groups a number of extension traits to common `mlua` types,
+//! written to have a smoother interface with the remainder of the
+//! program.
+use crate::prelude::*;
+use mlua::{Lua,Value,MultiValue,FromLua,ToLuaMulti,FromLuaMulti,ExternalResult};
+use rusqlite::{ToSql,types::{ToSqlOutput}};
+pub fn mlua_ok<T>(a: T)->mlua::Result<T> { Ok::<_,mlua::Error>(a) }
+#[ext]
+pub impl<'lua> Value<'lua> {
+	/// Conversion to SQL.
+	/// We need this as (1) a tool for impl of [`ToLua`] for a newtype
+	/// around [`Value`], and (2) to decouple the lifetime of the
+	/// resulting `ToSqlOutput` from the incoming reference
+	/// (since we are producing owned values here, we can use `'static`).
+	///
+	/// Note that this is almost costless: most values are integers anyway,
+	/// and strings need copying from Lua to ensure UTF-8 validity.
+	fn to_sql_value(&self)->rusqlite::Result<rusqlite::types::Value> {
+		Ok(match self {
+			Value::Nil => rusqlite::types::Null.into(),
+			Value::Boolean(b) => (*b).into(),
+			Value::Integer(n) => (*n).into(),
+			Value::Number(x) => (*x).into(),
+			// TODO: replace unwrap() by map_err()
+			Value::String(ref s) => s.to_str().unwrap().to_owned().into(),
+		// TODO: use proper error
+			e => return Err(rusqlite::Error::InvalidParameterName(
+				format!("cannot convert {e:?} to a SQL type")))
+		})
+	}
+}
+#[ext]
+pub impl Lua {
+	/// Variant of [`Lua.scope`] accepting [`anyhow::Error`] as an error type.
+	fn scope_any<'lua: 'scope, 'scope, R: 'static, F>(&'lua self, f: F) -> mlua::Result<R>
+	where F: FnOnce(&mlua::Scope<'lua, 'scope>) -> Result<R> {
+		self.scope(move |scope| f(scope).to_lua_err())
+	}
+}
+#[ext]
+pub impl<'lua,'scope> mlua::Scope<'lua,'scope> {
+	/// An extension to `create_function`, accepting any
+	/// `mlua::ExternalError` error type.
+	fn create_fn<'callback, A, R, F>(&'callback self, func: F)
+	-> mlua::Result<mlua::Function<'lua>>
+	where
+    A: FromLuaMulti<'callback>,
+    R: ToLuaMulti<'callback>,
+    F: 'scope + Fn(&'callback Lua, A) -> Result<R> {
+		self.create_function(move |lua, a| func(lua,a).to_lua_err())
+	}
+	/// An extension to `create_function_mut`, accepting any
+	/// `mlua::ExternalError` error type.
+	fn create_fn_mut<'callback, A, R, F>(&'callback self, mut func: F)
+		-> mlua::Result<mlua::Function<'lua>>
+	where
+    A: FromLuaMulti<'callback>,
+    R: ToLuaMulti<'callback>,
+    F: 'scope + FnMut(&'callback Lua, A) -> Result<R> {
+		self.create_function_mut(move |lua, a| func(lua,a).to_lua_err())
+	}
+}
+/// A newtype around [`mlua::Value`], allowing us to implement various
+/// extra traits: [`rusqlite::ToSql`], custom [`Debug`] etc.
+///
+/// This would be more properly written with *two* lifetime parameters
+/// `'a` and `'lua`, but we have no use for this right now, so for the
+/// sake of simplicity we keep only the shortest lifetime `'a`.
+#[derive(Clone,Copy)]
+pub struct LuaValueRef<'a>(pub &'a Value<'a>);
+impl<'a> From<&'a Value<'a>> for LuaValueRef<'a> {
+	fn from(source: &'a Value<'a>)->Self { Self(source) }
+}
+impl Debug for LuaValueRef<'_> {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+		match self.0 {
+			Value::String(s) => f.write_str(&s.to_string_lossy()),
+			x => write!(f, "{x:?}"),
+		}
+	}
+}
+impl ToSql for LuaValueRef<'_> {
+	fn to_sql(&self)->rusqlite::Result<ToSqlOutput<'_>> {
+		Ok(ToSqlOutput::Owned(self.0.to_sql_value()?))
+	}
+}
+
+/// Value conversion in the Sql->Lua direction.
+///
+/// Note that this function needs access to the `[mlua::Lua]` instance so
+/// that it may allocate strings.
+pub fn sql_to_lua<'lua>(v: rusqlite::types::ValueRef<'_>, lua: &'lua Lua)->Result<Value<'lua>> {
+	use rusqlite::types::{ValueRef::*};
+	match v {
+		Null => Ok(Value::Nil),
+		Integer(n) => Ok(Value::Integer(n)),
+		Real(x) => Ok(Value::Number(x)),
+		Text(s) => Ok(Value::String(lua.create_string(&s)?)),
+		_ => Err(rusqlite::types::FromSqlError::InvalidType.into()),
+	}
+}
+#[ext]
+pub impl<'lua> MultiValue<'lua> {
+	/// Helper function for reading arguments passed to Lua callbacks.
+	///
+	/// Reads an argument as the given `FromLua` type and returns it,
+	/// wrapped in a `Result`.
+	fn pop_as<T: FromLua<'lua>>(&mut self, lua:&'lua Lua)->Result<T> {
+		let arg0 = self.pop_front().ok_or(Error::CallbackMissingArgument)?;
+		let r = T::from_lua(arg0, lua).with_context(||
+			format!("cannot convert argument to type {}", std::any::type_name::<T>()))?;
+		Ok(r)
+	}
+}
+/// Small simplification for [`MultiValue`] impl of [`AsParams`].
+type MluaMultiIter<'a,'lua> = std::iter::Rev<std::slice::Iter<'a,Value<'lua>>>;
+impl<'lua> crate::sql_rows::AsParams for MultiValue<'lua> {
+	type Elt<'a> = LuaValueRef<'a> where Self: 'a;
+	type Iter<'a> = std::iter::Map<MluaMultiIter<'a,'lua>,fn(&'a Value<'lua>)->LuaValueRef<'a>> where Self: 'a;
+	fn params_iter(&self)->Self::Iter<'_> {
+		self.into_iter().map(LuaValueRef::from)
+	}
+}
+} // mod extensions
 pub mod lua_api {
 //! Loads mod-supplied Lua files.
 //!
@@ -2419,8 +2544,7 @@ pub mod lua_api {
 //! Any error occurring during execution of one of those functions
 //! (including SQL errors) is passed back to Lua in the form of a
 //! callback error.
-use mlua::{Lua,FromLua,ToLua,ToLuaMulti,ExternalResult,Value,MultiValue};
-use rusqlite::{ToSql, types::ToSqlOutput};
+use mlua::{Lua,ToLua,ToLuaMulti,Value,MultiValue};
 
 use std::collections::HashMap;
 
@@ -2429,122 +2553,9 @@ use crate::trees::{ALL_SCHEMAS,ByName,Recurse,RecurseState,RecurseItr};
 use crate::resources::{RootForest};
 use crate::schemas::{FieldType,Field,Schema};
 use crate::sql_rows::{AsParams,Row_Ext};
-fn mlua_ok<T>(a: T)->mlua::Result<T> { Ok::<_,mlua::Error>(a) }
-#[ext]
-impl<'lua> Value<'lua> {
-	/// Conversion to SQL.
-	/// We need this as (1) a tool for impl of [`ToLua`] for a newtype
-	/// around [`Value`], and (2) to decouple the lifetime of the
-	/// resulting `ToSqlOutput` from the incoming reference
-	/// (since we are producing owned values here, we can use `'static`).
-	///
-	/// Note that this is almost costless: most values are integers anyway,
-	/// and strings need copying from Lua to ensure UTF-8 validity.
-	fn to_sql_value(&self)->rusqlite::Result<rusqlite::types::Value> {
-		Ok(match self {
-			Value::Nil => rusqlite::types::Null.into(),
-			Value::Boolean(b) => (*b).into(),
-			Value::Integer(n) => (*n).into(),
-			Value::Number(x) => (*x).into(),
-			// TODO: replace unwrap() by map_err()
-			Value::String(ref s) => s.to_str().unwrap().to_owned().into(),
-		// TODO: use proper error
-			e => return Err(rusqlite::Error::InvalidParameterName(
-				format!("cannot convert {e:?} to a SQL type")))
-		})
-	}
-}
-#[ext]
-impl Lua {
-	/// Variant of [`Lua.scope`] accepting [`anyhow::Error`] as an error type.
-	fn scope_any<'lua: 'scope, 'scope, R: 'static, F>(&'lua self, f: F) -> mlua::Result<R>
-	where F: FnOnce(&mlua::Scope<'lua, 'scope>) -> Result<R> {
-		self.scope(move |scope| f(scope).to_lua_err())
-	}
-}
 
-#[ext]
-impl<'lua,'scope> mlua::Scope<'lua,'scope> {
-	/// An extension to `create_function`, accepting any
-	/// `mlua::ExternalError` error type.
-	fn create_fn<'callback, A, R, F>(&'callback self, func: F)
-	-> mlua::Result<mlua::Function<'lua>>
-	where
-    A: mlua::FromLuaMulti<'callback>,
-    R: ToLuaMulti<'callback>,
-    F: 'scope + Fn(&'callback Lua, A) -> Result<R> {
-		self.create_function(move |lua, a| func(lua,a).to_lua_err())
-	}
-	/// An extension to `create_function_mut`, accepting any
-	/// `mlua::ExternalError` error type.
-	fn create_fn_mut<'callback, A, R, F>(&'callback self, mut func: F)
-		-> mlua::Result<mlua::Function<'lua>>
-	where
-    A: mlua::FromLuaMulti<'callback>,
-    R: ToLuaMulti<'callback>,
-    F: 'scope + FnMut(&'callback Lua, A) -> Result<R> {
-		self.create_function_mut(move |lua, a| func(lua,a).to_lua_err())
-	}
-}
-/// A newtype around [`mlua::Value`], allowing us to implement various
-/// extra traits: [`rusqlite::ToSql`], custom [`Debug`] etc.
-///
-/// This would be more properly written with *two* lifetime parameters
-/// `'a` and `'lua`, but we have no use for this right now, so for the
-/// sake of simplicity we keep only the shortest lifetime `'a`.
-#[derive(Clone,Copy)]
-pub struct LuaValueRef<'a>(&'a Value<'a>);
-impl<'a> From<&'a Value<'a>> for LuaValueRef<'a> {
-	fn from(source: &'a Value<'a>)->Self { Self(source) }
-}
-impl Debug for LuaValueRef<'_> {
-	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
-		match self.0 {
-			Value::String(s) => f.write_str(&s.to_string_lossy()),
-			x => write!(f, "{x:?}"),
-		}
-	}
-}
-impl ToSql for LuaValueRef<'_> {
-	fn to_sql(&self)->rusqlite::Result<ToSqlOutput<'_>> {
-		Ok(ToSqlOutput::Owned(self.0.to_sql_value()?))
-	}
-}
+use crate::lua_extensions::*;
 
-/// Value conversion in the Sql->Lua direction.
-///
-/// Note that this function needs access to the `[mlua::Lua]` instance so
-/// that it may allocate strings.
-fn sql_to_lua<'lua>(v: rusqlite::types::ValueRef<'_>, lua: &'lua Lua)->Result<Value<'lua>> {
-	use rusqlite::types::{ValueRef::*};
-	match v {
-		Null => Ok(Value::Nil),
-		Integer(n) => Ok(Value::Integer(n)),
-		Real(x) => Ok(Value::Number(x)),
-		Text(s) => Ok(Value::String(lua.create_string(&s)?)),
-		_ => Err(rusqlite::types::FromSqlError::InvalidType.into()),
-	}
-}
-/// Helper function for reading arguments passed to Lua callbacks.
-///
-/// Reads an argument as the given `FromLua` type and returns it,
-/// wrapped in a `Result`.
-fn pop_arg_as<'lua, T: FromLua<'lua>>(args: &mut MultiValue<'lua>, lua:&'lua Lua)->Result<T> {
-	let arg0 = args.pop_front().ok_or(Error::CallbackMissingArgument)?;
-	let r = T::from_lua(arg0, lua).with_context(||
-		format!("cannot convert argument to type {}", std::any::type_name::<T>()))?;
-	Ok(r)
-}
-
-/// Small simplification for [`MultiValue`] impl of [`AsParams`].
-type MluaMultiIter<'a,'lua> = std::iter::Rev<std::slice::Iter<'a,Value<'lua>>>;
-impl<'lua> AsParams for MultiValue<'lua> {
-	type Elt<'a> = LuaValueRef<'a> where Self: 'a;
-	type Iter<'a> = std::iter::Map<MluaMultiIter<'a,'lua>,fn(&'a Value<'lua>)->LuaValueRef<'a>> where Self: 'a;
-	fn params_iter(&self)->Self::Iter<'_> {
-		self.into_iter().map(LuaValueRef::from)
-	}
-}
 /// A callback function, callable by Lua user code.
 ///
 /// This traits is for structs wrapping some per-table data (e.g. some
@@ -2609,192 +2620,6 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 		Ok(Value::Table(ret))
 	}
 }
-/// Implementation of the `simod.select` callback.
-#[derive(Debug)]
-struct SelectRow<'a>(Statement<'a>);
-impl<'a> Callback<'a> for SelectRow<'a> {
-	type RetType<'lua> = Value<'lua>;
-	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		// TODO
-		let cols = schema.payload();
-		let sql = format!(r#"select {cols} from "{schema}" where "id"=?"#);
-		db.prepare(sql).map(Self)
-	}
-	/// Implementation of `simod.list`.
-	///
-	/// This takes as parameters either
-	/// 1. the name of a top-level resource table, or
-	/// 2. the name of a sub-resource + a resref for the corresponding
-	///    top-level resource,
-	/// and returns in a Lua table the list of all primary keys matching
-	/// this condition.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
-		// (already used) table name
-		// 0 row id
-		Self::expect_arguments(&args, 2)?;
-		let arg1 = LuaValueRef(args.get(0).unwrap());
-		let mut rows = self.0.query((arg1,))?;
-		match rows.next()? {
-			Some(row) => {
-				let ret = lua.create_table()?;
-				for i in 0..row.as_ref().column_count() {
-					let val = row.get_ref(i)
-						.with_context(|| format!("cannot read field {i} in row"))?;
-					ret.set(row.as_ref().column_name(i)?, sql_to_lua(val, lua)?)?;
-				}
-				ret.set("id", args.pop_front().unwrap())?;
-				Ok(Value::Table(ret))
-			},
-			None => Ok(Value::Nil),
-		}
-	}
-}
-/// Implementation of `simod.read_field`.
-#[derive(Debug)]
-struct ReadField<'a>(HashMap<&'a str, Statement<'a>>);
-impl<'a> Callback<'a> for ReadField<'a> {
-	type RetType<'lua> = Value<'lua>;
-	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		let cols = schema.payload();
-		let mut h = HashMap::<&str, Statement<'_>>::with_capacity(cols.len());
-		for field in cols {
-			h.insert(field.fname, db.prepare(&format!(
-				r#"select {field} from "{schema}" where "id"=?"#))?);
-		}
-		Ok(Self(h))
-	}
-	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
-		Self::expect_arguments(&args, 3)?;
-		let arg0 = args.pop_front().unwrap(); // take ownership of first argument
-		let fieldname = match arg0 {
-			Value::String(ref s) => s.to_str()?,
-			other => fail!(BadArgumentType { position: 2, expected: "string",
-				found: format!("{other:?}")}),
-		};
-		let stmt = match self.0.get_mut(fieldname) {
-			Some(s) => s,
-			_ => fail!(UnknownField { field: fieldname.into(), }),
-		};
-		let arg1 = LuaValueRef(args.get(0).unwrap());
-		let mut rows = stmt.query((arg1,))?;
-		let row = match rows.next()? {
-			Some(row) => row,
-			None => fail!(RowNotFound { key: format!("{arg1:?}") }),
-		};
-		let val = row.get_ref(0)?;
-		sql_to_lua(val, lua)
-	}
-}
-/// Implementation of `simod.insert`.
-#[derive(Debug)]
-struct InsertRow<'a> {
-	/// The main insert statement.
-	insert: Statement<'a>,
-	/// The statement generating the rowid (for subresources only).
-	counter: Option<Statement<'a>>,
-	/// We also need a reference to the resource schema.
-	schema: &'a Schema,
-}
-impl<'a> Callback<'a> for InsertRow<'a> {
-	type RetType<'lua> = Value<'lua>;
-	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		let insert = schema.insert_sql((), "");
-		// TODO: use a restricted form of insertion where primary is not
-		// inserted
-		let counter = if schema.is_subresource() {
-			Some(db.prepare(format!(r#"select {schema} from "counters""#))?)
-		} else { None };
-		Ok(Self {
-			insert: db.prepare(insert)?,
-			counter,
-			schema,
-		})
-	}
-	fn execute<'lua>(&mut self, _lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
-		Self::expect_arguments(&args, 2)?;
-		let table = match args.pop_front().unwrap() {
-			Value::Table(t) => t,
-			other => fail!(BadArgumentType { position: 2, expected: "table",
-				found: format!("{other:?}")}),
-		};
-		let Self { insert, counter, schema } = self;
-		// We could use two strategies here:
-		// 1. build an iterator from schema.fields, then map to SQL values,
-		//    then pass to [`rusqlite::params_from_iter`],
-		// 2. use a loop and raw bind to the statement.
-		// Since [`rusqlite::params_from_iter`] does not accept `Result`
-		// values, taking option 2 will produce better failure messages.
-		let expected = insert.parameter_count();
-		let mut bind_field = |i, name| {
-			let v_lua: Value<'_> = table.get(name)?;
-			// Note that sqlite uses 1-based indexing.
-			insert.raw_bind_parameter(i+1, v_lua.to_sql_value()?)?;
-			any_ok(())
-		};
-		// first bind the header fields:
-		if schema.is_subresource() {
-			bind_field(0, "parent")?; // `position` added as part of `pos_payload`
-			counter.as_mut().unwrap().query_row((), |row| {
-				let c = row.get::<_,usize>(0)?;
-				println!("generated id: {c}");
-				table.set("id", c).expect("unable to bind to Lua table");
-				Ok(())
-			})?;
-		} else {
-			bind_field(0, "id")?;
-		}
-		let offset = 1;
-		let cols = schema.pos_payload();
-		let found = cols.len() + offset;
-		if found != expected {
-			fail!(BadParameterCount { expected, found })
-		}
-		for (i, field) in cols.enumerate() {
-			bind_field(i + offset, field.fname)?;
-		}
-		insert.raw_execute()?;
-		Ok(Value::Table(table))
-	}
-}
-/// Implementation of `simod.update`.
-///
-/// We collect all the per-field update statements in a hash map.
-/// While this might lead to preparing useless statements in the case of
-/// a small mod, this should save time for large mods on average,
-/// and using prepared statements is safer anyway.
-/// (Besides, the memory storage req for a prepared statement is small).
-#[derive(Debug)]
-struct UpdateRow<'a>(HashMap<&'a str, Statement<'a>>);
-impl<'a> Callback<'a> for UpdateRow<'a> {
-	type RetType<'lua> = Value<'lua>;
-	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		let itr = schema.pos_payload();
-		let mut h = HashMap::<&str, Statement<'_>>::with_capacity(itr.len());
-		// TODO: use position for subresources
-		for field in itr {
-			h.insert(field.fname, db.prepare(&format!(
-				r#"update "{schema}" set {field}=?2 where "id"=?1"#))?);
-		}
-		Ok(Self(h))
-	}
-	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
-		Self::expect_arguments(&args, 4)?;
-		let arg0 = args.pop_front().unwrap(); // take ownership of first argument
-		let fieldname = match arg0 {
-			Value::String(ref s) => s.to_str()?,
-			other => fail!(BadArgumentType { position: 2, expected: "string",
-				found: format!("{other:?}")}),
-		};
-		let stmt = match self.0.get_mut(fieldname) {
-			Some(s) => s,
-			_ => fail!(UnknownField { field: fieldname.into(), }),
-		};
-		// Return the number of changed rows:
-		let n = stmt.execute((LuaValueRef(args.get(0).unwrap()),
-			LuaValueRef(args.get(1).unwrap())))?;
-		Ok(n.to_lua(lua)?)
-	}
-}
 /// Implementation of `simod.delete`.
 #[derive(Debug)]
 struct DeleteRow<'a>(Statement<'a>);
@@ -2808,30 +2633,6 @@ impl<'a> Callback<'a> for DeleteRow<'a> {
 		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
 		let n = self.0.execute(args.as_params())?;
 		Ok((n > 0).to_lua(lua)?)
-	}
-}
-/// Implementation of `simod.next_key`.
-#[derive(Debug)]
-struct NextKey<'a>(Statement<'a>);
-impl<'a> Callback<'a> for NextKey<'a> {
-	type RetType<'lua> = MultiValue<'lua>;
-	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		db.prepare(&format!(r#"select "position","id" from "{schema}" where "parent"=?1 and "position">?2 order by "position" limit 1"#))
-			.map(Self)
-	}
-	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<MultiValue<'lua>> {
-		Self::expect_arguments(&args, 3)?;
-		let arg1 = LuaValueRef(args.get(0).unwrap());
-		let arg2 = LuaValueRef(args.get(1).unwrap());
-		let mut rows = self.0.query((arg1, arg2))?;
-		let row = match rows.next()? {
-			Some(row) => row,
-			None => return Ok(Value::Nil.to_lua_multi(lua)?),
-		};
-		let pos = row.get_ref(0)?;
-		let id = row.get_ref(1)?;
-		(sql_to_lua(pos, lua)?, sql_to_lua(id, lua)?).to_lua_multi(lua)
-			.context("create Lua multivalue")
 	}
 }
 
@@ -2850,37 +2651,11 @@ impl<'a, T: Callback<'a>> IntoCallback<'a> for RootForest<T> {
 	/// Selects the appropriate individual callback from the first argument
 	/// (table name) and runs it.
 	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Self::Ret<'lua>> {
-		let table = pop_arg_as::<String>(&mut args, lua)
+		let table = args.pop_as::<String>(lua)
 			.context("first argument must be a string")?;
 		self.by_name_mut(&table)?
 			.execute(lua, args)
 			.with_context(|| format!(r#"executing callback on table "{table}""#))
-	}
-}
-/// This extension trait allows factoring the code for selecting the
-/// appropriate table for a Lua callback.
-/// Once this is done, the individual [`Callback`] instance for this
-/// table is run.
-impl<'a, T: Callback<'a>+'a+Sized> RootForest<T> {
-	fn prepare(db: &'a impl DbInterface)->Result<Self> where Self: Sized {
-		ALL_SCHEMAS.try_map(|s| T::prepare(db, s))
-	}
-	#[allow(single_use_lifetimes,unused_lifetimes)]
-	fn install_callback<'lua,'scope,'x:'scope,'d>(&'x mut self, scope: &mlua::Scope<'lua,'scope>,
-		table: &mlua::Table<'d>, name: &'scope str)->mlua::Result<()> {
-// **NOTE**:
-// The lifetime parameters were determined after **a lot** of trial
-// and error....
-// So this code is **precious** and we keep it for future reference.
-// 	fn callback<'scope,'closure>(&'scope mut self, scope: &'closure mlua::Scope<'_,'scope>)->mlua::Result<mlua::Function<'closure>> {
-// 		scope.create_function_mut(|lua, args|
-// 			self.prepare(lua, args).to_lua_err())
-// 	}
-		table.set(name, scope.create_fn_mut(move |lua, args| {
-			let r = self.execute(lua, args);
-			if r.is_err() { eprintln!("{r:?}"); }
-			r.with_context(|| format!(r#"In callback "{name}":"#))
-		})?)
 	}
 }
 
@@ -2965,7 +2740,7 @@ impl IntoCallback<'_> for RootForest<PullRow<'_>> {
 		if args.len() != 2 {
 			return Err(Error::BadArgumentNumber { expected: 2, found: args.len() }.into())
 		}
-		let query_name = pop_arg_as::<String>(&mut args, lua)
+		let query_name = args.pop_as::<String>(lua)
 			.context("first argument (table name) must be a string")?;
 		let init = PullState {
 			lua, level: 0, query_name: &query_name,
@@ -3098,9 +2873,9 @@ impl<T: DbInterface> IntoCallback<'_> for (Statement<'_>, RootForest<PushRow<'_,
 		if args.len() != 2 {
 			return Err(Error::BadArgumentNumber { expected: 2, found: args.len() }.into())
 		}
-		let query_name = pop_arg_as::<String>(&mut args, lua)
+		let query_name = args.pop_as::<String>(lua)
 			.context("first argument (table name) must be a string")?;
-		let resource = pop_arg_as::<mlua::Table<'_>>(&mut args, lua)
+		let resource = args.pop_as::<mlua::Table<'_>>(lua)
 			.context("second argument (resource) must be a table")?;
 		let init = PushState {
 			lua, level: 0, query_name: &query_name,
@@ -3158,40 +2933,6 @@ impl<T: DbInterface> RecurseState<PushRow<'_,T>> for PushState<'_,'_> {
 	}
 }
 
-/// A collection of all the prepared SQL statements used for implementing
-/// the Lua API.
-///
-/// Since we need to split this struct when passing `&mut Statement` values
-/// to various `FnMut` closures, the fields are not typed as
-/// `AllResources<Statement<'a>>` but as newtype wrappers;
-/// each newtype runs only the appropriate conversion between the
-/// prepared SQL statement and Lua values.
-#[derive(Debug)]
-struct LuaStatements<'a> {
-// 	/// We keep an owned copy of the original table schemas.
-// 	schemas: AllResources<Schema>,
-	/// Prepared statements for `simod.list`.
-	select_row: RootForest<SelectRow<'a>>,
-// 	read_field: RootForest<ReadField<'a>>,
-// 	insert_row: RootForest<InsertRow<'a>>,
-	update_row: RootForest<UpdateRow<'a>>,
-	delete_row: RootForest<DeleteRow<'a>>,
-// 	next_key: RootForest<NextKey<'a>>,
-}
-impl<'a> LuaStatements<'a> {
-	pub fn new(db: &'a impl DbInterface)->Result<Self> {
-		Ok(Self {
-// 			schemas,
-			select_row: RootForest::<_>::prepare(db)?,
-// 			read_field: RootForest::<_>::prepare(db)?,
-// 			insert_row: RootForest::<_>::prepare(db)?,
-			update_row: RootForest::<_>::prepare(db)?,
-			delete_row: RootForest::<_>::prepare(db)?,
-// 			next_key: RootForest::<_>::prepare(db)?,
-		})
-	}
-}
-
 /// Runs the lua script for adding a mod component to the database.
 ///
 /// We provide the lua side with a minimal low-level interface:
@@ -3206,7 +2947,6 @@ pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
 	db.execute(r#"update "global" set "component"=?"#, (target,))?;
-	let mut statements = LuaStatements::new(&db)?;
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
 	lua.scope_any(|scope| {
@@ -3276,13 +3016,10 @@ pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 		simod.set("list", ALL_SCHEMAS
 			.try_map(|schema| ListKeys::prepare(&db, schema))?
 			.into_callback(scope)?)?;
+		simod.set("delete", ALL_SCHEMAS
+			.try_map(|schema| DeleteRow::prepare(&db, schema))?
+			.into_callback(scope)?)?;
 
-		statements.select_row.install_callback(scope, &simod, "select")?;
-// 		statements.read_field.install_callback(scope, &simod, "get")?;
-// 		statements.insert_row.install_callback(scope, &simod, "insert")?;
-		statements.update_row.install_callback(scope, &simod, "update")?;
-		statements.delete_row.install_callback(scope, &simod, "delete")?;
-// 		statements.next_key.install_callback(scope, &simod, "next_key")?;
 		lua.globals().set("simod", simod)?;
 
 		info!("loading file {lua_file:?}");
