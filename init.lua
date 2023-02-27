@@ -97,6 +97,35 @@ local function table_schema(tbl)
 end
 
 --««1 Methods for resources
+local function copy_replace(orig, repl, del)
+	-- builds a deep copy of `orig`, replacing by values from `repl` each
+	-- time one of those is not `nil`.
+	-- This propagates recursively along sub-tables:
+	-- if `orig[i]` and `repl[i]` are tables then
+	-- `copy[i]` is set to the table `orig[i]` replaced by `repl[i]`.
+	--
+	-- Keys present (at any level) in the `del` table are deleted.
+	--
+	-- * This does not handle cyclic dependencies.
+	-- * Only those keys present in `orig` will be present in `copy`. (In
+	-- other words, the table structure is preserved).
+	-- * This transfers metatables (from `orig` only).
+	if type(orig) == "table" then
+		if type(repl) ~= "table" then repl = {} end
+		del = del or {}
+		local copy = {}
+		for k, v in pairs(orig) do
+			if del[k] == nil then
+				copy[k] = copy_replace(v, repl[k], del)
+			end
+		end
+		return setmetatable(copy, getmetatable(orig))
+	elseif repl ~= nil then
+		return repl
+	else
+		return orig
+	end
+end
 local resource_mt = {}
 resource_mt.__index = resource_mt -- let derived classes inherit from this
 function resource_mt:derive(table)
@@ -191,7 +220,7 @@ local function normalize_changes(changes, dk)
 end
 function resource_mt:clone(args)
 	-- Clones a resource, using the changes passed as arguments.
--- 	print(yellow("cloning a resource: ", strdump(self, 5)))
+	print(yellow("cloning a resource: ", strdump(self, 5)))
 -- 	print("  with modifiers: ", strdump(args, 5))
 	local methods = getmetatable(self)
 	local table = methods._table
@@ -200,23 +229,9 @@ function resource_mt:clone(args)
 	local dk = schema.default_key
 -- 	print("for table "..self._table.." dk is ", dk)
 	local id, changes = normalize_changes(args, dk)
-	local new = { id = id }
-	for fn, ft in pairs(fields) do
-		if ft == "id" then
-			-- already generated
-		elseif changes[fn] ~= nil then
-			new[fn] = changes[fn]
-		elseif ft == "subresource" then
-			local vector = {}
-			for i, sub in ipairs(self[fn]) do
-				vector[i] = sub:clone()
-			end
-			new[fn] = vector
-		else
-			new[fn] = self[fn]
-		end
-	end
-	return setmetatable(new, getmetatable(self))
+	local new = copy_replace(self, repl, {id = true})
+	new.id = id
+	return new
 end
 
 --««1 Methods for resource builders
@@ -355,24 +370,14 @@ function test_inherit()
 	local albruin = setmetatable({_table="items", _key="sw1h34"}, all_resources_mt.items)
 	albruin:foo()
 end
-albruin = (simod.pull("items", "sw1h34"))
-dump(albruin)
-print("---- dumping read of items sw1h34: -----")
-for k, v in pairs(albruin) do
-	print(k, v)
-end
-print("---- done")
-for k, v in pairs(albruin.abilities) do
-	print("abilities", k, v, v.use_icon)
-	for k, v in pairs(v.effects) do
-		print("", "effects", k, v, v.opcode)
-	end
-end
-foo = albruin:clone({"blah", weight=3})
-dump(foo.id)
+test = setmetatable(simod.pull("items", "ring02"), simod.schema.items.methods)
+dump(test)
+print(getmetatable(test).clone)
+print(test.clone)
+foo = test:clone({"blah", weight=3})
 simod.push("items", foo)
--- dump(foo.id)
--- dump(foo.weight)
--- albruin:save()
--- simod.dump("select * from edit_items_abilities")
--- simod.dump("select * from edit_items")
+-- -- dump(foo.id)
+-- -- dump(foo.weight)
+-- -- albruin:save()
+-- -- simod.dump("select * from edit_items_abilities")
+-- -- simod.dump("select * from edit_items")

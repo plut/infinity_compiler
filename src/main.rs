@@ -73,6 +73,7 @@ pub enum Error{
 	CallbackMissingArgument,
 	UnknownField { field: String },
 	RowNotFound { key: String},
+	NoRows,
 }
 impl Display for Error {
 	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
@@ -85,6 +86,7 @@ impl Display for Error {
 			Self::BadParameterCount { expected, found } =>
 				write!(f, "Bad parameter count for SQL statement: found {found}, expected {expected}"),
 			Self::UnknownField { field } => write!(f, r#"Unknown field "{field}""#),
+			Self::NoRows => write!(f, r#"Statement returned no rows"#),
 			_ => write!(f, "Error: &{self:?}"),
 		}
 	}
@@ -95,6 +97,12 @@ impl std::error::Error for Error { }
 macro_rules! uwrite { ($($a:tt)*) => { write!($($a)*).unwrap() } }
 macro_rules! uwriteln { ($($a:tt)*) => { writeln!($($a)*).unwrap() } }
 pub(crate) use {uwrite,uwriteln};
+
+/// Small simplification for frequent use in callbacks.
+macro_rules! fail {
+	($($a:tt)+) => { return Err(Error::$($a)+.into()) }
+}
+pub(crate) use {fail};
 
 }
 pub mod toolbox {
@@ -1273,6 +1281,7 @@ instead of insert on "{self}"
 begin
 	{trans_insert}
 	insert into "load_{self}" ("source", {cols}) values ((select "component" from "global"), {newcols});
+	update "global" set "last_insert" = last_insert_rowid();
 	insert or ignore into "dirty_{root}" values (new."root");
 end"#))?;
 	// XXX: check that we do not remove base game resources!
@@ -2149,7 +2158,7 @@ impl GameDB {
 			.with_context(|| format!("cannot open DB file: {db_file:?}"))?;
 		db.transaction(|db| {
 			db.batch(r#"
-create table "global" ("component" text, "strref_count" integer);
+create table "global" ("component" text, "strref_count" integer, "last_insert" integer);
 insert into "global"("component") values (null);
 create table "override" ("resref" text, "ext" text);
 create table "resref_orig" ("resref" text primary key on conflict ignore);
@@ -2420,10 +2429,6 @@ use crate::trees::{ALL_SCHEMAS,ByName,Recurse,RecurseState,RecurseItr};
 use crate::resources::{RootForest};
 use crate::schemas::{FieldType,Field,Schema};
 use crate::sql_rows::{AsParams,Row_Ext};
-/// Small simplification for frequent use in callbacks.
-macro_rules! fail {
-	($($a:tt)+) => { return Err(Error::$($a)+.into()) }
-}
 fn mlua_ok<T>(a: T)->mlua::Result<T> { Ok::<_,mlua::Error>(a) }
 #[ext]
 impl<'lua> Value<'lua> {
@@ -2447,6 +2452,29 @@ impl<'lua> Value<'lua> {
 			e => return Err(rusqlite::Error::InvalidParameterName(
 				format!("cannot convert {e:?} to a SQL type")))
 		})
+	}
+}
+#[ext]
+impl<'lua,'scope> mlua::Scope<'lua,'scope> {
+	/// An extension to `create_function`, accepting any
+	/// `mlua::ExternalError` error type.
+	fn create_fn<'callback, A, R, F>(&'callback self, func: F)
+	-> mlua::Result<mlua::Function<'lua>>
+	where
+    A: mlua::FromLuaMulti<'callback>,
+    R: ToLuaMulti<'callback>,
+    F: 'scope + Fn(&'callback Lua, A) -> Result<R> {
+		self.create_function(move |lua, a| func(lua,a).to_lua_err())
+	}
+	/// An extension to `create_function_mut`, accepting any
+	/// `mlua::ExternalError` error type.
+	fn create_fn_mut<'callback, A, R, F>(&'callback self, mut func: F)
+		-> mlua::Result<mlua::Function<'lua>>
+	where
+    A: mlua::FromLuaMulti<'callback>,
+    R: ToLuaMulti<'callback>,
+    F: 'scope + FnMut(&'callback Lua, A) -> Result<R> {
+		self.create_function_mut(move |lua, a| func(lua,a).to_lua_err())
 	}
 }
 /// A newtype around [`mlua::Value`], allowing us to implement various
@@ -2805,9 +2833,7 @@ trait IntoCallback<'a>: Sized {
 	/// FIXME: replace this by a `ToLua` impl (storing the scope ref as a
 	/// part of the object itself)
 	fn into_callback<'scope,'lua>(mut self, scope: &mlua::Scope<'lua,'scope>)->mlua::Result<mlua::Function<'lua>> where Self: 'scope {
-		scope.create_function_mut(move |lua,args| {
-			self.execute(lua,args).to_lua_err()
-		})
+		scope.create_fn_mut(move |lua,args| self.execute(lua,args))
 	}
 }
 impl<'a, T: Callback<'a>> IntoCallback<'a> for RootForest<T> {
@@ -2841,11 +2867,11 @@ impl<'a, T: Callback<'a>+'a+Sized> RootForest<T> {
 // 		scope.create_function_mut(|lua, args|
 // 			self.prepare(lua, args).to_lua_err())
 // 	}
-		table.set(name, scope.create_function_mut(move |lua, args| {
+		table.set(name, scope.create_fn_mut(move |lua, args| {
 			let r = self.execute(lua, args);
 			// `to_lua_err()` does not display full backtrace:
 			if r.is_err() { eprintln!("{r:?}"); }
-			r.with_context(|| format!(r#"In callback "{name}":"#)).to_lua_err()
+			r.with_context(|| format!(r#"In callback "{name}":"#))
 		})?)
 	}
 }
@@ -2998,12 +3024,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 	}
 	fn row_exists(&mut self, id: &Value<'_>)->Result<bool> {
 		if let Value::Nil = id { return Ok(false) }
-		let mut rows = self.exists.query((LuaValueRef(id),))?;
-		if let Some(row) = rows.next()? {
-			let c: usize = row.get(0)?;
-			return Ok(c > 0)
-		}
-		Ok(false)
+		Ok(self.exists.query_row((), |row| Ok(row.get::<_,usize>(0)? > 0))?)
 	}
 	fn update_values(&mut self, source: &mlua::Table<'_>, position: usize, id: &Value<'_>)->Result<()> {
 		let id_sql = LuaValueRef(id);
@@ -3063,7 +3084,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		}
 	}
 }
-impl<T: DbInterface> IntoCallback<'_> for RootForest<PushRow<'_,T>> {
+impl<T: DbInterface> IntoCallback<'_> for (Statement<'_>, RootForest<PushRow<'_,T>>) {
 	type Ret<'lua> = ();
 	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<()> {
 		if args.len() != 2 {
@@ -3077,7 +3098,7 @@ impl<T: DbInterface> IntoCallback<'_> for RootForest<PushRow<'_,T>> {
 			lua, level: 0, query_name: &query_name,
 			resource, parent_id: mlua::Value::Nil,
 		};
-		self.recurse_itr_mut(&init, "")?;
+		self.1.recurse_itr_mut(&init, "")?;
 		Ok(())
 	}
 }
@@ -3228,20 +3249,22 @@ pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 			mlua_ok((fields, nothing))
 		}, "", &simod_schema)?;
 		simod.set("schema", simod_schema)?;
-		simod.set("dump", scope.create_function(|_lua, (query,): (String,)| {
+		simod.set("dump", scope.create_fn(|_lua, (query,): (String,)| {
 			debug!("lua called exec with query {query}");
-			let mut stmt = db.prepare(&query).to_lua_err()?;
-			let mut rows = stmt.query(()).to_lua_err()?;
+			let mut stmt = db.prepare(&query)?;
+			let mut rows = stmt.query(())?;
 			while let Some(row) = rows.next().unwrap() {
 				row.dump();
 			}
-			Ok(())
+			any_ok(())
 		})?)?;
 		simod.set("pull", ALL_SCHEMAS
 			.try_map(|schema| PullRow::new(&db, schema)).to_lua_err()?
 			.into_callback(scope)?)?;
-		simod.set("push", ALL_SCHEMAS
-			.try_map(|schema| PushRow::new(&db, schema)).to_lua_err()?
+		let last_insert = db.prepare(r#"select "last_insert" from "global""#)
+			.to_lua_err()?;
+		simod.set("push", (last_insert, ALL_SCHEMAS
+			.try_map(|schema| PushRow::new(&db, schema)).to_lua_err()?)
 			.into_callback(scope)?)?;
 		simod.set("list", ALL_SCHEMAS
 			.try_map(|schema| ListKeys::prepare(&db, schema)).to_lua_err()?

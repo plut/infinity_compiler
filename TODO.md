@@ -1,8 +1,10 @@
  - [ ] insert into `*` does not insert `id` into `add_*`
- - [ ] `push` recursive seems to load the wrong table (item abilities has
+ - [ ] triggers do not work with `last_insert_rowid`; query it and
+   register it in the `global` table
+ - [+] `push` recursive seems to load the wrong table (item abilities has
    nulls everywhere)
- - [ ] kill the `add_*` tables and write into the main `load_*` table
- - [ ] just use a special value for the `owner` field to mark original
+ - [+] kill the `add_*` tables and write into the main `load_*` table
+ - [+] just use a special value for the `owner` field to mark original
    resources
  - a command-line option to make it headless (disable progress bars)
 # Lua side
