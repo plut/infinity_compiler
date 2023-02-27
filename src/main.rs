@@ -1265,7 +1265,7 @@ end"#))?;
 			trans_insert.push_str(&trans);
 			f(format!(
 r#"create trigger "update_{self}_{fname}"
-instead of update of "{fname}" on "{self}"
+instead of update of "{fname}" on "{self}" where old."{fname}" != new."{fname}"
 begin
 	{trans}
 	insert or ignore into "dirty_{root}" values (new."root");
@@ -1614,7 +1614,9 @@ pub trait ResourceTree: SqlRow {
 			warn!("skipped inserting {resref}");
 			return Ok(n)
 		}
-		self.insert_subresources(db, &mut tree.branches, resref)?;
+		self.insert_subresources(db, &mut tree.branches, resref)
+			.with_context(||format!("inserting subresources for {}",
+			std::any::type_name::<Self>()))?;
 		Ok(1)
 	}
 	/// Inserts a sub-resource.
@@ -1627,9 +1629,11 @@ pub trait ResourceTree: SqlRow {
 	/// `Self::insert_subresources` (derived from macro).
 	fn insert_as_subresource(&self, db: &Connection, tree: &mut Tree<Self::StatementForest<'_>>, parent: impl ToSql, position: usize)->Result<()> {
 		tree.content.bind_execute((parent, position), self)
-			.with_context(|| format!("insert_as_subresource: {}", std::any::type_name::<Self>()))?;
+			.with_context(||format!("insert_as_subresource: {}", std::any::type_name::<Self>()))?;
 		let primary = db.last_insert_rowid();
-		self.insert_subresources(db, &mut tree.branches, primary)?;
+		self.insert_subresources(db, &mut tree.branches, primary)
+			.with_context(||format!("inserting sub-subresources for {}",
+			std::any::type_name::<Self>()))?;
 		Ok(())
 	}
 	/// Returns an iterator over rows of the database,
@@ -1896,8 +1900,10 @@ pub trait ResourceIO: ResourceTree {
 	/// is supposed to be a one-time cost anyway.
 	#[inline]
 	fn load_and_insert(db: &Connection, tree: &mut Tree<Self::StatementForest<'_>>, mut handle: crate::gamefiles::ResHandle<'_>)->Result<()> {
-		let resource = Self::load(handle.open()?)?;
-		resource.insert_as_topresource(db, tree, handle.resref)?;
+		let resource = Self::load(handle.open()?)
+			.with_context(||format!("cannot open resource: {handle:?}"))?;
+		resource.insert_as_topresource(db, tree, handle.resref)
+			.with_context(||format!("cannot insert top-level resource from {handle:?}"))?;
 		// TODO: mark resource as override
 		// using "insert into "override" values "(resref,EXTENSION)"
 		// TODO: increase counter if possible
@@ -1911,11 +1917,13 @@ pub trait ResourceIO: ResourceTree {
 			let filename = format!("{resref}.{ext}", ext=Self::EXTENSION);
 			println!("saving to {filename:?}");
 			let mut file = File::create(&filename)
-				.with_context(|| format!("open for writing: {filename:?}"))?;
-			resource.save(&mut file)?;
+				.with_context(||format!("open for writing: {filename:?}"))?;
+			resource.save(&mut file)
+				.with_context(||format!("saving to {filename:?}"))?;
 			n_saved+= 1;
 		}
-		Self::clear_orphans(db, name)?;
+		Self::clear_orphans(db, name)
+			.with_context(||format!("clearing orphan resources: {name}"))?;
 		db.exec(format!(r#"delete from "dirty_{name}""#))?;
 		db.exec(format!(r#"delete from "orphan_{name}""#))?;
 		Ok(n_saved)
@@ -2010,19 +2018,19 @@ impl ExactSizeIterator for GameStringsIterator<'_> {
 /// Fills the database table for a single language.
 fn load_language(db: &impl DbInterface, langname: &str, path: &(impl AsRef<Path> + Debug))->Result<()> {
 	let bytes = fs::read(path)
-		.with_context(|| format!("cannot open strings file: {path:?}"))?;
-	let itr = GameStringsIterator::try_from(bytes.as_ref())?;
+		.with_context(||format!("cannot open strings file: {path:?}"))?;
+	let itr = GameStringsIterator::try_from(bytes.as_ref())
+		.with_context(||format!("cannot read strings from {path:?}"))?;
 	let pb = Progress::new(itr.len(), langname);
 	db.execute(r#"update "global" set "strref_count"=?"#, (itr.len(),))?;
 	let mut n_strings = 0;
 	let mut stmt = db.prepare(GameString::with_header("strref")
 		.insert_sql(lazy_format!("load_strings_{langname}")))?;
-// 	let mut stmt = GameString::insert_statement::<Strref>(db,
-// 		lazy_format!("load_strings_{langname}"), "strref")?;
 	for (strref, x) in itr.enumerate() {
 		let s = x?;
 		pb.inc(1);
-		stmt.bind_execute((strref,), &s)?;
+		stmt.bind_execute((strref,), &s)
+			.with_context(||format!("inserting game string #{strref}"))?;
 		n_strings+= 1;
 	}
 	info!("loaded {n_strings} strings for language \"{langname}\"");
@@ -2033,8 +2041,8 @@ pub fn load_languages(db: &impl DbInterface, game: &GameIndex)->Result<()> {
 	let pb = Progress::new(game.languages.len(), "languages");
 	for (langname, dialog) in game.languages.iter() {
 		pb.inc(1);
-		load_language(db, langname, &dialog).with_context(||
-				format!("cannot load language '{langname}' from '{dialog:?}'"))?;
+		load_language(db, langname, &dialog)
+			.with_context(||format!("cannot load language '{langname}' from '{dialog:?}'"))?;
 	}
 	Ok(())
 }
@@ -2241,10 +2249,11 @@ from "new_strings"
 // 				base.register(&resref)
 // 					.with_context(|| format!("could not register resref:{resref}"))?;
 				if Item::is_restype(restype) {
-					Item::load_and_insert(db, &mut tables.items, handle)?
+					Item::load_and_insert(db, &mut tables.items, handle)
+						.context("load and insert Item")?
 				}
 				Ok(())
-			})?;
+			}).context("loading base resources")?;
 			pb.inc(1);
 			Ok(())
 		})
@@ -2398,7 +2407,7 @@ pub mod lua_extensions {
 //! written to have a smoother interface with the remainder of the
 //! program.
 use crate::prelude::*;
-use mlua::{Lua,Value,MultiValue,FromLua,ToLuaMulti,FromLuaMulti,ExternalResult};
+use mlua::{Lua,Scope,Value,MultiValue,FromLua,ToLuaMulti,FromLuaMulti,ExternalResult};
 use rusqlite::{ToSql,types::{ToSqlOutput}};
 pub fn mlua_ok<T>(a: T)->mlua::Result<T> { Ok::<_,mlua::Error>(a) }
 #[ext]
@@ -2426,15 +2435,24 @@ pub impl<'lua> Value<'lua> {
 	}
 }
 #[ext]
+pub impl<'lua> mlua::Table<'lua> {
+	#[allow(single_use_lifetimes)]
+	fn set_callback<'scope,'a>(&self, name: &'lua str, scope: &Scope<'lua,'scope>, mut f: impl crate::lua_api::IntoCallback<'a>+'scope)->mlua::Result<()> where 'lua: 'scope{
+		self.set(name, scope.create_fn_mut(move |lua,args|
+			f.execute(lua,args)
+			.with_context(||format!("callback \"{name}\"")))?)
+	}
+}
+#[ext]
 pub impl Lua {
 	/// Variant of [`Lua.scope`] accepting [`anyhow::Error`] as an error type.
 	fn scope_any<'lua: 'scope, 'scope, R: 'static, F>(&'lua self, f: F) -> mlua::Result<R>
-	where F: FnOnce(&mlua::Scope<'lua, 'scope>) -> Result<R> {
+	where F: FnOnce(&Scope<'lua, 'scope>) -> Result<R> {
 		self.scope(move |scope| f(scope).to_lua_err())
 	}
 }
 #[ext]
-pub impl<'lua,'scope> mlua::Scope<'lua,'scope> {
+pub impl<'lua,'scope> Scope<'lua,'scope> {
 	/// An extension to `create_function`, accepting any
 	/// `mlua::ExternalError` error type.
 	fn create_fn<'callback, A, R, F>(&'callback self, func: F)
@@ -2502,9 +2520,10 @@ pub impl<'lua> MultiValue<'lua> {
 	/// Reads an argument as the given `FromLua` type and returns it,
 	/// wrapped in a `Result`.
 	fn pop_as<T: FromLua<'lua>>(&mut self, lua:&'lua Lua)->Result<T> {
-		let arg0 = self.pop_front().ok_or(Error::CallbackMissingArgument)?;
-		let r = T::from_lua(arg0, lua).with_context(||
-			format!("cannot convert argument to type {}", std::any::type_name::<T>()))?;
+		let arg0 = self.pop_front()
+			.context("function needs at least one argument")?;
+		let r = T::from_lua(arg0, lua)
+			.with_context(||format!("cannot convert argument to type {}", std::any::type_name::<T>()))?;
 		Ok(r)
 	}
 }
@@ -2604,7 +2623,8 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 	/// and returns in a Lua table the list of all primary keys matching
 	/// this condition.
 	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>> {
-		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
+		Self::expect_arguments(&args, self.0.parameter_count()+1)
+			.context("'list' callback")?;
 		let mut rows = self.0.query(args.as_params())?;
 		let ret = lua.create_table()
 			.context("cannot create table")?;
@@ -2630,21 +2650,16 @@ impl<'a> Callback<'a> for DeleteRow<'a> {
 			.map(Self)
 	}
 	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>> {
-		Self::expect_arguments(&args, self.0.parameter_count()+1)?;
+		Self::expect_arguments(&args, self.0.parameter_count()+1)
+			.context("'delete' callback")?;
 		let n = self.0.execute(args.as_params())?;
 		Ok((n > 0).to_lua(lua)?)
 	}
 }
 
-trait IntoCallback<'a>: Sized {
+pub trait IntoCallback<'a>: Sized {
 	type Ret<'lua>: ToLuaMulti<'lua>;
 	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Self::Ret<'lua>>;
-	/// The wrapper installing the callback function in a table.
-	/// FIXME: replace this by a `ToLua` impl (storing the scope ref as a
-	/// part of the object itself)
-	fn into_callback<'scope,'lua>(mut self, scope: &mlua::Scope<'lua,'scope>)->mlua::Result<mlua::Function<'lua>> where Self: 'scope {
-		scope.create_fn_mut(move |lua,args| self.execute(lua,args))
-	}
 }
 impl<'a, T: Callback<'a>> IntoCallback<'a> for RootForest<T> {
 	type Ret<'lua> = T::RetType<'lua>;
@@ -2653,7 +2668,8 @@ impl<'a, T: Callback<'a>> IntoCallback<'a> for RootForest<T> {
 	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Self::Ret<'lua>> {
 		let table = args.pop_as::<String>(lua)
 			.context("first argument must be a string")?;
-		self.by_name_mut(&table)?
+		self.by_name_mut(&table)
+			.with_context(|| format!("cannot find table: {table}"))?
 			.execute(lua, args)
 			.with_context(|| format!(r#"executing callback on table "{table}""#))
 	}
@@ -2700,7 +2716,8 @@ impl RecurseState<PullRow<'_>> for PullState<'_,'_> {
 		};
 		let list = lua.create_table()?;
 		table.set(name, list.clone())?;
-		let mut rows = pull.0.query((id,))?;
+		let mut rows = pull.0.query((id,))
+			.with_context(||format!("reading resource from '{query_name}' with value {id:?}"))?;
 		while let Some(row) = rows.next()? {
 			println!("read a row: {}", row.dump_to_string());
 			let table = lua.create_table()?;
@@ -2747,7 +2764,8 @@ impl IntoCallback<'_> for RootForest<PullRow<'_>> {
 			parent_table: Some(lua.create_table()?),
 			parent_id: Some(args.pop_front().unwrap().to_sql_value()?),
 		};
-		self.recurse_itr_mut(&init, "")?;
+		self.recurse_itr_mut(&init, "")
+			.with_context(||format!("recursively load resource from table '{query_name}'"))?;
 		let mut pairs = match init.parent_table {
 			None => return Ok(Value::Nil), // FIXME: or an error?
 			Some(t) => t.pairs::<String,mlua::Table<'_>>()
@@ -2813,7 +2831,8 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		let id_sql = LuaValueRef(id);
 		for (fname, stmt) in self.update.iter_mut() {
 			if fname == &"position" {
-				stmt.execute((id_sql, position))?;
+				stmt.execute((id_sql, position))
+					.context("updating sub-resource position")?;
 			} else {
 				// the update does nothing if the value does not change
 				// (our sql triggers take care of this)
@@ -2823,7 +2842,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		}
 		Ok(())
 	}
-	fn insert_new<'lua>(&mut self, source: &mlua::Table<'lua>, parent: &Value<'_>, position: usize)->Result<Value<'lua>> {
+	fn insert_new<'lua>(&mut self, source: &mlua::Table<'lua>, parent: &Value<'_>, position: usize, id: Value<'lua>)->Result<Value<'lua>> {
 		// TODO: this is where we make a distinction top/sub:
 		// top:
 		//  - insert id
@@ -2834,36 +2853,30 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		// TODO: implement this distinction in `new`
 		for (i, Field { fname, .. }) in self.schema.push_insert().enumerate() {
 			if fname == "parent" {
-				println!(" set parent = {:?}", LuaValueRef(parent));
 				self.insert.raw_bind_parameter(i+1, LuaValueRef(parent))?;
 			} else if fname == "position" {
-				println!(" set position = {position}");
 				self.insert.raw_bind_parameter(i+1, position)?;
 			} else {
 				let val: Value<'_> = source.get(fname)?;
-				println!("{j} {fname}={w:?}", j=i+1, w=val.to_sql_value()?);
 				self.insert.raw_bind_parameter(i+1, LuaValueRef(&val))?;
 			}
 		}
 		self.insert.raw_execute()?;
 		if self.schema.is_subresource() {
-			println!("  \x1b[1;34mgot back rowid={}\x1b[m", self.db.last_insert_rowid());
 			Ok(Value::Integer(self.db.last_insert_rowid()))
 		} else {
-// 			println!(" we inserted id: {:?}", source.get::<_,Value>("id")?.to_sql_value()?);
-			Ok(source.get("id")?)
+			Ok(id)
 		}
 	}
 	fn save<'lua>(&mut self, source: &mlua::Table<'lua>, parent_id: &Value<'_>, position: usize)->Result<Value<'lua>> {
 		let id: Value<'_> = source.get("id")?;
-// 		println!("saving to {sch}: id = {id:?}", sch=self.schema, id = id.to_sql_value()?);
 		if self.row_exists(&id)? {
 			println!("   row exists! updating");
 			self.update_values(source, position, &id)?;
 			Ok(id)
 		} else {
 			println!("   row does not exist! inserting...");
-			self.insert_new(source, parent_id, position)
+			self.insert_new(source, parent_id, position, id)
 		}
 	}
 }
@@ -2881,7 +2894,8 @@ impl<T: DbInterface> IntoCallback<'_> for (Statement<'_>, RootForest<PushRow<'_,
 			lua, level: 0, query_name: &query_name,
 			resource, parent_id: mlua::Value::Nil,
 		};
-		self.1.recurse_itr_mut(&init, "")?;
+		self.1.recurse_itr_mut(&init, "")
+			.with_context(||format!("recursively save resource to table '{query_name}'"))?;
 		Ok(())
 	}
 }
@@ -2899,7 +2913,8 @@ struct PushState<'lua,'s> {
 }
 impl<'lua> PushState<'lua,'_> {
 	fn save_rec<T: DbInterface>(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
-		let row_id = save_row.save(&resource, &self.parent_id, position)?;
+		let row_id = save_row.save(&resource, &self.parent_id, position)
+			.with_context(||format!("save resource as row in '{}'", self.query_name))?;
 		println!("\x1b[1min save_rec (parent = {:?}), we got the following table:\x1b[m ", LuaValueRef(&self.parent_id));
 		for pair in resource.clone().pairs::<Value<'_>,Value<'_>>() {
 			let (k, v) = pair?;
@@ -2924,7 +2939,8 @@ impl<T: DbInterface> RecurseState<PushRow<'_,T>> for PushState<'_,'_> {
 			if name != self.query_name { return Ok(()) }
 			return self.save_rec(self.resource.clone(), 0, save_row, descend)
 		}
-		let list = self.resource.get::<_,mlua::Table<'_>>(name)?;
+		let list = self.resource.get::<_,mlua::Table<'_>>(name)
+			.with_context(||format!("field '.{name}' should be a list of subresources"))?;
 		for (i, elt) in list.sequence_values::<mlua::Table<'_>>().enumerate() {
 			let table = elt?;
 			self.save_rec(table, i+1, save_row, &mut descend)?;
@@ -2946,7 +2962,8 @@ impl<T: DbInterface> RecurseState<PushRow<'_,T>> for PushState<'_,'_> {
 pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
-	db.execute(r#"update "global" set "component"=?"#, (target,))?;
+	db.execute(r#"update "global" set "component"=?"#, (target,))
+		.with_context(||format!("setting current mod to \"{target}\""))?;
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
 	lua.scope_any(|scope| {
@@ -3000,25 +3017,22 @@ pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 		simod.set("dump", scope.create_fn(|_lua, (query,): (String,)| {
 			debug!("lua called exec with query {query}");
 			let mut stmt = db.prepare(&query)?;
-			let mut rows = stmt.query(())?;
+			let mut rows = stmt.query(())
+				.context("user-passed SQL query")?;
 			while let Some(row) = rows.next().unwrap() {
 				row.dump();
 			}
-			any_ok(())
+			Ok(())
 		})?)?;
-		simod.set("pull", ALL_SCHEMAS
-			.try_map(|schema| PullRow::new(&db, schema))?
-			.into_callback(scope)?)?;
+		simod.set_callback("pull", scope, ALL_SCHEMAS
+			.try_map(|schema| PullRow::new(&db, schema))?)?;
 		let last_insert = db.prepare(r#"select "last_insert" from "global""#)?;
-		simod.set("push", (last_insert, ALL_SCHEMAS
-			.try_map(|schema| PushRow::new(&db, schema))?)
-			.into_callback(scope)?)?;
-		simod.set("list", ALL_SCHEMAS
-			.try_map(|schema| ListKeys::prepare(&db, schema))?
-			.into_callback(scope)?)?;
-		simod.set("delete", ALL_SCHEMAS
-			.try_map(|schema| DeleteRow::prepare(&db, schema))?
-			.into_callback(scope)?)?;
+		simod.set_callback("push", scope, (last_insert, ALL_SCHEMAS
+			.try_map(|schema| PushRow::new(&db, schema))?))?;
+		simod.set_callback("list", scope, ALL_SCHEMAS
+			.try_map(|schema| ListKeys::prepare(&db, schema))?)?;
+		simod.set_callback("delete", scope, ALL_SCHEMAS
+			.try_map(|schema| DeleteRow::prepare(&db, schema))?)?;
 
 		lua.globals().set("simod", simod)?;
 
