@@ -2817,8 +2817,14 @@ impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
 			.with_context(|| format!(r#"executing callback on table "{table}""#))
 	}
 	/// The wrapper installing the callback function in a table.
-	fn install_callback<'scope>(&'scope mut self, scope: &mlua::Scope<'_,'scope>,
-		table: &mlua::Table<'scope>, name: &'scope str)->mlua::Result<()> {
+	fn into_callback<'scope,'lua>(mut self, scope: &mlua::Scope<'lua,'scope>)->mlua::Result<mlua::Function<'lua>> where Self: 'scope {
+		scope.create_function_mut(move |lua,args| {
+			self.execute(lua,args).to_lua_err()
+		})
+	}
+	#[allow(single_use_lifetimes,unused_lifetimes)]
+	fn install_callback<'lua,'scope,'x:'scope,'d>(&'x mut self, scope: &mlua::Scope<'lua,'scope>,
+		table: &mlua::Table<'d>, name: &'scope str)->mlua::Result<()> {
 // **NOTE**:
 // The lifetime parameters were determined after **a lot** of trial
 // and error....
@@ -3155,8 +3161,6 @@ pub fn command_add(db: impl DbInterface+Debug, _target: &str)->Result<()> {
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
 	let mut statements = LuaStatements::new(&db)?;
-	let mut list_keys = RootForest::<ListKeys<'_>>::prepare(&db)
-		.to_lua_err()?;
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
 	lua.scope(|scope| {
@@ -3229,7 +3233,18 @@ pub fn command_add(db: impl DbInterface+Debug, _target: &str)->Result<()> {
 		simod.set("push", scope.create_function_mut(move |lua, args| {
 			push(&mut push_statements, lua, args).to_lua_err()
 		})?)?;
-		list_keys.install_callback(scope, &simod, "list")?;
+		let list_keys = RootForest::<ListKeys<'_>>::prepare(&db)
+			.to_lua_err()?;
+		simod.set("list", list_keys.into_callback(&scope)?)?;
+
+// 		let mut list_keys_f = scope.create_function_mut(move |lua, args|{
+// 			list_keys.execute(lua, args).to_lua_err()
+// 		})?;
+// 		simod.set("list", list_keys_f)?;
+// 		simod.set("list", scope.create_function_mut(move |lua,args| {
+// 			list_keys.execute(lua, args).to_lua_err()
+// 		})?);
+// 		list_keys.install_callback(scope, &simod, "list")?;
 		statements.select_row.install_callback(scope, &simod, "select")?;
 // 		statements.read_field.install_callback(scope, &simod, "get")?;
 // 		statements.insert_row.install_callback(scope, &simod, "insert")?;
