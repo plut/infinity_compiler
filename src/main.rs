@@ -65,14 +65,15 @@ pub(crate) const nothing2: ((),()) = (nothing, nothing);
 
 /// Our own error type. Mainly used for errors from Lua callbacks.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error{
 	UnknownTable(String),
 	BadArgumentNumber { expected: usize, found: usize },
-	BadArgumentType { position: usize, expected: &'static str, found: String },
-	BadParameterCount { expected: usize, found: usize },
-	CallbackMissingArgument,
-	UnknownField { field: String },
-	RowNotFound { key: String},
+// 	BadArgumentType { position: usize, expected: &'static str, found: String },
+// 	BadParameterCount { expected: usize, found: usize },
+// 	CallbackMissingArgument,
+// 	UnknownField { field: String },
+// 	RowNotFound { key: String},
 	LuaConversion,
 }
 impl Display for Error {
@@ -81,12 +82,13 @@ impl Display for Error {
 			Self::UnknownTable(s) => write!(f, "Unknown table: '{s}'"),
 			Self::BadArgumentNumber { expected, found } =>
 				write!(f, "Bad number of arguments: found {found}, expected {expected}"),
-			Self::BadArgumentType { position, expected, found } =>
-				write!(f, "Bad argument type at position {position}: expected {expected}, found {found}"),
-			Self::BadParameterCount { expected, found } =>
-				write!(f, "Bad parameter count for SQL statement: found {found}, expected {expected}"),
-			Self::UnknownField { field } => write!(f, r#"Unknown field "{field}""#),
+// 			Self::BadArgumentType { position, expected, found } =>
+// 				write!(f, "Bad argument type at position {position}: expected {expected}, found {found}"),
+// 			Self::BadParameterCount { expected, found } =>
+// 				write!(f, "Bad parameter count for SQL statement: found {found}, expected {expected}"),
+// 			Self::UnknownField { field } => write!(f, r#"Unknown field "{field}""#),
 			Self::LuaConversion => write!(f, r#"(converting error from/to Lua)"#),
+			#[allow(unreachable_patterns)]
 			_ => write!(f, "Error: &{self:?}"),
 		}
 	}
@@ -98,11 +100,11 @@ macro_rules! uwrite { ($($a:tt)*) => { write!($($a)*).unwrap() } }
 macro_rules! uwriteln { ($($a:tt)*) => { writeln!($($a)*).unwrap() } }
 pub(crate) use {uwrite,uwriteln};
 
-/// Small simplification for frequent use in callbacks.
-macro_rules! fail {
-	($($a:tt)+) => { return Err(Error::$($a)+.into()) }
-}
-pub(crate) use {fail};
+// /// Small simplification for frequent use in callbacks.
+// macro_rules! fail {
+// 	($($a:tt)+) => { return Err(Error::$($a)+.into()) }
+// }
+// pub(crate) use {fail};
 
 }
 pub mod toolbox {
@@ -2701,7 +2703,6 @@ impl<'a> PullRow<'a> {
 		} else {
 			format!(r#"select "id", {cols} from "{schema}" where "id"=?"#)
 		};
-// 		println!("creating pull row for {schema}:\n{sql}");
 		db.prepare(sql).map(Self)
 	}
 }
@@ -2718,7 +2719,6 @@ struct PullState<'lua,'s> {
 impl RecurseState<PullRow<'_>> for PullState<'_,'_> {
 	fn exec(&self, pull: &mut PullRow<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		let Self { lua, query_name, .. } = self;
-// 		println!("running pull row('{query_name}'): currently at {name}, level {lvl}", lvl=self.level);
 		if self.level == 0 && name != self.query_name {
 			return Ok(())
 		}
@@ -2735,7 +2735,6 @@ impl RecurseState<PullRow<'_>> for PullState<'_,'_> {
 		let mut rows = pull.0.query((id,))
 			.with_context(||format!("reading resource from '{query_name}' with value {id:?}"))?;
 		while let Some(row) = rows.next()? {
-// 			println!("read a row: {}", row.dump_to_string());
 			let table = lua.create_table()?;
 			let mut row_id = rusqlite::types::Value::Null;
 			for i in 0..row.as_ref().column_count() {
@@ -2895,12 +2894,10 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		let id: Value<'_> = source.get("id")?;
 		if self.row_exists(&id)
 			.with_context(||format!("check if row {:?} exists", id.to_sql_value()))? {
-// 			println!("   row exists! updating");
 			self.update_values(source, position, &id)
 				.with_context(||format!("updating existing row with id {:?}", id.to_sql_value()))?;
 			Ok(id)
 		} else {
-// 			println!("   row does not exist! inserting...");
 			self.insert_new(source, parent_id, position, id.clone())
 				.with_context(||format!("inserting new row with id {:?}", id.to_sql_value()))
 		}
@@ -2917,6 +2914,7 @@ impl<T: DbInterface> IntoCallback<'_> for (Statement<'_>, RootForest<PushRow<'_,
 		let resource = args.pop_as::<mlua::Table<'_>>(lua)
 			.context("second argument (resource) must be a table")?;
 		let init = PushState {
+			last_insert: &self.0,
 			lua, level: 0, query_name: &query_name,
 			resource, parent_id: mlua::Value::Nil,
 		};
@@ -2936,18 +2934,15 @@ struct PushState<'lua,'s> {
 	parent_id: Value<'lua>,
 	query_name: &'s str,
 	level: usize,
+	/// The statement used to get back `last_insert_rowid`.
+	last_insert: &'s Statement<'s>,
 }
 impl<'lua> PushState<'lua,'_> {
 	fn save_rec<T: DbInterface>(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
-// 		println!("\x1b[32m in recurse_itr_mut: {}\x1b[m", self.query_name);
 		let row_id = save_row.save(&resource, &self.parent_id, position)
 			.with_context(||format!("save resource as row in '{}'", self.query_name))?;
-// 		println!("\x1b[32min save_rec (parent = {:?}), we got the following table:\x1b[m ", LuaValueRef(&self.parent_id));
-// 		for pair in resource.clone().pairs::<Value<'_>,Value<'_>>() {
-// 			let (k, v) = pair?;
-// 			println!("  {:?}: {:?}", LuaValueRef(&k), LuaValueRef(&v));
-// 		}
 		let new_state = Self {
+			last_insert: self.last_insert,
 			level: self.level+1, parent_id: row_id,
 			lua: self.lua, resource,
 			query_name: self.query_name,
@@ -2957,9 +2952,6 @@ impl<'lua> PushState<'lua,'_> {
 }
 impl<T: DbInterface> RecurseState<PushRow<'_,T>> for PushState<'_,'_> {
 	fn exec(&self, save_row: &mut PushRow<'_,T>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
-// 		println!("*** ({level}) {sch} parent={id:?}", level=self.level,
-// 			sch=save_row.schema,
-// 			id=self.parent_id.to_sql_value()?);
 		// Special case: at the first level we save a single resource, not a
 		// vector:
 		if self.level == 0 {
