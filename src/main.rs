@@ -2820,8 +2820,7 @@ trait IntoCallback: Sized {
 /// appropriate table for a Lua callback.
 /// Once this is done, the individual [`Callback`] instance for this
 /// table is run.
-#[ext]
-impl<'a, T: Callback<'a> + Debug+'a + Sized> RootForest<T> {
+impl<'a, T: Callback<'a>+'a + Sized> RootForest<T> {
 	fn prepare(db: &'a impl DbInterface)->Result<Self> where Self: Sized {
 		ALL_SCHEMAS.try_map(|s| T::prepare(db, s))
 	}
@@ -2981,7 +2980,7 @@ impl Schema {
 		self.with_headers(&[], &["position"])
 	}
 }
-impl<'s, T: DbInterface+Debug> PushRow<'s,T> {
+impl<'s, T: DbInterface> PushRow<'s,T> {
 	fn new(db: &'s T, schema: &'s Schema)->Result<Self> {
 		// TODO: distinction top/sub resource:
 		// for top resource: insert id
@@ -3077,7 +3076,7 @@ struct Push<'lua,'s> {
 	level: usize,
 }
 impl<'lua> Push<'lua,'_> {
-	fn save_rec<T: DbInterface+Debug>(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+	fn save_rec<T: DbInterface>(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		let row_id = save_row.save(&resource, &self.parent_id, position)?;
 		println!("\x1b[1min save_rec (parent = {:?}), we got the following table:\x1b[m ", LuaValueRef(&self.parent_id));
 		for pair in resource.clone().pairs::<Value<'_>,Value<'_>>() {
@@ -3092,7 +3091,7 @@ impl<'lua> Push<'lua,'_> {
 		descend(&new_state)
 	}
 }
-impl<T: DbInterface+Debug> RecurseState<PushRow<'_,T>> for Push<'_,'_> {
+impl<T: DbInterface> RecurseState<PushRow<'_,T>> for Push<'_,'_> {
 	fn exec(&self, save_row: &mut PushRow<'_,T>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		println!("*** ({level}) {sch} parent={id:?}", level=self.level,
 			sch=save_row.schema,
@@ -3112,7 +3111,7 @@ impl<T: DbInterface+Debug> RecurseState<PushRow<'_,T>> for Push<'_,'_> {
 	}
 }
 /// Recursively saves a resource (as a Lua table) to database.
-fn push<'lua, T: DbInterface+Debug>(branches: &mut RootForest<PushRow<'_,T>>, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
+fn push<'lua, T: DbInterface>(branches: &mut RootForest<PushRow<'_,T>>, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
 	if args.len() != 2 {
 		return Err(Error::BadArgumentNumber { expected: 2, found: args.len() }.into())
 	}
@@ -3172,7 +3171,7 @@ impl<'a> LuaStatements<'a> {
 ///  - list("item_abilities", "sw1h34") etc.
 /// All code with a higher level is written in lua and loaded from the
 /// "init.lua" file.
-pub fn command_add(db: impl DbInterface+Debug, _target: &str)->Result<()> {
+pub fn command_add(db: impl DbInterface, _target: &str)->Result<()> {
 	use crate::sql_rows::Row_Ext;
 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
