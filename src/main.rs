@@ -2859,7 +2859,9 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		}
 		Ok(())
 	}
-	fn insert_new<'lua>(&mut self, source: &mlua::Table<'lua>, parent: &Value<'_>, position: usize, id: Value<'lua>)->Result<Value<'lua>> {
+	fn insert_new<'lua>(&mut self, source: &mlua::Table<'lua>, parent: &Value<'_>, position: usize, id: Value<'lua>
+// 	, last_insert: &mut Statement<'_>
+	)->Result<Value<'lua>> {
 		// TODO: this is where we make a distinction top/sub:
 		// top:
 		//  - insert id
@@ -2885,12 +2887,15 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		self.insert.raw_execute()
 			.context("execute INSERT statement")?;
 		if self.schema.is_subresource() {
-			Ok(Value::Integer(self.db.last_insert_rowid()))
+// 			let rowid: i64 = last_insert.query_row((), |row| row.get(0))?;
+			Ok(Value::Integer(0))
 		} else {
 			Ok(id)
 		}
 	}
-	fn save<'lua>(&mut self, source: &mlua::Table<'lua>, parent_id: &Value<'_>, position: usize)->Result<Value<'lua>> {
+	fn save<'lua>(&mut self, source: &mlua::Table<'lua>, parent_id: &Value<'_>, position: usize
+// 	, last_insert: &mut Statement<'_>
+	)->Result<Value<'lua>> {
 		let id: Value<'_> = source.get("id")?;
 		if self.row_exists(&id)
 			.with_context(||format!("check if row {:?} exists", id.to_sql_value()))? {
@@ -2898,7 +2903,9 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 				.with_context(||format!("updating existing row with id {:?}", id.to_sql_value()))?;
 			Ok(id)
 		} else {
-			self.insert_new(source, parent_id, position, id.clone())
+			self.insert_new(source, parent_id, position, id.clone()
+// 			, last_insert
+			)
 				.with_context(||format!("inserting new row with id {:?}", id.to_sql_value()))
 		}
 	}
@@ -2914,7 +2921,7 @@ impl<T: DbInterface> IntoCallback<'_> for (Statement<'_>, RootForest<PushRow<'_,
 		let resource = args.pop_as::<mlua::Table<'_>>(lua)
 			.context("second argument (resource) must be a table")?;
 		let init = PushState {
-			last_insert: &self.0,
+// 			last_insert: &mut self.0,
 			lua, level: 0, query_name: &query_name,
 			resource, parent_id: mlua::Value::Nil,
 		};
@@ -2934,15 +2941,17 @@ struct PushState<'lua,'s> {
 	parent_id: Value<'lua>,
 	query_name: &'s str,
 	level: usize,
-	/// The statement used to get back `last_insert_rowid`.
-	last_insert: &'s Statement<'s>,
+// 	/// The statement used to get back `last_insert_rowid`.
+// 	last_insert: &'s mut Statement<'s>,
 }
 impl<'lua> PushState<'lua,'_> {
 	fn save_rec<T: DbInterface>(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
-		let row_id = save_row.save(&resource, &self.parent_id, position)
+		let row_id = save_row.save(&resource, &self.parent_id, position
+// 		, &mut self.last_insert
+		)
 			.with_context(||format!("save resource as row in '{}'", self.query_name))?;
 		let new_state = Self {
-			last_insert: self.last_insert,
+// 			last_insert: self.last_insert,
 			level: self.level+1, parent_id: row_id,
 			lua: self.lua, resource,
 			query_name: self.query_name,
