@@ -1671,10 +1671,16 @@ impl<T: ResourceTree,K: FromSql+ToSql+Copy> Iterator for RecursiveRows<'_,'_,'_,
 }
 /// A hierarchical collection of similar objects, organized in parallel
 /// with the resources and subresources in the database.
-#[derive(Debug)]
+/// #[derive(Debug)]
 pub struct Tree<T: ByName> {
 	pub content: T::In,
 	pub branches: T,
+}
+impl<X:Debug,T: ByName<In=X>+Debug> Debug for Tree<T> {
+	fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+		write!(f, "Tree {{ content: {:?}, branches: {:?} }}",
+			self.content, self.branches)
+	}
 }
 impl<T: ByName> ByName for Tree<T> {
 	type In = T::In;
@@ -1689,7 +1695,7 @@ impl<T: ByName> ByName for Tree<T> {
 		self.branches.by_name_mut1(&s[1..])
 	}
 }
-impl<X: Debug, Y: Debug, T: ByName<In=X>+Recurse<Y>> Recurse<Y> for Tree<T> {
+impl<X,Y,T: ByName<In=X>+Recurse<Y>> Recurse<Y> for Tree<T> {
 	type To = Tree<T::To>;
 	/// Recursively traverse the tree from its root,
 	/// applying the closure on each element. Used by `traverse` and `map`.
@@ -2448,9 +2454,6 @@ impl<'lua> Value<'lua> {
 				format!("cannot convert {e:?} to a SQL type")))
 		})
 	}
-	fn to_sql_owned(&self)->rusqlite::Result<ToSqlOutput<'static>> {
-		Ok(rusqlite::types::ToSqlOutput::Owned(self.to_sql_value()?))
-	}
 }
 /// A newtype around [`mlua::Value`], allowing us to implement various
 /// extra traits: [`rusqlite::ToSql`], custom [`Debug`] etc.
@@ -2472,7 +2475,9 @@ impl Debug for LuaValueRef<'_> {
 	}
 }
 impl ToSql for LuaValueRef<'_> {
-	fn to_sql(&self)->rusqlite::Result<ToSqlOutput<'_>> { self.0.to_sql_owned() }
+	fn to_sql(&self)->rusqlite::Result<ToSqlOutput<'_>> {
+		Ok(ToSqlOutput::Owned(self.0.to_sql_value()?))
+	}
 }
 
 /// Value conversion in the Sql->Lua direction.
@@ -2692,7 +2697,7 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		let mut bind_field = |i, name| {
 			let v_lua: Value<'_> = table.get(name)?;
 			// Note that sqlite uses 1-based indexing.
-			insert.raw_bind_parameter(i+1, v_lua.to_sql_owned()?)?;
+			insert.raw_bind_parameter(i+1, v_lua.to_sql_value()?)?;
 			any_ok(())
 		};
 		// first bind the header fields:
@@ -2796,6 +2801,19 @@ impl<'a> Callback<'a> for NextKey<'a> {
 		let id = row.get_ref(1)?;
 		(sql_to_lua(pos, lua)?, sql_to_lua(id, lua)?).to_lua_multi(lua)
 			.context("create Lua multivalue")
+	}
+}
+
+trait IntoCallback: Sized {
+	type RetType<'lua>: ToLuaMulti<'lua>;
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Self::RetType<'lua>>;
+	/// The wrapper installing the callback function in a table.
+	/// FIXME: replace this by a `ToLua` impl (storing the scope ref as a
+	/// part of the object itself)
+	fn into_callback<'scope,'lua>(mut self, scope: &mlua::Scope<'lua,'scope>)->mlua::Result<mlua::Function<'lua>> where Self: 'scope {
+		scope.create_function_mut(move |lua,args| {
+			self.execute(lua,args).to_lua_err()
+		})
 	}
 }
 /// This extension trait allows factoring the code for selecting the
@@ -3026,7 +3044,7 @@ impl<'s, T: DbInterface+Debug> PushRow<'s,T> {
 		}
 		self.insert.raw_execute()?;
 		if self.schema.is_subresource() {
-// 			println!("  got back rowid={}", self.db.last_insert_rowid());
+			println!("  \x1b[1;34mgot back rowid={}\x1b[m", self.db.last_insert_rowid());
 			Ok(Value::Integer(self.db.last_insert_rowid()))
 		} else {
 // 			println!(" we inserted id: {:?}", source.get::<_,Value>("id")?.to_sql_value()?);
@@ -3123,7 +3141,6 @@ struct LuaStatements<'a> {
 // 	/// We keep an owned copy of the original table schemas.
 // 	schemas: AllResources<Schema>,
 	/// Prepared statements for `simod.list`.
-// 	list_keys: RootForest<ListKeys<'a>>,
 	select_row: RootForest<SelectRow<'a>>,
 // 	read_field: RootForest<ReadField<'a>>,
 // 	insert_row: RootForest<InsertRow<'a>>,
@@ -3135,7 +3152,6 @@ impl<'a> LuaStatements<'a> {
 	pub fn new(db: &'a impl DbInterface)->Result<Self> {
 		Ok(Self {
 // 			schemas,
-// 			list_keys: RootForest::<_>::prepare(db)?,
 			select_row: RootForest::<_>::prepare(db)?,
 // 			read_field: RootForest::<_>::prepare(db)?,
 // 			insert_row: RootForest::<_>::prepare(db)?,
@@ -3233,18 +3249,9 @@ pub fn command_add(db: impl DbInterface+Debug, _target: &str)->Result<()> {
 		simod.set("push", scope.create_function_mut(move |lua, args| {
 			push(&mut push_statements, lua, args).to_lua_err()
 		})?)?;
-		let list_keys = RootForest::<ListKeys<'_>>::prepare(&db)
-			.to_lua_err()?;
-		simod.set("list", list_keys.into_callback(&scope)?)?;
+		simod.set("list", RootForest::<ListKeys<'_>>::prepare(&db).to_lua_err()?
+			.into_callback(scope)?)?;
 
-// 		let mut list_keys_f = scope.create_function_mut(move |lua, args|{
-// 			list_keys.execute(lua, args).to_lua_err()
-// 		})?;
-// 		simod.set("list", list_keys_f)?;
-// 		simod.set("list", scope.create_function_mut(move |lua,args| {
-// 			list_keys.execute(lua, args).to_lua_err()
-// 		})?);
-// 		list_keys.install_callback(scope, &simod, "list")?;
 		statements.select_row.install_callback(scope, &simod, "select")?;
 // 		statements.read_field.install_callback(scope, &simod, "get")?;
 // 		statements.insert_row.install_callback(scope, &simod, "insert")?;

@@ -517,16 +517,24 @@ impl ToTokens for DeriveResourceTree {
 			.collect::<Vec<_>>();
 		quote! {
 			/// A `Node` impl. derived by `derive(ResourceTree)`.
-			#[derive(Debug)]
-			pub struct #forestname<X: Debug> {
+			pub struct #forestname<X> {
 				#(pub #field: crate::trees::Tree<#subforest::<X>>,)*
 				_marker: PhantomData<X>
+			}
+			impl<X: Debug> Debug for #forestname<X> {
+				fn fmt(&self, f: &mut Formatter<'_>)->fmt::Result {
+					write!(f, stringify!(#forestname))?;
+					write!(f, "{{")?;
+					#(write!(f, stringify!(#field))?;
+					write!(f, ": {:?}, ", self.#field)?;)*
+					Ok(())
+				}
 			}
 			/// Runtime search in the tree.
 			/// this would be a bit hard to do with `recurse` — the lifetimes are
 			/// a mess, and we want to interrupt search as soon as we find *and*
 			/// cut branches with a non-matching name:
-			impl<X: Debug> crate::trees::ByName for #forestname<X> {
+			impl<X> crate::trees::ByName for #forestname<X> {
 				type In = X;
 				fn by_name1<'a>(&'a self, s: &str)->Option<&'a X> {
 					#(if let Some(tail) = s.strip_prefix(stringify!(#field)) {
@@ -542,7 +550,7 @@ impl ToTokens for DeriveResourceTree {
 					None
 				}
 			}
-			impl<X: Debug, Y:Debug> crate::trees::Recurse<Y> for #forestname<X> {
+			impl<X,Y> crate::trees::Recurse<Y> for #forestname<X> {
 				type To = #forestname<Y>;
 				fn recurse<'a,'n,S,E,F>(&'a self, f: F, name: &'n str, state: &S)
 					->Result<Self::To,E>
@@ -572,7 +580,7 @@ impl ToTokens for DeriveResourceTree {
 					})
 				}
 			}
-			impl<'s, T:Debug, S: crate::trees::RecurseState<T>> crate::trees::RecurseItr<T,S> for #forestname<T> {
+			impl<'s, T, S: crate::trees::RecurseState<T>> crate::trees::RecurseItr<T,S> for #forestname<T> {
 				fn recurse_itr_mut(&mut self, state: &S, _name: &str)->Result<()> {
 					#(self.#field.recurse_itr_mut(state, stringify!(#field))?;)*
 					Ok(())
