@@ -2804,8 +2804,7 @@ impl IntoCallback<'_> for RootForest<PullRow<'_>> {
 /// sub: parent, position (get id back)
 /// top: id
 #[derive(Debug)]
-struct PushRow<'s,T: DbInterface> {
-	db: &'s T,
+struct PushRow<'s> {
 	/// `select count(1) from $table where id=?`
 	exists: Statement<'s>,
 	/// for all fields (except id): `update $table set $field=? where id=?`
@@ -2828,8 +2827,8 @@ impl Schema {
 		self.with_headers(&[], &["position"])
 	}
 }
-impl<'s, T: DbInterface> PushRow<'s,T> {
-	fn new(db: &'s T, schema: &'s Schema)->Result<Self> {
+impl<'s> PushRow<'s> {
+	fn new(db: &'s impl DbInterface, schema: &'s Schema)->Result<Self> {
 		// TODO: distinction top/sub resource:
 		// for top resource: insert id
 		// for subresource: insert parent
@@ -2843,7 +2842,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 			update.insert(fname, db.prepare(format!(r#"update "{schema}" set {fname}=?2 where "id"=?1"#))?);
 		}
 		let last_insert = db.prepare(r#"select "last_insert" from "global""#)?;
-		Ok(Self { db, exists, update, schema, insert, last_insert })
+		Ok(Self { exists, update, schema, insert, last_insert })
 	}
 	fn row_exists(&mut self, id: &Value<'_>)->Result<bool> {
 		if let Value::Nil = id { return Ok(false) }
@@ -2911,7 +2910,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		}
 	}
 }
-impl<T: DbInterface> IntoCallback<'_> for RootForest<PushRow<'_,T>> {
+impl IntoCallback<'_> for RootForest<PushRow<'_>> {
 	type Ret<'lua> = ();
 	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<()> {
 		if args.len() != 2 {
@@ -2943,7 +2942,7 @@ struct PushState<'lua,'s> {
 	level: usize,
 }
 impl<'lua> PushState<'lua,'_> {
-	fn save_rec<T: DbInterface>(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+	fn save_rec(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		let row_id = save_row.save(&resource, &self.parent_id, position)
 			.with_context(||format!("save resource as row in '{}'", self.query_name))?;
 		let new_state = Self {
@@ -2954,8 +2953,8 @@ impl<'lua> PushState<'lua,'_> {
 		descend(&new_state)
 	}
 }
-impl<T: DbInterface> RecurseState<PushRow<'_,T>> for PushState<'_,'_> {
-	fn exec(&self, save_row: &mut PushRow<'_,T>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
+impl RecurseState<PushRow<'_>> for PushState<'_,'_> {
+	fn exec(&self, save_row: &mut PushRow<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		// Special case: at the first level we save a single resource, not a
 		// vector:
 		if self.level == 0 {
