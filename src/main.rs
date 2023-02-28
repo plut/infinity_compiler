@@ -3156,29 +3156,6 @@ impl RecurseState<PushRow<'_>> for PushState<'_,'_> {
 	}
 }
 
-
-/// Precomputes some constant lua strings
-/// 
-/// lua schema is defined by a table of strings in the following way:
-/// items= { weight= "integer", name= "strref", abilities= "subresource" }
-/// since we known in advance that a lot of those strings will be
-/// identical (and Lua interns strings anyway), we might as well
-/// allocate them first:
-macro_rules! lua_strings {
-	{$($s:ident),*} => {
-		/// Precomputed strings which will be repeatedly used in our Lua
-		/// structures.
-		struct LuaStrings<'lua> { $($s: mlua::String<'lua>,)* }
-		impl<'lua> LuaStrings<'lua> {
-			fn new(lua: &'lua Lua)->Result<Self> {
-				Ok(Self { $($s: lua.create_string(stringify!($s))?,)* })
-			}
-		}
-	}
-}
-lua_strings!(integer, text, strref, resref, subresource, fields,
-	is_subresource);
-
 /// Runs the lua script for adding a mod component to the database.
 ///
 /// We provide the lua side with a minimal low-level interface:
@@ -3197,6 +3174,27 @@ pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
 	lua.scope_any(|scope| {
+		/// Precomputes some constant lua strings
+		/// 
+		/// lua schema is defined by a table of strings in the following way:
+		/// items= { weight= "integer", name= "strref", abilities= "subresource" }
+		/// since we known in advance that a lot of those strings will be
+		/// identical (and Lua interns strings anyway), we might as well
+		/// allocate them first:
+		macro_rules! lua_strings {
+			{$($s:ident),*} => {
+				/// Precomputed strings which will be repeatedly used in our Lua
+				/// structures.
+				struct LuaStrings<'lua> { $($s: mlua::String<'lua>,)* }
+				impl<'lua> LuaStrings<'lua> {
+					fn new(lua: &'lua Lua)->Result<Self> {
+						Ok(Self { $($s: lua.create_string(stringify!($s))?,)* })
+					}
+				}
+			}
+		}
+		lua_strings!(integer, text, strref, resref, subresource, fields,
+			is_subresource);
 		let strings = LuaStrings::new(&lua)?;
 
 		let simod = lua.create_table()?;
@@ -3250,6 +3248,12 @@ pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 			.try_map(|schema| ListKeys::prepare(&db, schema))?)?;
 		simod.set_callback("delete", scope, ALL_SCHEMAS
 			.try_map(|schema| DeleteRow::prepare(&db, schema))?)?;
+		simod.set_callback("insert", scope, ALL_SCHEMAS
+			.try_map(|schema| InsertRow::prepare(&db, schema))?)?;
+		simod.set_callback("select", scope, ALL_SCHEMAS
+			.try_map(|schema| SelectRow::prepare(&db, schema))?)?;
+		simod.set_callback("update", scope, ALL_SCHEMAS
+			.try_map(|schema| UpdateRow::prepare(&db, schema))?)?;
 
 		lua.globals().set("simod", simod)?;
 
