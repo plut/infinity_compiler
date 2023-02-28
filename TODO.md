@@ -1,5 +1,5 @@
- - [ ] insert into `*` does not insert `id` into `add_*`
- - [ ] triggers do not work with `last_insert_rowid`; query it and
+ - [+] insert into `*` does not insert `id` into `add_*`
+ - [+] triggers do not work with `last_insert_rowid`; query it and
    register it in the `global` table
  - [+] `push` recursive seems to load the wrong table (item abilities has
    nulls everywhere)
@@ -9,7 +9,7 @@
  - a command-line option to make it headless (disable progress bars)
 # Lua side
  - [ ] add a primitive to check whether a key exists
- - [+] make every field access lazy (this is probably simplest way)
+ - [ ] make every field access lazy (this is probably simplest way)
  - [ ] build a hierarchy of metatables accessed via  tables
    i.e. `item_mt.abilities.each == item_abilities_mt` etc.
  - [ ] decide when conversion from native to strref (etc.) is performed:

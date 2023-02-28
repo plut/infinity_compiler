@@ -69,11 +69,11 @@ pub(crate) const nothing2: ((),()) = (nothing, nothing);
 pub enum Error{
 	UnknownTable(String),
 	BadArgumentNumber { expected: usize, found: usize },
-// 	BadArgumentType { position: usize, expected: &'static str, found: String },
-// 	BadParameterCount { expected: usize, found: usize },
+	BadArgumentType { position: usize, expected: &'static str, found: String },
+	BadParameterCount { expected: usize, found: usize },
 // 	CallbackMissingArgument,
-// 	UnknownField { field: String },
-// 	RowNotFound { key: String},
+	UnknownField { field: String },
+	RowNotFound { key: String},
 	LuaConversion,
 }
 impl Display for Error {
@@ -82,11 +82,11 @@ impl Display for Error {
 			Self::UnknownTable(s) => write!(f, "Unknown table: '{s}'"),
 			Self::BadArgumentNumber { expected, found } =>
 				write!(f, "Bad number of arguments: found {found}, expected {expected}"),
-// 			Self::BadArgumentType { position, expected, found } =>
-// 				write!(f, "Bad argument type at position {position}: expected {expected}, found {found}"),
-// 			Self::BadParameterCount { expected, found } =>
-// 				write!(f, "Bad parameter count for SQL statement: found {found}, expected {expected}"),
-// 			Self::UnknownField { field } => write!(f, r#"Unknown field "{field}""#),
+			Self::BadArgumentType { position, expected, found } =>
+				write!(f, "Bad argument type at position {position}: expected {expected}, found {found}"),
+			Self::BadParameterCount { expected, found } =>
+				write!(f, "Bad parameter count for SQL statement: found {found}, expected {expected}"),
+			Self::UnknownField { field } => write!(f, r#"Unknown field "{field}""#),
 			Self::LuaConversion => write!(f, r#"(converting error from/to Lua)"#),
 			#[allow(unreachable_patterns)]
 			_ => write!(f, "Error: &{self:?}"),
@@ -100,11 +100,11 @@ macro_rules! uwrite { ($($a:tt)*) => { write!($($a)*).unwrap() } }
 macro_rules! uwriteln { ($($a:tt)*) => { writeln!($($a)*).unwrap() } }
 pub(crate) use {uwrite,uwriteln};
 
-// /// Small simplification for frequent use in callbacks.
-// macro_rules! fail {
-// 	($($a:tt)+) => { return Err(Error::$($a)+.into()) }
-// }
-// pub(crate) use {fail};
+/// Small simplification for frequent use in callbacks.
+macro_rules! fail {
+	($($a:tt)+) => { return Err(Error::$($a)+.into()) }
+}
+pub(crate) use {fail};
 
 }
 pub mod toolbox {
@@ -1218,11 +1218,10 @@ left join "strref_dict" as {b} on {a} = {b}."native""#);
 	///
 	/// The tables are as follows:
 	/// - `load_{name}`: data read from game files.
-	/// - `add_{name}`: new data inserted by mods.
 	/// - `edit_{name}`: data modified by mods.
 	/// The views are:
 	/// - `{name}`: the main view on which edits are done by mods (and
-	/// propagated to `add_{name}` or `edit_{name}` by triggers as needed).
+	/// propagated to `load_{name}` or `edit_{name}` by triggers as needed).
 	/// - `save_{name}`: the view used to save new or modified values to
 	/// game files.
 	pub fn create_tables_and_views<T>(&self, f: impl Fn(String)->Result<T>)->Result<()> {
@@ -2659,6 +2658,192 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 		Ok(Value::Table(ret))
 	}
 }
+/// Implementation of the `simod.select` callback.
+#[derive(Debug)]
+struct SelectRow<'a>(Statement<'a>);
+impl<'a> Callback<'a> for SelectRow<'a> {
+	type RetType<'lua> = Value<'lua>;
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+		// TODO
+		let cols = schema.payload();
+		let sql = format!(r#"select {cols} from "{schema}" where "id"=?"#);
+		db.prepare(sql).map(Self)
+	}
+	/// Implementation of `simod.list`.
+	///
+	/// This takes as parameters either
+	/// 1. the name of a top-level resource table, or
+	/// 2. the name of a sub-resource + a resref for the corresponding
+	///    top-level resource,
+	/// and returns in a Lua table the list of all primary keys matching
+	/// this condition.
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
+		// (already used) table name
+		// 0 row id
+		Self::expect_arguments(&args, 2)?;
+		let arg1 = LuaValueRef(args.get(0).unwrap());
+		let mut rows = self.0.query((arg1,))?;
+		match rows.next()? {
+			Some(row) => {
+				let ret = lua.create_table()?;
+				for i in 0..row.as_ref().column_count() {
+					let val = row.get_ref(i)
+						.with_context(|| format!("cannot read field {i} in row"))?;
+					ret.set(row.as_ref().column_name(i)?, sql_to_lua(val, lua)?)?;
+				}
+				ret.set("id", args.pop_front().unwrap())?;
+				Ok(Value::Table(ret))
+			},
+			None => Ok(Value::Nil),
+		}
+	}
+}
+/// Implementation of `simod.read_field`.
+#[derive(Debug)]
+struct ReadField<'a>(HashMap<&'a str, Statement<'a>>);
+impl<'a> Callback<'a> for ReadField<'a> {
+	type RetType<'lua> = Value<'lua>;
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+		let cols = schema.payload();
+		let mut h = HashMap::<&str, Statement<'_>>::with_capacity(cols.len());
+		for field in cols {
+			h.insert(field.fname, db.prepare(&format!(
+				r#"select {field} from "{schema}" where "id"=?"#))?);
+		}
+		Ok(Self(h))
+	}
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
+		Self::expect_arguments(&args, 3)?;
+		let arg0 = args.pop_front().unwrap(); // take ownership of first argument
+		let fieldname = match arg0 {
+			Value::String(ref s) => s.to_str()?,
+			other => fail!(BadArgumentType { position: 2, expected: "string",
+				found: format!("{other:?}")}),
+		};
+		let stmt = match self.0.get_mut(fieldname) {
+			Some(s) => s,
+			_ => fail!(UnknownField { field: fieldname.into(), }),
+		};
+		let arg1 = LuaValueRef(args.get(0).unwrap());
+		let mut rows = stmt.query((arg1,))?;
+		let row = match rows.next()? {
+			Some(row) => row,
+			None => fail!(RowNotFound { key: format!("{arg1:?}") }),
+		};
+		let val = row.get_ref(0)?;
+		sql_to_lua(val, lua)
+	}
+}
+/// Implementation of `simod.insert`.
+#[derive(Debug)]
+struct InsertRow<'a> {
+	/// The main insert statement.
+	insert: Statement<'a>,
+	/// The statement generating the rowid (for subresources only).
+	counter: Option<Statement<'a>>,
+	/// We also need a reference to the resource schema.
+	schema: &'a Schema,
+}
+impl<'a> Callback<'a> for InsertRow<'a> {
+	type RetType<'lua> = Value<'lua>;
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+		let insert = schema.insert_sql((), "");
+		// TODO: use a restricted form of insertion where primary is not
+		// inserted
+		let counter = if schema.is_subresource() {
+			Some(db.prepare(format!(r#"select {schema} from "counters""#))?)
+		} else { None };
+		Ok(Self {
+			insert: db.prepare(insert)?,
+			counter,
+			schema,
+		})
+	}
+	fn execute<'lua>(&mut self, _lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
+		Self::expect_arguments(&args, 2)?;
+		let table = match args.pop_front().unwrap() {
+			Value::Table(t) => t,
+			other => fail!(BadArgumentType { position: 2, expected: "table",
+				found: format!("{other:?}")}),
+		};
+		let Self { insert, counter, schema } = self;
+		// We could use two strategies here:
+		// 1. build an iterator from schema.fields, then map to SQL values,
+		//    then pass to [`rusqlite::params_from_iter`],
+		// 2. use a loop and raw bind to the statement.
+		// Since [`rusqlite::params_from_iter`] does not accept `Result`
+		// values, taking option 2 will produce better failure messages.
+		let expected = insert.parameter_count();
+		let mut bind_field = |i, name| {
+			let v_lua: Value<'_> = table.get(name)?;
+			// Note that sqlite uses 1-based indexing.
+			insert.raw_bind_parameter(i+1, v_lua.to_sql_value()?)?;
+			any_ok(())
+		};
+		// first bind the header fields:
+		if schema.is_subresource() {
+			bind_field(0, "parent")?; // `position` added as part of `pos_payload`
+			counter.as_mut().unwrap().query_row((), |row| {
+				let c = row.get::<_,usize>(0)?;
+				println!("generated id: {c}");
+				table.set("id", c).expect("unable to bind to Lua table");
+				Ok(())
+			})?;
+		} else {
+			bind_field(0, "id")?;
+		}
+		let offset = 1;
+		let cols = schema.pos_payload();
+		let found = cols.len() + offset;
+		if found != expected {
+			fail!(BadParameterCount { expected, found })
+		}
+		for (i, field) in cols.enumerate() {
+			bind_field(i + offset, field.fname)?;
+		}
+		insert.raw_execute()?;
+		Ok(Value::Table(table))
+	}
+}
+/// Implementation of `simod.update`.
+///
+/// We collect all the per-field update statements in a hash map.
+/// While this might lead to preparing useless statements in the case of
+/// a small mod, this should save time for large mods on average,
+/// and using prepared statements is safer anyway.
+/// (Besides, the memory storage req for a prepared statement is small).
+#[derive(Debug)]
+struct UpdateRow<'a>(HashMap<&'a str, Statement<'a>>);
+impl<'a> Callback<'a> for UpdateRow<'a> {
+	type RetType<'lua> = Value<'lua>;
+	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
+		let itr = schema.pos_payload();
+		let mut h = HashMap::<&str, Statement<'_>>::with_capacity(itr.len());
+		// TODO: use position for subresources
+		for field in itr {
+			h.insert(field.fname, db.prepare(&format!(
+				r#"update "{schema}" set {field}=?2 where "id"=?1"#))?);
+		}
+		Ok(Self(h))
+	}
+	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<Value<'lua>> {
+		Self::expect_arguments(&args, 4)?;
+		let arg0 = args.pop_front().unwrap(); // take ownership of first argument
+		let fieldname = match arg0 {
+			Value::String(ref s) => s.to_str()?,
+			other => fail!(BadArgumentType { position: 2, expected: "string",
+				found: format!("{other:?}")}),
+		};
+		let stmt = match self.0.get_mut(fieldname) {
+			Some(s) => s,
+			_ => fail!(UnknownField { field: fieldname.into(), }),
+		};
+		// Return the number of changed rows:
+		let n = stmt.execute((LuaValueRef(args.get(0).unwrap()),
+			LuaValueRef(args.get(1).unwrap())))?;
+		Ok(n.to_lua(lua)?)
+	}
+}
 /// Implementation of `simod.delete`.
 #[derive(Debug)]
 struct DeleteRow<'a>(Statement<'a>);
@@ -2971,6 +3156,29 @@ impl RecurseState<PushRow<'_>> for PushState<'_,'_> {
 	}
 }
 
+
+/// Precomputes some constant lua strings
+/// 
+/// lua schema is defined by a table of strings in the following way:
+/// items= { weight= "integer", name= "strref", abilities= "subresource" }
+/// since we known in advance that a lot of those strings will be
+/// identical (and Lua interns strings anyway), we might as well
+/// allocate them first:
+macro_rules! lua_strings {
+	{$($s:ident),*} => {
+		/// Precomputed strings which will be repeatedly used in our Lua
+		/// structures.
+		struct LuaStrings<'lua> { $($s: mlua::String<'lua>,)* }
+		impl<'lua> LuaStrings<'lua> {
+			fn new(lua: &'lua Lua)->Result<Self> {
+				Ok(Self { $($s: lua.create_string(stringify!($s))?,)* })
+			}
+		}
+	}
+}
+lua_strings!(integer, text, strref, resref, subresource, fields,
+	is_subresource);
+
 /// Runs the lua script for adding a mod component to the database.
 ///
 /// We provide the lua side with a minimal low-level interface:
@@ -2989,19 +3197,7 @@ pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 	// We need to wrap the rusqlite calls in a Lua scope to preserve  the
 	// lifetimes of the references therein:
 	lua.scope_any(|scope| {
-		// lua schema is defined by a table of strings in the following way:
-		// items= { weight= "integer", name= "strref", abilities= "subresource" }
-		// since we known in advance that a lot of those strings will be
-		// identical (and Lua interns strings anyway), we might as well
-		// allocate them first:
-		let marker_integer = lua.create_string("integer")?;
-		let marker_text = lua.create_string("text")?;
-		let marker_strref = lua.create_string("strref")?;
-		let marker_resref = lua.create_string("resref")?;
-		let marker_subresource = lua.create_string("subresource")?;
-		// constant key entries for schema table; same behaviour:
-		let fields_key = lua.create_string("fields")?;
-		let is_subresource_key = lua.create_string("is_subresource")?;
+		let strings = LuaStrings::new(&lua)?;
 
 		let simod = lua.create_table()?;
 
@@ -3013,23 +3209,23 @@ pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 			let fields = lua.create_table()?;
 			for f in schema.payload() {
 				let marker = match f.ftype {
-					FieldType::Integer => marker_integer.clone(),
-					FieldType::Text => marker_text.clone(),
-					FieldType::Resref => marker_resref.clone(),
-					FieldType::Strref => marker_strref.clone(),
+					FieldType::Integer => strings.integer.clone(),
+					FieldType::Text => strings.text.clone(),
+					FieldType::Resref => strings.resref.clone(),
+					FieldType::Strref => strings.strref.clone(),
 					_ => panic!("should not appear"),
 				};
 				fields.set(f.fname, marker)?;
 			}
 			// store this in `simod.schema.X.fields`:
 			let this_schema = lua.create_table()?;
-			this_schema.set(fields_key.clone(), fields.clone())?;
+			this_schema.set(strings.fields.clone(), fields.clone())?;
 			// we mark ourself as a subresource for the parent (note that the
 			// `recurse_mut` function does not allow easily doing this on the
 			// parent side; we use the `parent_table` we got as our state):
 			if let Some((_parent, _root)) = schema.parent_root.as_ref() {
-				parent_fields.set(name, marker_subresource.clone())?;
-				this_schema.set(is_subresource_key.clone(), true)?;
+				parent_fields.set(name, strings.subresource.clone())?;
+				this_schema.set(strings.is_subresource.clone(), true)?;
 			}
 			simod_schema.set(schema.name.as_str(), this_schema)?;
 			// pass the resulting table to our branches, and return nothing:
