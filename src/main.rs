@@ -2812,6 +2812,12 @@ struct PushRow<'s,T: DbInterface> {
 	update: HashMap<&'s str, Statement<'s>>,
 	/// `insert into $dable (id, ...) values (?,...)`
 	insert: Statement<'s>,
+	/// The statement retrieving the last generated primary key
+	/// from the `"global"` table.
+	/// (This is currently the same statement for all tables. However, for
+	/// mutability + lifetimes reasons it is *much* simpler to keep a copy
+	/// in each `PushRow` struct).
+	last_insert: Statement<'s>,
 	schema: &'s Schema,
 }
 impl Schema {
@@ -2836,7 +2842,8 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		for Field { fname, .. } in schema.push_update() {
 			update.insert(fname, db.prepare(format!(r#"update "{schema}" set {fname}=?2 where "id"=?1"#))?);
 		}
-		Ok(Self { db, exists, update, schema, insert })
+		let last_insert = db.prepare(r#"select "last_insert" from "global""#)?;
+		Ok(Self { db, exists, update, schema, insert, last_insert })
 	}
 	fn row_exists(&mut self, id: &Value<'_>)->Result<bool> {
 		if let Value::Nil = id { return Ok(false) }
@@ -2859,9 +2866,7 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		}
 		Ok(())
 	}
-	fn insert_new<'lua>(&mut self, source: &mlua::Table<'lua>, parent: &Value<'_>, position: usize, id: Value<'lua>
-// 	, last_insert: &mut Statement<'_>
-	)->Result<Value<'lua>> {
+	fn insert_new<'lua>(&mut self, source: &mlua::Table<'lua>, parent: &Value<'_>, position: usize, id: Value<'lua>)->Result<Value<'lua>> {
 		// TODO: this is where we make a distinction top/sub:
 		// top:
 		//  - insert id
@@ -2887,15 +2892,13 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 		self.insert.raw_execute()
 			.context("execute INSERT statement")?;
 		if self.schema.is_subresource() {
-// 			let rowid: i64 = last_insert.query_row((), |row| row.get(0))?;
-			Ok(Value::Integer(0))
+			let rowid: i64 = self.last_insert.query_row((), |row| row.get(0))?;
+			Ok(Value::Integer(rowid))
 		} else {
 			Ok(id)
 		}
 	}
-	fn save<'lua>(&mut self, source: &mlua::Table<'lua>, parent_id: &Value<'_>, position: usize
-// 	, last_insert: &mut Statement<'_>
-	)->Result<Value<'lua>> {
+	fn save<'lua>(&mut self, source: &mlua::Table<'lua>, parent_id: &Value<'_>, position: usize)->Result<Value<'lua>> {
 		let id: Value<'_> = source.get("id")?;
 		if self.row_exists(&id)
 			.with_context(||format!("check if row {:?} exists", id.to_sql_value()))? {
@@ -2903,14 +2906,12 @@ impl<'s, T: DbInterface> PushRow<'s,T> {
 				.with_context(||format!("updating existing row with id {:?}", id.to_sql_value()))?;
 			Ok(id)
 		} else {
-			self.insert_new(source, parent_id, position, id.clone()
-// 			, last_insert
-			)
+			self.insert_new(source, parent_id, position, id.clone())
 				.with_context(||format!("inserting new row with id {:?}", id.to_sql_value()))
 		}
 	}
 }
-impl<T: DbInterface> IntoCallback<'_> for (Statement<'_>, RootForest<PushRow<'_,T>>) {
+impl<T: DbInterface> IntoCallback<'_> for RootForest<PushRow<'_,T>> {
 	type Ret<'lua> = ();
 	fn execute<'lua>(&mut self, lua: &'lua Lua, mut args: MultiValue<'lua>)->Result<()> {
 		if args.len() != 2 {
@@ -2921,11 +2922,10 @@ impl<T: DbInterface> IntoCallback<'_> for (Statement<'_>, RootForest<PushRow<'_,
 		let resource = args.pop_as::<mlua::Table<'_>>(lua)
 			.context("second argument (resource) must be a table")?;
 		let init = PushState {
-// 			last_insert: &mut self.0,
 			lua, level: 0, query_name: &query_name,
 			resource, parent_id: mlua::Value::Nil,
 		};
-		self.1.recurse_itr_mut(&init, "")
+		self.recurse_itr_mut(&init, "")
 			.with_context(||format!("recursively save resource to table '{query_name}'"))?;
 		Ok(())
 	}
@@ -2941,17 +2941,12 @@ struct PushState<'lua,'s> {
 	parent_id: Value<'lua>,
 	query_name: &'s str,
 	level: usize,
-// 	/// The statement used to get back `last_insert_rowid`.
-// 	last_insert: &'s mut Statement<'s>,
 }
 impl<'lua> PushState<'lua,'_> {
 	fn save_rec<T: DbInterface>(&self, resource: mlua::Table<'lua>, position: usize, save_row: &mut PushRow<'_,T>, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
-		let row_id = save_row.save(&resource, &self.parent_id, position
-// 		, &mut self.last_insert
-		)
+		let row_id = save_row.save(&resource, &self.parent_id, position)
 			.with_context(||format!("save resource as row in '{}'", self.query_name))?;
 		let new_state = Self {
-// 			last_insert: self.last_insert,
 			level: self.level+1, parent_id: row_id,
 			lua: self.lua, resource,
 			query_name: self.query_name,
@@ -3054,9 +3049,8 @@ pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 		})?)?;
 		simod.set_callback("pull", scope, ALL_SCHEMAS
 			.try_map(|schema| PullRow::new(&db, schema))?)?;
-		let last_insert = db.prepare(r#"select "last_insert" from "global""#)?;
-		simod.set_callback("push", scope, (last_insert, ALL_SCHEMAS
-			.try_map(|schema| PushRow::new(&db, schema))?))?;
+		simod.set_callback("push", scope, ALL_SCHEMAS
+			.try_map(|schema| PushRow::new(&db, schema))?)?;
 		simod.set_callback("list", scope, ALL_SCHEMAS
 			.try_map(|schema| ListKeys::prepare(&db, schema))?)?;
 		simod.set_callback("delete", scope, ALL_SCHEMAS
