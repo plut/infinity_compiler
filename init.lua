@@ -130,11 +130,9 @@ local resource_mt = {}
 resource_mt.__index = resource_mt -- let derived classes inherit from this
 function resource_mt:derive(table)
 	-- builds a derived class from `resource_mt`
-	local meta = { _table = table }
-	meta.__index = meta -- this is a class
+	local meta = { _table = table, __index = self.index }
 	-- in other words: member:method() will look in the metatable
-	setmetatable(meta, self)
-	return meta
+	return setmetatable(meta, self)
 end
 function resource_mt.load(table, key)
 	-- loads a resource from row `key` of table `table`, recursively with
@@ -152,6 +150,39 @@ function resource_mt.load(table, key)
 		end
 	end
 	return setmetatable(new, simod.schema[table].methods)
+end
+function resource_mt:read(key)
+	-- reads a row from Lua tables and returns an object of the
+	-- corresponding type.
+	-- 
+	-- Sub-resources are not read at this point but dynamically when
+	-- accessing a sub-resource field.
+	local table = self._table
+	print(blue("reading from table ", table, " line ", key))
+	local vals = simod.select(table, key)
+	if vals == nil then return vals end
+	return setmetatable({_fields = vals, _id=key}, self)
+end
+function resource_mt:index(key)
+	print(magenta("indexing ", strdump(self, 1), " with key ", key))
+	local methods = getmetatable(self)
+	-- if this key represents an existing method in the metatable,
+	-- return the method:
+	do local meth = methods[key]; if meth ~= nil then return meth end end
+	local table = methods._table
+	if table == nil then error('missing "_table" field: '..strdump(methods)) end
+	local ft = simod.schema[table].fields[key]
+	if ft == nil then
+		error('field "'..key..'" not found in table "'..table..'"')
+	end
+	if ft == "subresource" then
+		local subtable = table..'_'..key
+		local list = simod.list(subtable, self._id)
+		dump(list)
+		return setmetatable({_list=list}, simod.schema[subtable].resvec_methods)
+	else
+		return self._fields[key]
+	end
 end
 function resource_mt:save()
 	-- saves a resource to database, recursively with all its subresources.
@@ -234,6 +265,23 @@ function resource_mt:clone(args)
 	return new
 end
 
+--««1 Methods for resource vectors
+local resvec_mt = {}
+resvec_mt.__index = resvec_mt
+function resvec_mt:derive(table)
+	local meta = {_table = table, __index = self.index,
+		each=simod.schema[table].methods }
+	return setmetatable(meta, self)
+end
+function resvec_mt:index(i)
+	local methods = getmetatable(self)
+	-- if this key represents an existing method in the metatable,
+	-- return the method:
+	local key = self._list[i]
+	if key == nil then return nil end
+	return methods.each:read(key)
+end
+	
 --««1 Methods for resource builders
 -- Resource builders (E.g. "item") have the following form:
 -- { _table = "items" } -- and they catch the appropriate metatable
@@ -280,6 +328,7 @@ end
 -- compute all metatables for resources:
 for table, schema in pairs(simod.schema) do
 	schema.methods = resource_mt:derive(table)
+	schema.resvec_methods = resvec_mt:derive(table)
 end
 
 simod.schema.items.default_key = "name"
@@ -309,76 +358,23 @@ function test_core()
 		assert(x.description_icon == "csw1h34" and x.min_intelligence == 0
 			and x.stack_amount == 1 and x.price == 10000)
 -- 		dump(x)
--- 	group("simod.get")
-		local x = simod.get("items", "name", "sw1h34")
-		assert(x == 31707)
--- 		dump(x)
 -- 	group("simod.set")
-		local x = simod.set("items", "name", "sw1h34", "strange sword!")
--- 		dump(x)
--- 		print(blue("now sw1h34 name is:"))
-		local x = simod.get("items", "name", "sw1h34")
-		assert(x == "strange sword!")
+		local x = simod.update("items", "name", "sw1h34", "strange sword!")
 -- 		dump(x)
 -- 	group("simod.schema is:")
 -- 		dump(simod.schema)
 end
-function test_objects0()
-	-- show schema
-	for k, v in pairs(simod.schema) do
-		print(k, v.primary, strdump(v.context))
-	end
-	-- test item cloning
-	sword = item("sw1h34")
-	sword.weight = 18
--- 	d"sword"
-	assert(sword.weight == 18)
--- 	d"sword.abilities[1].use_icon"
-	sword.abilities[1].use_icon="spwi101b"
-	carsomyr1 = sword("crasomyr")
-	ab = carsomyr1.abilities[1]
-	print(bold(red("computing effect now:")))
-	debug=true
-	ef = ab.effects[0]
-	print(bold(red("computing effect done!")))
-	dump(ef._context)
-	if true then return end
--- 	d"crasomyr1"
-	assert(carsomyr1.itemref == "crasomyr")
-	assert(carsomyr1.name == "crasomyr")
-	assert(carsomyr1.abilities[0]._context.itemref == carsomyr1.itemref)
-	carsomyr2 = sword{"crasomyr", weight=200, itemref="cars2"}
-	print("cocou")
-	assert(carsomyr2.itemref == "cars2")
-	assert(carsomyr2.name == "crasomyr")
-	assert(carsomyr2.weight == 200)
-	assert(carsomyr2.abilities[0]._context.itemref == carsomyr2.itemref)
-	print("delete!")
-	carsomyr2:delete()
-	print("after delete")
-end
-function test_resources()
--- 	group("resource builder")
-end
-function test_inherit()
-	function all_resources_mt:foo()
-		print("called all_resources_mt:foo() on:", strdump(self))
-	end
-	function all_resources_mt.items:foo()
-		print("called item:foo() on:", strdump(self))
-	end
-	local albruin = setmetatable({_table="items", _key="sw1h34"}, all_resources_mt.items)
-	albruin:foo()
-end
-test = setmetatable(simod.pull("items", "ring02"), simod.schema.items.methods)
-dump(simod.schema.items.methods)
+local items_mt = simod.schema.items.methods
+dump(items_mt)
+test = items_mt:read("ring02")
 dump(test)
-print(getmetatable(test).clone)
-print(test.clone)
-foo = test:clone({"blah", name="New name for a ring", weight=3})
-simod.push("items", foo)
--- -- dump(foo.id)
--- -- dump(foo.weight)
--- -- albruin:save()
--- -- simod.dump("select * from edit_items_abilities")
--- -- simod.dump("select * from edit_items")
+print(test.name)
+print(test.effects)
+dump(test.effects[1])
+-- test = setmetatable(simod.pull("items", "ring02"), simod.schema.items.methods)
+-- dump(simod.schema.items.methods)
+-- dump(test)
+-- print(getmetatable(test).clone)
+-- print(test.clone)
+-- foo = test:clone({"blah", name="New name for a ring", weight=3})
+-- simod.push("items", foo)
