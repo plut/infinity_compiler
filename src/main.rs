@@ -1267,7 +1267,7 @@ end"#))?;
 			trans_insert.push_str(&trans);
 			f(format!(
 r#"create trigger "update_{self}_{fname}"
-instead of update of "{fname}" on "{self}" where old."{fname}" != new."{fname}"
+instead of update of "{fname}" on "{self}" when old."{fname}" != new."{fname}"
 begin
 	{trans}
 	insert or ignore into "dirty_{root}" values (new."root");
