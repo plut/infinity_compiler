@@ -130,7 +130,7 @@ local resource_mt = {}
 resource_mt.__index = resource_mt -- let derived classes inherit from this
 function resource_mt:derive(table)
 	-- builds a derived class from `resource_mt`
-	local meta = { _table = table, __index = self.index }
+	local meta = {_table = table, __index = self.index, __newindex=self.setindex }
 	-- in other words: member:method() will look in the metatable
 	return setmetatable(meta, self)
 end
@@ -178,10 +178,29 @@ function resource_mt:index(key)
 	if ft == "subresource" then
 		local subtable = table..'_'..key
 		local list = simod.list(subtable, self._id)
-		dump(list)
 		return setmetatable({_list=list}, simod.schema[subtable].resvec_methods)
 	else
 		return self._fields[key]
+	end
+end
+function resource_mt:setindex(key, value)
+	print(red("updating ", strdump(self, 1), " with ", key, value))
+	local methods = getmetatable(self)
+	local table = methods._table
+	if table == nil then error('missing "_table" field: '..strdump(methods)) end
+	local ft = simod.schema[table].fields[key]
+	if ft == nil then
+		error('field "'..key..'" not found in table "'..table..'"')
+	end
+	if ft == "subresource" then
+		error("cannot set subresource vector; use push etc. instead")
+-- 		local subtable = table..'_'..key
+-- 		local list = simod.list(subtable, self._id)
+-- 		dump(list)
+-- 		return setmetatable({_list=list}, simod.schema[subtable].resvec_methods)
+	else
+		simod.update(table, key, self._id, value)
+		self._fields[key] = value
 	end
 end
 function resource_mt:save()
@@ -281,6 +300,10 @@ function resvec_mt:index(i)
 	if key == nil then return nil end
 	return methods.each:read(key)
 end
+function resvec_mt:insert(resource, index)
+	if index == nil then index = table.getn(self._list) end
+	print(yellow("inserting at index ", index))
+end
 	
 --««1 Methods for resource builders
 -- Resource builders (E.g. "item") have the following form:
@@ -365,12 +388,12 @@ function test_core()
 -- 		dump(simod.schema)
 end
 local items_mt = simod.schema.items.methods
-dump(items_mt)
 test = items_mt:read("ring02")
-dump(test)
-print(test.name)
-print(test.effects)
-dump(test.effects[1])
+test_eff = test.effects
+mt = getmetatable(test_eff)
+print(magenta("mt: ")); dump(mt)
+print(magenta("mt.insert:")); dump(mt.insert)
+test.name="New name for a ring"
 -- test = setmetatable(simod.pull("items", "ring02"), simod.schema.items.methods)
 -- dump(simod.schema.items.methods)
 -- dump(test)

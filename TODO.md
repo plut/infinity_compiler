@@ -8,6 +8,7 @@
    resources
  - a command-line option to make it headless (disable progress bars)
 # Lua side
+ - [ ] `ipairs` for resvecs
  - [ ] add a primitive to check whether a key exists
  - [ ] make every field access lazy (this is probably simplest way)
  - [ ] build a hierarchy of metatables accessed via  tables

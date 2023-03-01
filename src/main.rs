@@ -2665,7 +2665,7 @@ impl<'a> Callback<'a> for SelectRow<'a> {
 	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		// TODO
-		let cols = schema.payload();
+		let cols = schema.with_headers(&[], &["position"]);
 		let sql = format!(r#"select {cols} from "{schema}" where "id"=?"#);
 		db.prepare(sql).map(Self)
 	}
@@ -2705,7 +2705,7 @@ impl<'a> Callback<'a> for ReadField<'a> {
 	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let cols = schema.payload();
-		let mut h = HashMap::<&str, Statement<'_>>::with_capacity(cols.len());
+		let mut h = HashMap::with_capacity(cols.len());
 		for field in cols {
 			h.insert(field.fname, db.prepare(&format!(
 				r#"select {field} from "{schema}" where "id"=?"#))?);
@@ -2818,7 +2818,7 @@ impl<'a> Callback<'a> for UpdateRow<'a> {
 	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
 		let itr = schema.pos_payload();
-		let mut h = HashMap::<&str, Statement<'_>>::with_capacity(itr.len());
+		let mut h = HashMap::with_capacity(itr.len());
 		// TODO: use position for subresources
 		for field in itr {
 			h.insert(field.fname, db.prepare(&format!(
