@@ -2554,6 +2554,16 @@ impl<'lua> crate::sql_rows::AsParams for MultiValue<'lua> {
 		self.into_iter().map(LuaValueRef::from)
 	}
 }
+
+#[ext]
+pub impl Row<'_> {
+	fn get_as_lua<'lua>(&self, i: usize, lua: &'lua Lua)->Result<Value<'lua>> {
+		let v_sql = self.get_ref(i)
+			.with_context(||format!("get column {i} from sql"))?;
+		sql_to_lua(v_sql, lua)
+			.context("convert SQL value to Lua")
+	}
+}
 } // mod extensions
 pub mod lua_api {
 //! Loads mod-supplied Lua files.
@@ -2589,7 +2599,7 @@ use crate::prelude::*;
 use crate::trees::{ALL_SCHEMAS,ByName,Recurse,RecurseState,RecurseItr};
 use crate::resources::{RootForest};
 use crate::schemas::{FieldType,Field,Schema};
-use crate::sql_rows::{AsParams,Row_Ext};
+use crate::sql_rows::{AsParams,Row_Ext as _};
 
 use crate::lua_extensions::*;
 
@@ -2624,12 +2634,13 @@ pub trait Callback<'a>: Sized {
 #[derive(Debug)]
 struct ListKeys<'a>(Statement<'a>);
 impl<'a> Callback<'a> for ListKeys<'a> {
-	type RetType<'lua> = Value<'lua>;
+	type RetType<'lua> = MultiValue<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		let mut s = format!(r#"select "id" from "{schema}""#);
-		if schema.is_subresource() {
-			uwrite!(&mut s, r#" where "parent"=? order by "position""#);
-		}
+		let s = if schema.is_subresource() {
+			format!(r#"select "id", "position" from "{schema}" where "parent"=? order by "position""#)
+		} else {
+			format!(r#"select "id" from "{schema}""#)
+		};
 		db.prepare(s).map(Self)
 	}
 	/// Implementation of `simod.list`.
@@ -2640,22 +2651,30 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 	///    top-level resource,
 	/// and returns in a Lua table the list of all primary keys matching
 	/// this condition.
-	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<Value<'lua>> {
+	fn execute<'lua>(&mut self, lua: &'lua Lua, args: MultiValue<'lua>)->Result<MultiValue<'lua>> {
+		let n = self.0.column_count();
 		Self::expect_arguments(&args, self.0.parameter_count()+1)
 			.context("'list' callback")?;
 		let mut rows = self.0.query(args.as_params())?;
-		let ret = lua.create_table()
-			.context("cannot create table")?;
-		while let Some(row) = rows.next()
-				.context("read row")? {
-			let v_sql = row.get_ref(0)
-				.context("get first column")?;
-			let v_lua = sql_to_lua(v_sql, lua)
-				.context("convert to Lua")?;
-			ret.push(v_lua)
-				.context("insert into table")?;
+			let mut ret = MultiValue::new();
+		if n == 1 {
+			let list = lua.create_table()
+				.context("cannot create table")?;
+			while let Some(row) = rows.next().context("read row")? {
+				list.push(row.get_as_lua(0, lua)?)?;
+			}
+			ret.push_front(Value::Table(list));
+		} else {
+			let keys = lua.create_table()?;
+			let positions = lua.create_table()?;
+			while let Some(row) = rows.next().context("read row")? {
+				keys.push(row.get_as_lua(0, lua)?)?;
+				positions.push(row.get_as_lua(1, lua)?)?;
+			}
+			ret.push_front(Value::Table(positions));
+			ret.push_front(Value::Table(keys));
 		}
-		Ok(Value::Table(ret))
+		return Ok(ret)
 	}
 }
 /// Implementation of the `simod.select` callback.

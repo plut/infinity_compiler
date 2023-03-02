@@ -140,13 +140,13 @@ function resource_mt.load(table, key)
 	local new = simod.select(table, key)
 	for fn, ft in pairs(simod.schema[table].fields) do
 		if ft == "subresource" then
-			local subtable = table..'_'..fn
-			local list = simod.list(subtable, key)
-			local subresource = {}
-			for k, v in pairs(list) do
-				subresource[k] = resource_mt.load(subtable, v)
-			end
-			new[fn] = subresource
+-- 			local subtable = table..'_'..fn
+-- 			local list = simod.list(subtable, key)
+-- 			local subresource = {}
+-- 			for k, v in pairs(list) do
+-- 				subresource[k] = resource_mt.load(subtable, v)
+-- 			end
+-- 			new[fn] = subresource
 		end
 	end
 	return setmetatable(new, simod.schema[table].methods)
@@ -172,13 +172,16 @@ function resource_mt:index(key)
 	local table = methods._table
 	if table == nil then error('missing "_table" field: '..strdump(methods)) end
 	local ft = simod.schema[table].fields[key]
-	if ft == nil then
-		error('field "'..key..'" not found in table "'..table..'"')
-	end
+-- 	if ft == nil then
+-- 		error('field "'..key..'" not found in table "'..table..'"')
+-- 	end
 	if ft == "subresource" then
 		local subtable = table..'_'..key
-		local list = simod.list(subtable, self._id)
-		return setmetatable({_list=list}, simod.schema[subtable].resvec_methods)
+		local keys,position = simod.list(subtable, self._id)
+		print(bold("keys:"), strdump(keys))
+		print(bold("position:"), strdump(position))
+		return setmetatable({_keys=keys, _position=position},
+			simod.schema[subtable].resvec_methods)
 	else
 		return self._fields[key]
 	end
@@ -296,13 +299,25 @@ function resvec_mt:index(i)
 	local methods = getmetatable(self)
 	-- if this key represents an existing method in the metatable,
 	-- return the method:
-	local key = self._list[i]
+	do local meth = methods[i]; if meth ~= nil then return meth end end
+	local key = self._keys[i]
 	if key == nil then return nil end
 	return methods.each:read(key)
 end
 function resvec_mt:insert(resource, index)
-	if index == nil then index = table.getn(self._list) end
+	local N = table.getn(self._keys)
+	local methods = getmetatable(self)
+	if index == nil then index = N+1 end
 	print(yellow("inserting at index ", index))
+	local newpos
+	if index <= 1 then
+		newpos = self._position[1]-1
+	elseif index > N then
+		newpos = self._position[N]+1
+	else
+		newpos = (self._position[index-1]+self._position[index])/2
+	end
+	print(yellow("new position is: ", newpos))
 end
 	
 --««1 Methods for resource builders
@@ -390,10 +405,15 @@ end
 local items_mt = simod.schema.items.methods
 test = items_mt:read("ring02")
 test_eff = test.effects
-mt = getmetatable(test_eff)
-print(magenta("mt: ")); dump(mt)
-print(magenta("mt.insert:")); dump(mt.insert)
-test.name="New name for a ring"
+dump(test_eff)
+
+-- mt = getmetatable(test_eff)
+-- print(magenta("mt: "), strdump(mt))
+-- print(magenta("mt.insert:"), strdump(mt.insert))
+-- print(magenta("test_eff.insert:"), strdump(test_eff.insert))
+test_eff:insert("a", 2)
+
+
 -- test = setmetatable(simod.pull("items", "ring02"), simod.schema.items.methods)
 -- dump(simod.schema.items.methods)
 -- dump(test)
