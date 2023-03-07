@@ -1844,15 +1844,15 @@ pub trait RecurseState<T>: Sized {
 	/// branches of this tree.
 	///
 	/// This recursion is invoked by calling the `descend` closure.
-	fn exec(&self, content: &mut T, name: &str, descend: impl FnMut(&mut Self)->Result<()>)->Result<()>;
+	fn exec(&self, content: &mut T, name: &str, descend: impl FnMut(&Self)->Result<()>)->Result<()>;
 }
 /// A type which can be iterated at multiple levels (tree-like).
 pub trait RecurseItr<T,S: RecurseState<T>> {
 	/// Invoke a multi-level iterator on this type.
-	fn recurse_itr_mut(&mut self, state: &mut S, name: &str)->Result<()>;
+	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()>;
 }
 impl<T,B: ByName<In=T>+RecurseItr<T,S>, S: RecurseState<T>> RecurseItr<T,S> for Tree<B> {
-	fn recurse_itr_mut(&mut self, state: &mut S, name: &str)->Result<()> {
+	fn recurse_itr_mut(&mut self, state: &S, name: &str)->Result<()> {
 		state.exec(&mut self.content, name,
 			|new_state| self.branches.recurse_itr_mut(new_state, name))
 	}
@@ -2674,7 +2674,7 @@ impl<'a> Callback<'a> for ListKeys<'a> {
 			ret.push_front(Value::Table(positions));
 			ret.push_front(Value::Table(keys));
 		}
-		return Ok(ret)
+		Ok(ret)
 	}
 }
 /// Implementation of the `simod.select` callback.
@@ -2921,7 +2921,7 @@ struct PullState<'lua,'s> {
 	level: usize,
 }
 impl RecurseState<PullRow<'_>> for PullState<'_,'_> {
-	fn exec(&self, pull: &mut PullRow<'_>, name: &str, mut descend: impl FnMut(&mut Self)->Result<()>)->Result<()> {
+	fn exec(&self, pull: &mut PullRow<'_>, name: &str, mut descend: impl FnMut(&Self)->Result<()>)->Result<()> {
 		let Self { lua, query_name, .. } = self;
 		if self.level == 0 && name != self.query_name {
 			return Ok(())
@@ -2952,12 +2952,12 @@ impl RecurseState<PullRow<'_>> for PullState<'_,'_> {
 				}
 			}
 			list.push(table.clone())?;
-			let mut new_state = Self { lua, query_name,
+			let new_state = Self { lua, query_name,
 				level: self.level+1,
 				parent_table: Some(table),
 				parent_id: Some(row_id),
 			};
-			descend(&mut new_state)?;
+			descend(&new_state)?;
 		}
 		Ok(())
 	}
@@ -2978,12 +2978,12 @@ impl IntoCallback<'_> for RootForest<PullRow<'_>> {
 		}
 		let query_name = args.pop_as::<String>(lua)
 			.context("first argument (table name) must be a string")?;
-		let mut init = PullState {
+		let init = PullState {
 			lua, level: 0, query_name: &query_name,
 			parent_table: Some(lua.create_table()?),
 			parent_id: Some(args.pop_front().unwrap().to_sql_value()?),
 		};
-		self.recurse_itr_mut(&mut init, "")
+		self.recurse_itr_mut(&init, "")
 			.with_context(||format!("recursively load resource from table '{query_name}'"))?;
 		let mut pairs = match init.parent_table {
 			None => return Ok(Value::Nil), // FIXME: or an error?
@@ -3154,7 +3154,7 @@ impl<'lua> PushState<'lua,'_> {
 			lua: self.lua, resource,
 			query_name: self.query_name,
 		};
-		descend(&mut new_state)
+		descend(&new_state)
 	}
 }
 impl RecurseState<PushRow<'_>> for PushState<'_,'_> {

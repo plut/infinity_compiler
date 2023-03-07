@@ -581,7 +581,7 @@ impl ToTokens for DeriveResourceTree {
 				}
 			}
 			impl<'s, T, S: crate::trees::RecurseState<T>> crate::trees::RecurseItr<T,S> for #forestname<T> {
-				fn recurse_itr_mut(&mut self, state: &mut S, _name: &str)->Result<()> {
+				fn recurse_itr_mut(&mut self, state: &S, _name: &str)->Result<()> {
 					#(self.#field.recurse_itr_mut(state, stringify!(#field))
 						.context(concat!("recurse_itr_mut: ", stringify!(#forestname), ".", stringify!(#field)))?;)*
 					Ok(())
