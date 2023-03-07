@@ -1,13 +1,6 @@
- - [+] insert into `*` does not insert `id` into `add_*`
- - [+] triggers do not work with `last_insert_rowid`; query it and
-   register it in the `global` table
- - [+] `push` recursive seems to load the wrong table (item abilities has
-   nulls everywhere)
- - [+] kill the `add_*` tables and write into the main `load_*` table
- - [+] just use a special value for the `owner` field to mark original
-   resources
  - a command-line option to make it headless (disable progress bars)
 # Lua side
+ - [ ] resource builder: a template + set each field + check correctness
  - [ ] `ipairs` for resvecs
  - [ ] add a primitive to check whether a key exists
  - [ ] make every field access lazy (this is probably simplest way)

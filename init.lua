@@ -86,7 +86,7 @@ local blue = mkdisplay("34")
 local magenta = mkdisplay("35")
 local cyan = mkdisplay("36")
 local bold = mkdisplay("1")
-local function todo(text) error("todo!: "..tostring(text)) end
+local function todo(text) error("\x1b[1mtodo!\x1b[m: "..tostring(text)) end
 --««1 Schema accessors
 local function table_schema(tbl)
 	local sch = simod.schema[tbl]
@@ -310,7 +310,9 @@ function resvec_mt:insert(resource, index)
 	if index == nil then index = N+1 end
 	print(yellow("inserting at index ", index))
 	local newpos
-	if index <= 1 then
+	if N == 0 then
+		newpos = 0
+	elseif index <= 1 then
 		newpos = self._position[1]-1
 	elseif index > N then
 		newpos = self._position[N]+1
@@ -318,6 +320,7 @@ function resvec_mt:insert(resource, index)
 		newpos = (self._position[index-1]+self._position[index])/2
 	end
 	print(yellow("new position is: ", newpos))
+	todo("build new resource of type '"..methods._table.."' from what we got as argument: "..strdump(resource))
 end
 	
 --««1 Methods for resource builders
@@ -363,6 +366,33 @@ function resource_mt:create_resource(key)
 end
 
 --««1 Updating `simod.schema` and creating all the metatables
+-- check a value agains schema:
+function simod.typecheck(schema, values)
+	for fn, ft in pairs(schema) do
+		local v = values[fn]; local t = type(v)
+		if ft == "text" then
+			if v == nil then values[fn] = ""
+			elseif t ~= "string" then
+				error("field '"..fn.."' expects a string, got "..totring(v))
+			end
+		elseif ft == "integer" then
+			-- Rust API will translate nil to 0 for us
+		elseif ft == "resref" then
+			-- Rust API will translate nil to "" for us
+		elseif ft == "strref" then
+			-- TODO: here is the place where we check that gettext was used
+			if v == nil then values[fn] = 0 -- default strref: <NO TEXT>
+			end
+		elseif ft == "subresource" then
+			if v == nil then values[fn] = {}
+			else
+				todo("set subresource field from table value")
+			end
+		else
+			error("unknown type in schema! "..tostring(ft))
+		end
+	end
+end
 -- compute all metatables for resources:
 for table, schema in pairs(simod.schema) do
 	schema.methods = resource_mt:derive(table)
