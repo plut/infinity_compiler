@@ -87,6 +87,74 @@ local magenta = mkdisplay("35")
 local cyan = mkdisplay("36")
 local bold = mkdisplay("1")
 local function todo(text) error("\x1b[1mtodo!\x1b[m: "..tostring(text)) end
+--««1 Logging
+local log = {}
+log.ign = {}
+function log:ignore(...)
+	for i,v in ipairs({...}) do
+		self.ign[v] = true
+	end
+end
+log:ignore(strdump,dump,bold,red,green,yellow,blue,magenta,cyan)
+log.level = 0
+function log:print(...)
+	if self.level > 10 then
+		error("deep recursion")
+	end
+	for i = 1, self.level do
+		io.write("│")
+	end
+	io.write(...)
+	io.write("\n")
+end
+function log:isenabled(frame)
+-- 	return frame.what == "Lua"
+	return frame.what == "Lua" and frame.name ~= nil and self.ign[frame.func] == nil
+end
+function log:report(event)
+	if event == "call" then
+		local frame = debug.getinfo(3)
+		if self:isenabled(frame) then
+			self.level = 0
+			local stack = ""
+			for i=4,100 do
+				if i > 99 then error("deep recursion") end
+				local f = debug.getinfo(i)
+				if f == nil then break end
+				if self:isenabled(f) then
+					self.level = self.level + 1
+					stack = stack.."/"..i.." "..f.namewhat.." "..tostring(f.name)
+				end
+			end
+			local caller = debug.getinfo(4)
+			self:print("┌─▶"..frame.namewhat.." "..bold(yellow(frame.name).." "
+				..cyan(frame.short_src..":"..frame.linedefined))
+				.." " ..blue("from "..caller.currentline))
+			self.level = self.level + 1
+			self:print(stack)
+-- 			self:print(strdump(frame))
+-- 			self:print(strdump(caller))
+		end
+	elseif event == "return" then
+		local frame = debug.getinfo(3)
+-- 		for i=1,8 do
+-- 			local f = debug.getinfo(i)
+-- 			if f ~= nil then
+-- 				self:print(i, "  ", f.namewhat, " ", tostring(f.name), ": ", f.currentline)
+-- 			end
+-- 		end
+		if self:isenabled(frame) then
+			self.level = self.level - 1
+			self:print("└─ "..frame.namewhat.." "..frame.name)
+		end
+	end
+end
+local log_mt = {}
+function log_mt:__call(...)
+	self:print(...)
+end
+setmetatable(log, log_mt)
+log:ignore(log.print,log.isenabled,log.report,log_mt.__call)
 --««1 Schema accessors
 local function table_schema(tbl)
 	local sch = simod.schema[tbl]
@@ -95,7 +163,69 @@ local function table_schema(tbl)
 	end
 	return sch
 end
-
+--««1 Builder from schema
+function simod.validate(fn, ft, value)
+	-- validates the provided `value` against the type `ft`.
+	-- fieldname `fn` is provided for context
+	-- Return value : `value` if success, otherwise throws an error
+	local t = type(value)
+	if ft == "text" then
+		if value == nil then value = ""
+		elseif t ~= "string" then
+			error("field '"..fn.."' expects a string, got "..totring(value))
+		end
+	elseif ft == "integer" then
+		-- Rust API will translate nil to 0 for us
+	elseif ft == "resref" then
+		-- Rust API will translate nil to "" for us
+	elseif ft == "strref" then
+		-- TODO: here is the place where we check that gettext was used
+		if value == nil then value = 0 -- default strref: <NO TEXT>
+		end
+	elseif ft == "subresource" then
+		if value == nil then value = {}
+		else
+			todo("set subresource field from table value")
+		end
+	else
+		error("unknown type in schema! "..tostring(ft))
+	end
+	return value
+end
+function simod.validate_all(schema, values)
+	-- check all entries in a table against the provided schema
+	for fn, ft in pairs(schema) do
+		local v = values[fn]
+	end
+end
+function simod.template(fields)
+	-- build an empty template from a schema
+	local values = {}
+	for fn, ft in pairs(fields) do
+		if ft == "text" then
+			values[fn] = ""
+		elseif ft == "integer" then
+			values[fn] = 0
+		elseif ft == "strref" then
+			values[fn] = 0 -- default strref: <NO TEXT>
+		elseif ft == "resref" then
+			values[fn] = ""
+		elseif ft == "subresource" then
+			values[fn] = {} -- TODO
+		else
+			error("unknown type in schema! "..tostring(ft))
+		end
+	end
+	return values
+end
+function simod.build_resource(fields, values)
+	local resource = simod.template(fields)
+	for k, v in pairs(values) do
+		resource[k] = simod.validate(k, fields[k], v)
+	end
+	-- TODO: check for unitialized entries
+	return resource
+end
 --««1 Methods for resources
 local function copy_replace(orig, repl, del)
 	-- builds a deep copy of `orig`, replacing by values from `repl` each
@@ -158,13 +288,13 @@ function resource_mt:read(key)
 	-- Sub-resources are not read at this point but dynamically when
 	-- accessing a sub-resource field.
 	local table = self._table
-	print(blue("reading from table ", table, " line ", key))
+-- 	log(blue("reading from table ", table, " line ", key))
 	local vals = simod.select(table, key)
 	if vals == nil then return vals end
 	return setmetatable({_fields = vals, _id=key}, self)
 end
 function resource_mt:index(key)
-	print(magenta("indexing ", strdump(self, 1), " with key ", key))
+	log("indexing ", strdump(self, 1), " with key ", key)
 	local methods = getmetatable(self)
 	-- if this key represents an existing method in the metatable,
 	-- return the method:
@@ -178,16 +308,16 @@ function resource_mt:index(key)
 	if ft == "subresource" then
 		local subtable = table..'_'..key
 		local keys,position = simod.list(subtable, self._id)
-		print(bold("keys:"), strdump(keys))
-		print(bold("position:"), strdump(position))
-		return setmetatable({_keys=keys, _position=position},
+		log(bold("keys:"), strdump(keys))
+		log(bold("position:"), strdump(position))
+		return setmetatable({_keys=keys, _position=position, _parent=self._id},
 			simod.schema[subtable].resvec_methods)
 	else
 		return self._fields[key]
 	end
 end
 function resource_mt:setindex(key, value)
-	print(red("updating ", strdump(self, 1), " with ", key, value))
+	log(red("updating ", strdump(self, 1), " with ", key, value))
 	local methods = getmetatable(self)
 	local table = methods._table
 	if table == nil then error('missing "_table" field: '..strdump(methods)) end
@@ -213,7 +343,7 @@ function resource_mt:save()
 	local schema = simod.schema[table]
 	local fields = schema.fields
 	local id = self.id
-	print(red("saving to table ", table, " with id"), id, "parent:", self.parent)
+	log(red("saving to table ", table, " with id"), id, "parent:", self.parent)
 	local done = false
 	if id ~= nil then
 		local old = simod.select(table, id)
@@ -221,7 +351,7 @@ function resource_mt:save()
 			for fn, val in pairs(old) do
 				local new_val = self[fn]
 				if val ~= new_val then
-					print("value "..blue(fn).." has changed to ", new_val)
+					log("value "..blue(fn).." has changed to ", new_val)
 					simod.update(table, fn, id, new_val)
 				end
 			end
@@ -235,16 +365,16 @@ function resource_mt:save()
 		end
 		id = string.char(unpack(id_tmp))
 		self.id = id
-		print("generated id: ", self.id)
+		log("generated id: ", self.id)
 	end
 	if not done then
 		simod.insert(table, self)
 	end
-	print("  after insert: id = ", self.id)
+	log("  after insert: id = ", self.id)
 	for fn, ft in pairs(fields) do
 		if ft == "subresource" then
 			local list = self[fn]
-			print("insert subresource: ", fn, #list)
+			log("insert subresource: ", fn, #list)
 			for i, sub in ipairs(list) do
 				sub.parent = self.id
 				sub.position = i
@@ -273,7 +403,7 @@ local function normalize_changes(changes, dk)
 end
 function resource_mt:clone(args)
 	-- Clones a resource, using the changes passed as arguments.
-	print(yellow("cloning a resource: ", strdump(self, 5)))
+	log("cloning a resource: ", strdump(self, 5))
 -- 	print("  with modifiers: ", strdump(args, 5))
 	local methods = getmetatable(self)
 	local table = methods._table
@@ -304,11 +434,11 @@ function resvec_mt:index(i)
 	if key == nil then return nil end
 	return methods.each:read(key)
 end
-function resvec_mt:insert(resource, index)
-	local N = table.getn(self._keys)
+function resvec_mt:insert(values, index)
+	local N = #(self._keys)
 	local methods = getmetatable(self)
 	if index == nil then index = N+1 end
-	print(yellow("inserting at index ", index))
+	log("inserting at index ", index)
 	local newpos
 	if N == 0 then
 		newpos = 0
@@ -319,8 +449,21 @@ function resvec_mt:insert(resource, index)
 	else
 		newpos = (self._position[index-1]+self._position[index])/2
 	end
-	print(yellow("new position is: ", newpos))
-	todo("build new resource of type '"..methods._table.."' from what we got as argument: "..strdump(resource))
+	log("new position is: ", newpos)
+	local tn = methods._table
+	local fields = simod.schema[tn].fields
+	log("build new resource of type '"..tn.."' from what we got as argument: "..strdump(values))
+	local resource = simod.build_resource(fields, values)
+	resource.parent = self._parent
+	resource.position = newpos
+	log("now resource is: ", strdump(resource, 3))
+	setmetatable(resource, methods.each)
+	log("simod.insert:")
+	local id = simod.insert(tn, resource)
+	log("simod.insert done")
+	table.insert(self._keys, id, i)
+	table.insert(self._position, newpos, i)
+	log("now self is "..strdump(self))
 end
 	
 --««1 Methods for resource builders
@@ -359,40 +502,13 @@ function resource_mt:create_resource(key)
 	--  => getmetatable(resourcetype).__call(resourcetype, "row")
 	--  => resource_mt.__call(resourcetype, "row")
 	-- so this must be `resource_mt.__call`
-	print(green("initializing a value from "..strdump(key)))
+	log(green("initializing a value from "..strdump(key)))
 	-- TODO: check that the key exists
 	local new = { _table = self._table, _key = key }
 	return setmetatable(new, self)
 end
 
 --««1 Updating `simod.schema` and creating all the metatables
--- check a value agains schema:
-function simod.typecheck(schema, values)
-	for fn, ft in pairs(schema) do
-		local v = values[fn]; local t = type(v)
-		if ft == "text" then
-			if v == nil then values[fn] = ""
-			elseif t ~= "string" then
-				error("field '"..fn.."' expects a string, got "..totring(v))
-			end
-		elseif ft == "integer" then
-			-- Rust API will translate nil to 0 for us
-		elseif ft == "resref" then
-			-- Rust API will translate nil to "" for us
-		elseif ft == "strref" then
-			-- TODO: here is the place where we check that gettext was used
-			if v == nil then values[fn] = 0 -- default strref: <NO TEXT>
-			end
-		elseif ft == "subresource" then
-			if v == nil then values[fn] = {}
-			else
-				todo("set subresource field from table value")
-			end
-		else
-			error("unknown type in schema! "..tostring(ft))
-		end
-	end
-end
 -- compute all metatables for resources:
 for table, schema in pairs(simod.schema) do
 	schema.methods = resource_mt:derive(table)
@@ -401,6 +517,7 @@ end
 
 simod.schema.items.default_key = "name"
 --««1 Test code
+debug.sethook(function(event) log:report(event) end, "cr")
 local function group(x) print(red(bold("\ntesting "..x))) end
 function test_core()
 -- 	group("simod.list")
@@ -434,14 +551,17 @@ function test_core()
 end
 local items_mt = simod.schema.items.methods
 test = items_mt:read("ring02")
+print("\x1b[31m████\x1b[m")
 test_eff = test.effects
+
+print("───")
 dump(test_eff)
+test_eff:insert({}, 2)
 
 -- mt = getmetatable(test_eff)
 -- print(magenta("mt: "), strdump(mt))
 -- print(magenta("mt.insert:"), strdump(mt.insert))
 -- print(magenta("test_eff.insert:"), strdump(test_eff.insert))
-test_eff:insert("a", 2)
 
 
 -- test = setmetatable(simod.pull("items", "ring02"), simod.schema.items.methods)

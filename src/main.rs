@@ -2766,7 +2766,9 @@ struct InsertRow<'a> {
 impl<'a> Callback<'a> for InsertRow<'a> {
 	type RetType<'lua> = Value<'lua>;
 	fn prepare(db: &'a impl DbInterface, schema: &'a Schema)->Result<Self> {
-		let insert = schema.insert_sql((), "");
+// 		let insert = schema.insert_sql((), "");
+		let insert = schema.with_headers(&["id"], &["parent", "position"])
+			.insert_sql(schema);
 		// TODO: use a restricted form of insertion where primary is not
 		// inserted
 		let counter = if schema.is_subresource() {
@@ -2805,7 +2807,7 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 			counter.as_mut().unwrap().query_row((), |row| {
 				let c = row.get::<_,usize>(0)?;
 				println!("generated id: {c}");
-				table.set("id", c).expect("unable to bind to Lua table");
+				table.raw_set("id", c).expect("unable to bind to Lua table");
 				Ok(())
 			})?;
 		} else {
@@ -2814,13 +2816,15 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		let offset = 1;
 		let cols = schema.pos_payload();
 		let found = cols.len() + offset;
+		for (i, field) in cols.enumerate() {
+			println!("bind field {i} = {field}");
+			bind_field(i + offset, field.fname)?;
+		}
 		if found != expected {
 			fail!(BadParameterCount { expected, found })
 		}
-		for (i, field) in cols.enumerate() {
-			bind_field(i + offset, field.fname)?;
-		}
-		insert.raw_execute()?;
+		insert.raw_execute()
+			.context("failed insert statement")?;
 		Ok(Value::Table(table))
 	}
 }
@@ -3186,7 +3190,9 @@ impl RecurseState<PushRow<'_>> for PushState<'_,'_> {
 /// All code with a higher level is written in lua and loaded from the
 /// "init.lua" file.
 pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
-	let lua = Lua::new();
+	// Allows `debug` to be used in Lua code:
+	let lua = unsafe { Lua::unsafe_new() };
+// 	let lua = Lua::new();
 	let lua_file = Path::new("/home/jerome/src/infinity_compiler/init.lua");
 	db.execute(r#"update "global" set "component"=?"#, (target,))
 		.with_context(||format!("setting current mod to \"{target}\""))?;
