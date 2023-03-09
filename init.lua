@@ -434,10 +434,13 @@ function resvec_mt:index(i)
 	if key == nil then return nil end
 	return methods.each:read(key)
 end
-function resvec_mt:insert(values, index)
+function resvec_mt:insert(index, values)
 	local N = #(self._keys)
 	local methods = getmetatable(self)
-	if index == nil then index = N+1 end
+	if values == nil then
+		values = index
+		index = N+1
+	end
 	log("inserting at index ", index)
 	local newpos
 	if N == 0 then
@@ -461,9 +464,9 @@ function resvec_mt:insert(values, index)
 	log("simod.insert:")
 	local id = simod.insert(tn, resource)
 	log("simod.insert done")
-	table.insert(self._keys, id, i)
-	table.insert(self._position, newpos, i)
-	log("now self is "..strdump(self))
+	table.insert(self._keys, index, id)
+	table.insert(self._position, index, newpos)
+	log("now self is "..strdump(self, 2))
 end
 	
 --««1 Methods for resource builders
@@ -556,7 +559,7 @@ test_eff = test.effects
 
 print("───")
 dump(test_eff)
-test_eff:insert({}, 2)
+test_eff:insert(2, {})
 
 -- mt = getmetatable(test_eff)
 -- print(magenta("mt: "), strdump(mt))
