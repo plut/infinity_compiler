@@ -70,7 +70,7 @@ pub enum Error{
 	UnknownTable(String),
 	BadArgumentNumber { expected: usize, found: usize },
 	BadArgumentType { position: usize, expected: &'static str, found: String },
-	BadParameterCount { expected: usize, found: usize },
+// 	BadParameterCount { expected: usize, found: usize },
 // 	CallbackMissingArgument,
 	UnknownField { field: String },
 	RowNotFound { key: String},
@@ -84,8 +84,8 @@ impl Display for Error {
 				write!(f, "Bad number of arguments: found {found}, expected {expected}"),
 			Self::BadArgumentType { position, expected, found } =>
 				write!(f, "Bad argument type at position {position}: expected {expected}, found {found}"),
-			Self::BadParameterCount { expected, found } =>
-				write!(f, "Bad parameter count for SQL statement: found {found}, expected {expected}"),
+// 			Self::BadParameterCount { expected, found } =>
+// 				write!(f, "Bad parameter count for SQL statement: found {found}, expected {expected}"),
 			Self::UnknownField { field } => write!(f, r#"Unknown field "{field}""#),
 			Self::LuaConversion => write!(f, r#"(converting error from/to Lua)"#),
 			#[allow(unreachable_patterns)]
@@ -2772,7 +2772,8 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		// TODO: use a restricted form of insertion where primary is not
 		// inserted
 		let counter = if schema.is_subresource() {
-			Some(db.prepare(format!(r#"select {schema} from "counters""#))?)
+			Some(db.prepare(r#"select "last_insert" from "global""#)?)
+// 			Some(db.prepare(format!(r#"select {schema} from "counters""#))?)
 		} else { None };
 		Ok(Self {
 			insert: db.prepare(insert)?,
@@ -2794,38 +2795,28 @@ impl<'a> Callback<'a> for InsertRow<'a> {
 		// 2. use a loop and raw bind to the statement.
 		// Since [`rusqlite::params_from_iter`] does not accept `Result`
 		// values, taking option 2 will produce better failure messages.
-		let expected = insert.parameter_count();
+		let cols = schema.with_headers(&["id"], &["parent", "position"]);
 		let mut bind_field = |i, name| {
 			let v_lua: Value<'_> = table.get(name)?;
 			// Note that sqlite uses 1-based indexing.
+// 			println!("binding field {i}={name}: {:?}", v_lua.to_sql_value()?);
 			insert.raw_bind_parameter(i+1, v_lua.to_sql_value()?)?;
 			any_ok(())
 		};
-		// first bind the header fields:
-		if schema.is_subresource() {
-			bind_field(0, "parent")?; // `position` added as part of `pos_payload`
-			counter.as_mut().unwrap().query_row((), |row| {
-				let c = row.get::<_,usize>(0)?;
-				println!("generated id: {c}");
-				table.raw_set("id", c).expect("unable to bind to Lua table");
-				Ok(())
-			})?;
-		} else {
-			bind_field(0, "id")?;
-		}
-		let offset = 1;
-		let cols = schema.pos_payload();
-		let found = cols.len() + offset;
-		for (i, field) in cols.enumerate() {
-			println!("bind field {i} = {field}");
-			bind_field(i + offset, field.fname)?;
-		}
-		if found != expected {
-			fail!(BadParameterCount { expected, found })
+		for (i, n) in cols.enumerate() {
+			bind_field(i, n.fname)?;
 		}
 		insert.raw_execute()
 			.context("failed insert statement")?;
-		Ok(Value::Table(table))
+		if self.schema.is_subresource() {
+			Ok(counter.as_mut().unwrap().query_row((), |row| {
+				let c = row.get::<_,i64>(0)?;
+				println!("generated id: {c}");
+				Ok(Value::Integer(c))
+			})?)
+		} else {
+			Ok(Value::Nil)
+		}
 	}
 }
 /// Implementation of `simod.update`.

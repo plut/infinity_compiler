@@ -29,15 +29,9 @@ If no rows match the query, then an empty table is returned.
 pairs; the keys are strings matching the column headers for this table
 (with the same case).
 
-This returns the number of lines inserted.
-If the row does not match the format for this table then an error is
-thrown.
-
-Since subresources use automatically-generated row IDs as their primary
-keys,
-if the `table` describes a subresource then any existing `row.id` value
-is ignored when this function is called; when the function returns,
-the field will be (over)written with the rowid of the newly inserted row.
+When the table describes a top-level resource this returns `nil`.
+When the table describes a subresource, this returns the row ID of the
+inserted row.
 
 ## `simod.select(table, primary)`: read one row in a table
 

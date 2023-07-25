@@ -128,10 +128,10 @@ function log:report(event)
 			end
 			local caller = debug.getinfo(4)
 			self:print("┌─▶"..frame.namewhat.." "..bold(yellow(frame.name).." "
-				..cyan(frame.short_src..":"..frame.linedefined))
+				..cyan(frame.linedefined))
 				.." " ..blue("from "..caller.currentline))
 			self.level = self.level + 1
-			self:print(stack)
+-- 			self:print(stack)
 -- 			self:print(strdump(frame))
 -- 			self:print(strdump(caller))
 		end
@@ -287,6 +287,7 @@ function resource_mt:read(key)
 	-- 
 	-- Sub-resources are not read at this point but dynamically when
 	-- accessing a sub-resource field.
+	log("resource_mt:read ", key)
 	local table = self._table
 -- 	log(blue("reading from table ", table, " line ", key))
 	local vals = simod.select(table, key)
@@ -326,14 +327,15 @@ function resource_mt:setindex(key, value)
 		error('field "'..key..'" not found in table "'..table..'"')
 	end
 	if ft == "subresource" then
-		error("cannot set subresource vector; use push etc. instead")
+		error("cannot set subresource vector; use `insert` etc. instead")
 -- 		local subtable = table..'_'..key
 -- 		local list = simod.list(subtable, self._id)
 -- 		dump(list)
 -- 		return setmetatable({_list=list}, simod.schema[subtable].resvec_methods)
 	else
-		simod.update(table, key, self._id, value)
-		self._fields[key] = value
+		local val = simod.validate(key, ft, value)
+		simod.update(table, key, self._id, val)
+		self._fields[key] = val
 	end
 end
 function resource_mt:save()
@@ -427,6 +429,7 @@ function resvec_mt:derive(table)
 end
 function resvec_mt:index(i)
 	local methods = getmetatable(self)
+	log("resvec_mt: index ", i)
 	-- if this key represents an existing method in the metatable,
 	-- return the method:
 	do local meth = methods[i]; if meth ~= nil then return meth end end
@@ -553,13 +556,19 @@ function test_core()
 -- 		dump(simod.schema)
 end
 local items_mt = simod.schema.items.methods
+print("\x1b[31m████  test = items_mt:read\x1b[m")
 test = items_mt:read("ring02")
-print("\x1b[31m████\x1b[m")
+print("\x1b[31m████  test.weight = 10\x1b[m")
+test.weight = 10; dump(test)
+print("\x1b[31m████  test_eff = test.effects\x1b[m")
 test_eff = test.effects
+print("\x1b[31m████  dump(test_eff[2])\x1b[m")
+dump(test_eff[2])
 
-print("───")
-dump(test_eff)
+print("\x1b[31m████  test_eff:insert(2,{})\x1b[m")
 test_eff:insert(2, {})
+print("\x1b[31m████  dump(test_eff[2])\x1b[m")
+dump(test_eff[2])
 
 -- mt = getmetatable(test_eff)
 -- print(magenta("mt: "), strdump(mt))
