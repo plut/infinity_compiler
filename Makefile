@@ -32,8 +32,8 @@ w: watch
 watch:
 	cargo watch -s 'clear;cargo c --color=always 2>&1 | head -30'
 
-t: test
-test:
+# low-level (SQL) test
+sqltest:
 	rm -rf $(BG)/simod_out
 #  	$(RUN) -O init.log init -B
 	echo "update \"items\" set price=5,name='A new name for Albruin' where id='sw1h34';" | sqlite3 $(DB)
@@ -44,7 +44,9 @@ test:
 #  	$(RUN) -O add.log add target
 	$(RUN) -O save.log save
 
-x:
+# high-level (Lua) test
+t: test
+test:
 	cargo build
 	@-echo "delete from add_items" | sqlite3 game.sqlite
 	@-echo "delete from add_items_abilities" | sqlite3 game.sqlite
@@ -53,7 +55,7 @@ x:
 	@-echo "delete from edit_items_abilities" | sqlite3 game.sqlite
 	@-echo "delete from edit_items_effects" | sqlite3 game.sqlite
 #  	$(RUN) -O init.log init -B
-	$(RUN) -O add.log add t
+	$(RUN) -O add.log add phony_target
 	@-echo "select * from add_items" | sqlite3 game.sqlite
 	@-echo "select parent,id from items_abilities where parent in (select id from add_items)" |sqlite3 game.sqlite
 	@-echo "select parent,root,id,opcode from items_effects where root in (select id from add_items)" |sqlite3 game.sqlite

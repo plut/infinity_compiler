@@ -22,9 +22,9 @@ local function strdump(o, limit, level)
       if k == i then
         i = i+1
       elseif type(k) == 'string' then
-        s = s..'[38;5;65m'..k..'[m='
+        s = s..'[38;5;64m'..k..'[m='
       else
-        s = s..'[[38;5;65m'..k..'[m]='
+        s = s..'[[38;5;64m'..k..'[m]='
       end
 			if v == o then
 				s = s .. "[31m!self![m,"
@@ -102,7 +102,7 @@ function log:print(...)
 		error("deep recursion")
 	end
 	for i = 1, self.level do
-		io.write("│")
+		io.write("\x1b[38;5;137m│\x1b[m")
 	end
 	io.write(...)
 	io.write("\n")
@@ -127,9 +127,9 @@ function log:report(event)
 				end
 			end
 			local caller = debug.getinfo(4)
-			self:print("┌─▶"..frame.namewhat.." "..bold(yellow(frame.name).." "
-				..cyan(frame.linedefined))
-				.." " ..blue("from "..caller.currentline))
+			self:print("\x1b[38;5;137m┌─▶"..frame.namewhat.."\x1b[m "..bold(yellow(frame.name).." "
+				..cyan("line "..frame.linedefined))
+				.." " ..green("called from "..caller.currentline))
 			self.level = self.level + 1
 -- 			self:print(stack)
 -- 			self:print(strdump(frame))
@@ -145,7 +145,7 @@ function log:report(event)
 -- 		end
 		if self:isenabled(frame) then
 			self.level = self.level - 1
-			self:print("└─ "..frame.namewhat.." "..frame.name)
+			self:print("\x1b[38;5;137m└─ "..frame.namewhat.."\x1b[m "..frame.name)
 		end
 	end
 end
@@ -295,7 +295,7 @@ function resource_mt:read(key)
 	return setmetatable({_fields = vals, _id=key}, self)
 end
 function resource_mt:index(key)
-	log("indexing ", strdump(self, 1), " with key ", key)
+	log("indexing ", strdump(self, 1), " with key ", blue('"', key, '"'))
 	local methods = getmetatable(self)
 	-- if this key represents an existing method in the metatable,
 	-- return the method:
@@ -433,7 +433,9 @@ function resvec_mt:index(i)
 	-- if this key represents an existing method in the metatable,
 	-- return the method:
 	do local meth = methods[i]; if meth ~= nil then return meth end end
+	log("no method found, accessing _keys")
 	local key = self._keys[i]
+	log("found key = "..tostring(key))
 	if key == nil then return nil end
 	return methods.each:read(key)
 end
@@ -556,18 +558,27 @@ function test_core()
 -- 		dump(simod.schema)
 end
 local items_mt = simod.schema.items.methods
-print("\x1b[31m████  test = items_mt:read\x1b[m")
+local TOP_COLORS = {1,16,17,18,52,53,54,58,88,89,124,125,126,160,196,197,233,234,236}
+math.randomseed(os.time())
+local TOP_PREFIX = "\x1b[7;38;5;"..TOP_COLORS[math.random(#TOP_COLORS)].."m "
+local function top(x)
+	print(TOP_PREFIX..x.."\x1b[m")
+end
+log:ignore(top)
+top('test = items_mt:read("ring02")')
 test = items_mt:read("ring02")
-print("\x1b[31m████  test.weight = 10\x1b[m")
+top("test.weight = 10")
 test.weight = 10; dump(test)
-print("\x1b[31m████  test_eff = test.effects\x1b[m")
+top("test_eff = test.effects")
 test_eff = test.effects
-print("\x1b[31m████  dump(test_eff[2])\x1b[m")
+top("dump(test_eff)")
+dump(test_eff)
+top("dump(test_eff[2])")
 dump(test_eff[2])
 
-print("\x1b[31m████  test_eff:insert(2,{})\x1b[m")
+top("test_eff:insert(2,{})")
 test_eff:insert(2, {})
-print("\x1b[31m████  dump(test_eff[2])\x1b[m")
+top("dump(test_eff[2])")
 dump(test_eff[2])
 
 -- mt = getmetatable(test_eff)

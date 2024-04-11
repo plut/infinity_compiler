@@ -224,8 +224,6 @@ pub trait Pack: Sized {
 	/// Helper function used to check forced headers.
 	fn read_bytes(f: &mut impl Read, n: usize)->io::Result<Vec<u8>> {
 		let mut buf = vec![0u8; n];
-// 		let mut buf = Vec::<u8>::with_capacity(n);
-// 		unsafe { buf.set_len(n); }
 		f.read_exact(&mut buf)?; Ok(buf)
 	}
 	/// function which checks that a header is correct.
@@ -3180,6 +3178,8 @@ impl RecurseState<PushRow<'_>> for PushState<'_,'_> {
 ///  - list("item_abilities", "sw1h34") etc.
 /// All code with a higher level is written in lua and loaded from the
 /// "init.lua" file.
+/// XXX: for now we only load the "init.lua" file, independently of the
+/// target argument passed
 pub fn command_add(db: impl DbInterface, target: &str)->Result<()> {
 	// Allows `debug` to be used in Lua code:
 	let lua = unsafe { Lua::unsafe_new() };
